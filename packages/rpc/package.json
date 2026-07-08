@@ -1,0 +1,19 @@
+{
+  "name": "@roop/rpc",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./*": "./src/*"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@roop/core": "workspace:*",
+    "effect": "4.0.0-beta.94"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3"
+  }
+}

@@ -1,0 +1,18 @@
+packages:
+  - packages/*
+  - apps/*
+
+allowBuilds:
+  esbuild: true
+  msgpackr-extract: true
+
+minimumReleaseAgeExclude:
+  - "@effect/ai-openai-compat@4.0.0-beta.94"
+  - "@effect/platform-node-shared@4.0.0-beta.94"
+  - "@effect/platform-node@4.0.0-beta.94"
+  - "@effect/vitest@4.0.0-beta.94"
+  - "@types/node@26.1.1"
+  - effect@4.0.0-beta.94
+
+patchedDependencies:
+  "@effect/ai-openai-compat@4.0.0-beta.94": patches/@effect__ai-openai-compat@4.0.0-beta.94.patch

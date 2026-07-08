@@ -1,0 +1,9 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["eslint", "import", "typescript", "unicorn", "oxc"],
+  "rules": {
+    "require-yield": "off",
+    "import/extensions": ["error", "always", { "ignorePackages": true }]
+  },
+  "ignorePatterns": ["node_modules/**", ".repos/**", ".roop/**", "dist/**", "coverage/**"]
+}

@@ -1,0 +1,30 @@
+{
+  "name": "roop",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prepare": "./scripts/prepare-effect.sh",
+    "dev": "pnpm --filter=@roop/server dev",
+    "start": "pnpm --filter=@roop/server start",
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "lint": "oxlint .",
+    "format": "oxfmt --write .",
+    "format:check": "oxfmt --check .",
+    "test": "turbo run test",
+    "check": "turbo run typecheck test && pnpm lint && pnpm format:check"
+  },
+  "devDependencies": {
+    "@effect/language-service": "^0.86.4",
+    "@effect/vitest": "4.0.0-beta.94",
+    "@types/node": "^26.1.1",
+    "oxfmt": "^0.58.0",
+    "oxlint": "^1.73.0",
+    "tsx": "^4.23.0",
+    "turbo": "^2.10.4",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.10"
+  },
+  "packageManager": "pnpm@11.10.0"
+}

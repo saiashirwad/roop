@@ -1,0 +1,116 @@
+diff --git a/dist/OpenAiLanguageModel.js b/dist/OpenAiLanguageModel.js
+index 23227e349834378af61b1b7b8d359082e774e6d0..ef7ba03e54e1f2e42c8e1ea17532df81701e889d 100644
+--- a/dist/OpenAiLanguageModel.js
++++ b/dist/OpenAiLanguageModel.js
+@@ -1123,10 +1123,40 @@ const toChatMessages = input => {
+       content: input
+     }];
+   }
++  // Coalesce consecutive function_call items into one assistant message with
++  // multiple tool_calls. Chat Completions APIs (Kimi, DeepSeek, OpenAI chat)
++  // require a single assistant tool_calls message, then one tool message per id.
+   const messages = [];
++  let pendingToolCalls = undefined;
++  const flushToolCalls = () => {
++    if (pendingToolCalls !== undefined && pendingToolCalls.length > 0) {
++      messages.push({
++        role: "assistant",
++        content: null,
++        tool_calls: pendingToolCalls
++      });
++    }
++    pendingToolCalls = undefined;
++  };
+   for (const item of input) {
++    if (Predicate.hasProperty(item, "type") && item.type === "function_call") {
++      if (pendingToolCalls === undefined) {
++        pendingToolCalls = [];
++      }
++      pendingToolCalls.push({
++        id: item.call_id,
++        type: "function",
++        function: {
++          name: item.name,
++          arguments: item.arguments
++        }
++      });
++      continue;
++    }
++    flushToolCalls();
+     messages.push(...toChatMessagesFromItem(item));
+   }
++  flushToolCalls();
+   return messages;
+ };
+ const toChatMessagesFromItem = item => {
+@@ -1145,6 +1175,7 @@ const toChatMessagesFromItem = item => {
+   switch (item.type) {
+     case "function_call":
+       {
++        // Handled by toChatMessages coalesce path; keep single-call fallback.
+         return [{
+           role: "assistant",
+           content: null,
+diff --git a/src/OpenAiLanguageModel.ts b/src/OpenAiLanguageModel.ts
+index 25a653c07b46b8c3f08f6b41405dca924a4f3d0b..63e9bd9e045b53da256984342ef0f5f7f25540e5 100644
+--- a/src/OpenAiLanguageModel.ts
++++ b/src/OpenAiLanguageModel.ts
+@@ -1723,11 +1723,50 @@ const toChatMessages = (
+     return [{ role: "user", content: input }]
+   }
+ 
++  // Coalesce consecutive function_call items into one assistant message with
++  // multiple tool_calls. Chat Completions APIs (Kimi, DeepSeek, OpenAI chat)
++  // require a single assistant tool_calls message, then one tool message per id.
+   const messages: Array<CreateResponseRequestJson["messages"][number]> = []
++  type ToolCallMessage = {
++    readonly id: string
++    readonly type: "function"
++    readonly function: {
++      readonly name: string
++      readonly arguments: string
++    }
++  }
++  let pendingToolCalls: Array<ToolCallMessage> | undefined
++
++  const flushToolCalls = () => {
++    if (pendingToolCalls !== undefined && pendingToolCalls.length > 0) {
++      messages.push({
++        role: "assistant",
++        content: null,
++        tool_calls: pendingToolCalls
++      })
++    }
++    pendingToolCalls = undefined
++  }
+ 
+   for (const item of input) {
++    if (Predicate.hasProperty(item, "type") && item.type === "function_call") {
++      if (pendingToolCalls === undefined) {
++        pendingToolCalls = []
++      }
++      pendingToolCalls.push({
++        id: item.call_id,
++        type: "function",
++        function: {
++          name: item.name,
++          arguments: item.arguments
++        }
++      })
++      continue
++    }
++    flushToolCalls()
+     messages.push(...toChatMessagesFromItem(item))
+   }
++  flushToolCalls()
+ 
+   return messages
+ }
+@@ -1751,6 +1790,7 @@ const toChatMessagesFromItem = (
+ 
+   switch (item.type) {
+     case "function_call": {
++      // Handled by toChatMessages coalesce path; keep single-call fallback.
+       return [{
+         role: "assistant",
+         content: null,

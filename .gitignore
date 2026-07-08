@@ -1,0 +1,10 @@
+node_modules
+coverage
+dist
+.turbo
+.env
+.env.*
+!.env.example
+.repos/effect
+.roop
+RAMP_UP.md

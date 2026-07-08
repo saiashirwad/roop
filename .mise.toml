@@ -1,0 +1,21 @@
+[tools]
+node = "24.15.0"
+
+[env]
+COREPACK_ENABLE_PROJECT_SPEC = "1"
+
+[tasks.install]
+description = "Install project dependencies"
+run = "corepack pnpm install"
+
+[tasks.start]
+description = "Run the app"
+run = "corepack pnpm start"
+
+[tasks.dev]
+description = "Run the app in watch mode"
+run = "corepack pnpm dev"
+
+[tasks.check]
+description = "Run typecheck, lint, format check, and tests"
+run = "corepack pnpm check"
