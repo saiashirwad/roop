@@ -190,6 +190,11 @@ const main = async () => {
 
     socket.send(JSON.stringify({ type: "prompt", text }))
   }
+
+  // stdin ended (piped input): leave politely.
+  intentionalClose = true
+  socket?.close()
+  process.exit(0)
 }
 
 await main()
