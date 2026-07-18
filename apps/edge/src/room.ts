@@ -1,10 +1,15 @@
-import { Effect, Layer, ManagedRuntime, Stream } from "effect"
+import { Cause, Deferred, Effect, Exit, Layer, ManagedRuntime, Stream } from "effect"
+import type { LanguageModel } from "effect/unstable/ai"
 
+import { AgentRunner, AgentRunnerLive, type StreamToolkit } from "@roop/core/AgentRunner.ts"
 import { SessionHub, SessionHubLive } from "@roop/core/SessionHub.ts"
 import { SessionLog, SessionLogLive } from "@roop/core/SessionLog.ts"
 import { SessionStore, type Actor, type SessionRecord } from "@roop/core/SessionStore.ts"
 
 import type { Env } from "./env.ts"
+import { FakeFsToolkit, fakeFsHandlers, FILES_SCHEMA, sqliteFileStorage } from "./fakefs.ts"
+import { resolveRoomModel } from "./model.ts"
+import { ROOM_SYSTEM_PROMPT } from "./prompt.ts"
 import { decodeClientMessage, encodeServerMessage, type ServerMessage } from "./protocol.ts"
 import {
   lastSeq,
@@ -31,10 +36,30 @@ const sanitizeCursor = (raw: string | null): number => {
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0
 }
 
-type RoomServices = SessionLog | SessionHub
+const QUEUE_SCHEMA = `
+CREATE TABLE IF NOT EXISTS queue (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  actor_id TEXT NOT NULL,
+  actor_name TEXT NOT NULL,
+  text TEXT NOT NULL
+);
+`
+
+type QueuedPrompt = {
+  readonly actor: Actor
+  readonly text: string
+}
+
+type RoomServices = SessionLog | SessionHub | AgentRunner
+
+const NO_MODEL_MESSAGE =
+  "No model API key configured on the worker. Set KIMI_API_KEY, ZAI_API_KEY, or DEEPSEEK_API_KEY as a worker secret."
 
 /**
  * One room = one shared session + one shared virtual workspace.
+ *
+ * True multiplayer: anyone may prompt (runs are serialized through a durable
+ * queue) and anyone may interrupt the active run.
  *
  * Hibernation-safe: everything durable lives in ctx.storage; per-connection
  * identity lives in the WebSocket attachment. In-memory state (Effect
@@ -42,13 +67,20 @@ type RoomServices = SessionLog | SessionHub
  */
 export class Room {
   private readonly ctx: DurableObjectState
+  private readonly env: Env
   private readonly sessionId: string
+  private sql!: SqlStorage
   private runtime!: ManagedRuntime.ManagedRuntime<RoomServices, never>
   private log!: SessionLog["Service"]
-  private sql!: SqlStorage
+  private runner!: AgentRunner["Service"]
+  private toolkit!: StreamToolkit
+  private model: LanguageModel.Service | undefined
+  private activeRun: { readonly runId: string; readonly interrupt: Deferred.Deferred<void> } | undefined
+  private pumping = false
 
-  constructor(ctx: DurableObjectState, _env: Env) {
+  constructor(ctx: DurableObjectState, env: Env) {
     this.ctx = ctx
+    this.env = env
     this.sessionId = ctx.id.toString()
     this.ctx.blockConcurrencyWhile(() => this.init())
   }
@@ -56,6 +88,8 @@ export class Room {
   private async init(): Promise<void> {
     this.sql = this.ctx.storage.sql
     this.sql.exec(ROOM_SCHEMA)
+    this.sql.exec(FILES_SCHEMA)
+    this.sql.exec(QUEUE_SCHEMA)
 
     const storeLive = Layer.succeed(
       SessionStore,
@@ -65,18 +99,30 @@ export class Room {
       Layer.provide(storeLive),
       Layer.provide(SessionHubLive),
     )
-    this.runtime = ManagedRuntime.make(Layer.mergeAll(logLive, SessionHubLive))
+    const runnerLive = AgentRunnerLive.pipe(Layer.provide(logLive))
+    this.runtime = ManagedRuntime.make(Layer.mergeAll(logLive, SessionHubLive, runnerLive))
 
-    const { log, hub } = await this.runtime.runPromise(
+    const { log, runner, hub } = await this.runtime.runPromise(
       Effect.gen(function* () {
         const log = yield* SessionLog
+        const runner = yield* AgentRunner
         const hub = yield* SessionHub
         // Idempotent: the room session exists exactly once per durable object.
         yield* log.create({ kind: "main", title: "room" })
-        return { log, hub }
+        return { log, runner, hub }
       }),
     )
     this.log = log
+    this.runner = runner
+
+    const files = sqliteFileStorage(this.sql)
+    this.toolkit = (await Effect.runPromise(
+      Effect.gen(function* () {
+        return yield* FakeFsToolkit
+      }).pipe(Effect.provide(FakeFsToolkit.toLayer(Effect.succeed(fakeFsHandlers(files))))),
+    )) as unknown as StreamToolkit
+
+    this.model = await this.runtime.runPromise(resolveRoomModel(this.env))
 
     // Live tail: every appended record fans out to all connected clients.
     this.runtime.runFork(
@@ -132,6 +178,101 @@ export class Room {
     this.broadcast({ type: "presence", members: this.members() })
   }
 
+  // --- run queue ------------------------------------------------------------
+
+  private enqueue(actor: Actor, text: string): void {
+    this.sql.exec(
+      "INSERT INTO queue (actor_id, actor_name, text) VALUES (?, ?, ?)",
+      actor.id,
+      actor.name,
+      text,
+    )
+    this.pump()
+  }
+
+  private shiftQueue(): QueuedPrompt | undefined {
+    const row = this.sql
+      .exec("SELECT seq, actor_id, actor_name, text FROM queue ORDER BY seq LIMIT 1")
+      .toArray()[0] as
+      | { seq: number; actor_id: string; actor_name: string; text: string }
+      | undefined
+    if (row === undefined) return undefined
+    this.sql.exec("DELETE FROM queue WHERE seq = ?", row.seq)
+    return { actor: { id: row.actor_id, name: row.actor_name }, text: row.text }
+  }
+
+  private pump(): void {
+    if (this.pumping) return
+    this.pumping = true
+    this.ctx.waitUntil(
+      this.pumpLoop()
+        .catch((error: unknown) => {
+          console.error("room pumpLoop failed", error)
+        })
+        .finally(() => {
+          this.pumping = false
+        }),
+    )
+  }
+
+  private async pumpLoop(): Promise<void> {
+    while (true) {
+      const next = this.shiftQueue()
+      if (next === undefined) return
+      await this.runAgent(next.actor, next.text)
+    }
+  }
+
+  private async runAgent(actor: Actor, prompt: string): Promise<void> {
+    if (this.model === undefined) {
+      await this.runtime
+        .runPromise(
+          this.log.append(this.sessionId, {
+            _tag: "Agent",
+            event: { _tag: "RunFailed", message: NO_MODEL_MESSAGE },
+          }),
+        )
+        .catch(() => undefined)
+      return
+    }
+
+    const runId = crypto.randomUUID()
+    const interrupt = await this.runtime.runPromise(Deferred.make<void>())
+    const history = (await this.runtime.runPromise(this.log.get(this.sessionId))).records
+    this.activeRun = { runId, interrupt }
+
+    try {
+      const exit = await this.runtime.runPromiseExit(
+        Stream.runDrain(
+          this.runner.runOnSession({
+            model: this.model,
+            toolkit: this.toolkit,
+            sessionId: this.sessionId,
+            history,
+            prompt,
+            runId,
+            interrupt,
+            systemPrompt: ROOM_SYSTEM_PROMPT,
+            actor,
+          }),
+        ),
+      )
+      // runPromptOnSession already logs RunFailed for typed errors; this is for defects.
+      if (Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)) {
+        await this.runtime
+          .runPromise(
+            this.log.append(this.sessionId, {
+              _tag: "Agent",
+              event: { _tag: "RunFailed", message: Cause.pretty(exit.cause) },
+            }),
+          )
+          .catch(() => undefined)
+      }
+    } finally {
+      this.activeRun = undefined
+    }
+  }
+
   // --- endpoints ----------------------------------------------------------
 
   async fetch(request: Request): Promise<Response> {
@@ -157,7 +298,7 @@ export class Room {
       self: actor,
       members: this.members(),
       cursor: lastSeq(this.sql),
-      running: false,
+      running: this.activeRun !== undefined,
     })
     for (const { seq, record } of recordsAfter(this.sql, this.sessionId, after)) {
       this.send(server, { type: "record", seq, record })
@@ -183,17 +324,16 @@ export class Room {
 
     switch (message.type) {
       case "prompt": {
-        // Chat-log behavior for now; the agent run lands in a follow-up commit.
-        await this.runtime.runPromise(
-          this.log.append(this.sessionId, {
-            _tag: "UserPrompt",
-            prompt: message.text,
-            actor,
-          }),
-        )
+        this.enqueue(actor, message.text)
         break
       }
       case "interrupt": {
+        const run = this.activeRun
+        if (run !== undefined) {
+          await this.runtime.runPromise(
+            Deferred.succeed(run.interrupt, undefined).pipe(Effect.ignore),
+          )
+        }
         break
       }
     }
