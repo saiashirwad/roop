@@ -1,7 +1,18 @@
-import type { Actor } from "@roop/core/SessionStore.ts"
+import { Effect, Layer, ManagedRuntime, Stream } from "effect"
+
+import { SessionHub, SessionHubLive } from "@roop/core/SessionHub.ts"
+import { SessionLog, SessionLogLive } from "@roop/core/SessionLog.ts"
+import { SessionStore, type Actor, type SessionRecord } from "@roop/core/SessionStore.ts"
 
 import type { Env } from "./env.ts"
 import { decodeClientMessage, encodeServerMessage, type ServerMessage } from "./protocol.ts"
+import {
+  lastSeq,
+  makeRoomSessionStore,
+  recordsAfter,
+  ROOM_SCHEMA,
+  seqForRecord,
+} from "./sqlStore.ts"
 
 type Attachment = {
   readonly actorId: string
@@ -15,6 +26,13 @@ const sanitizeName = (raw: string | null): string => {
   return name.length > 0 ? name : "anon"
 }
 
+const sanitizeCursor = (raw: string | null): number => {
+  const value = Number(raw ?? "0")
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0
+}
+
+type RoomServices = SessionLog | SessionHub
+
 /**
  * One room = one shared session + one shared virtual workspace.
  *
@@ -24,14 +42,50 @@ const sanitizeName = (raw: string | null): string => {
  */
 export class Room {
   private readonly ctx: DurableObjectState
+  private readonly sessionId: string
+  private runtime!: ManagedRuntime.ManagedRuntime<RoomServices, never>
+  private log!: SessionLog["Service"]
+  private sql!: SqlStorage
 
   constructor(ctx: DurableObjectState, _env: Env) {
     this.ctx = ctx
+    this.sessionId = ctx.id.toString()
     this.ctx.blockConcurrencyWhile(() => this.init())
   }
 
   private async init(): Promise<void> {
-    // Storage migrations + Effect runtime land in the next commits.
+    this.sql = this.ctx.storage.sql
+    this.sql.exec(ROOM_SCHEMA)
+
+    const storeLive = Layer.succeed(
+      SessionStore,
+      makeRoomSessionStore(this.sql, this.sessionId),
+    )
+    const logLive = SessionLogLive.pipe(
+      Layer.provide(storeLive),
+      Layer.provide(SessionHubLive),
+    )
+    this.runtime = ManagedRuntime.make(Layer.mergeAll(logLive, SessionHubLive))
+
+    const { log, hub } = await this.runtime.runPromise(
+      Effect.gen(function* () {
+        const log = yield* SessionLog
+        const hub = yield* SessionHub
+        // Idempotent: the room session exists exactly once per durable object.
+        yield* log.create({ kind: "main", title: "room" })
+        return { log, hub }
+      }),
+    )
+    this.log = log
+
+    // Live tail: every appended record fans out to all connected clients.
+    this.runtime.runFork(
+      Stream.runForEach(hub.subscribe(this.sessionId), (record) =>
+        Effect.sync(() => {
+          this.broadcastRecord(record)
+        }),
+      ),
+    )
   }
 
   // --- presence -----------------------------------------------------------
@@ -54,15 +108,24 @@ export class Room {
       : { id: attachment.actorId, name: attachment.name }
   }
 
-  private broadcast(message: ServerMessage): void {
-    const frame = encodeServerMessage(message)
-    for (const ws of this.ctx.getWebSockets()) {
-      try {
-        ws.send(frame)
-      } catch {
-        // Socket already closing; close/error handlers will drop it.
-      }
+  // --- fan-out ------------------------------------------------------------
+
+  private send(ws: WebSocket, message: ServerMessage): void {
+    try {
+      ws.send(encodeServerMessage(message))
+    } catch {
+      // Socket already closing; close/error handlers will drop it.
     }
+  }
+
+  private broadcast(message: ServerMessage): void {
+    for (const ws of this.ctx.getWebSockets()) {
+      this.send(ws, message)
+    }
+  }
+
+  private broadcastRecord(record: SessionRecord): void {
+    this.broadcast({ type: "record", seq: seqForRecord(this.sql, record.id), record })
   }
 
   private broadcastPresence(): void {
@@ -78,6 +141,7 @@ export class Room {
 
     const url = new URL(request.url)
     const name = sanitizeName(url.searchParams.get("name"))
+    const after = sanitizeCursor(url.searchParams.get("after"))
 
     const pair = new WebSocketPair()
     const client = pair[0]
@@ -87,15 +151,17 @@ export class Room {
     const actor: Actor = { id: crypto.randomUUID(), name }
     server.serializeAttachment({ actorId: actor.id, name: actor.name } satisfies Attachment)
 
-    server.send(
-      encodeServerMessage({
-        type: "welcome",
-        self: actor,
-        members: this.members(),
-        cursor: 0,
-        running: false,
-      }),
-    )
+    // Single-threaded: welcome + backlog send without interleaving appends.
+    this.send(server, {
+      type: "welcome",
+      self: actor,
+      members: this.members(),
+      cursor: lastSeq(this.sql),
+      running: false,
+    })
+    for (const { seq, record } of recordsAfter(this.sql, this.sessionId, after)) {
+      this.send(server, { type: "record", seq, record })
+    }
     this.broadcastPresence()
 
     return new Response(null, { status: 101, webSocket: client })
@@ -106,19 +172,24 @@ export class Room {
   async webSocketMessage(ws: WebSocket, raw: string | ArrayBuffer): Promise<void> {
     const message = decodeClientMessage(raw)
     if (message === undefined) {
-      ws.send(encodeServerMessage({ type: "error", message: "Malformed message" }))
+      this.send(ws, { type: "error", message: "Malformed message" })
       return
     }
     const actor = this.actorOf(ws)
     if (actor === undefined) {
-      ws.send(encodeServerMessage({ type: "error", message: "Missing attachment; reconnect" }))
+      this.send(ws, { type: "error", message: "Missing attachment; reconnect" })
       return
     }
 
     switch (message.type) {
       case "prompt": {
-        ws.send(
-          encodeServerMessage({ type: "error", message: "Agent not wired up yet" }),
+        // Chat-log behavior for now; the agent run lands in a follow-up commit.
+        await this.runtime.runPromise(
+          this.log.append(this.sessionId, {
+            _tag: "UserPrompt",
+            prompt: message.text,
+            actor,
+          }),
         )
         break
       }
