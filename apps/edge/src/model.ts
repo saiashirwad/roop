@@ -23,9 +23,7 @@ type Provider = {
  * wins, same preference order as the local server). Returns undefined when
  * no key is configured — the room reports that as a RunFailed event.
  */
-export const resolveRoomModel = (
-  env: Env,
-): Effect.Effect<LanguageModel.Service | undefined> =>
+export const resolveRoomModel = (env: Env): Effect.Effect<LanguageModel.Service | undefined> =>
   Effect.gen(function* () {
     const candidates: ReadonlyArray<Provider> = [
       { apiKey: env.KIMI_API_KEY, apiUrl: "https://api.kimi.com/coding/v1", models: KIMI_MODELS },

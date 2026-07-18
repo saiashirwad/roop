@@ -1,5 +1,3 @@
-import { Effect, Schema } from "effect"
-
 import {
   metaFromOptions,
   SessionNotFound,
@@ -11,6 +9,7 @@ import {
   type SessionRecord,
   type SessionSummary,
 } from "@roop/core/SessionStore.ts"
+import { Effect, Schema } from "effect"
 
 export const ROOM_SCHEMA = `
 CREATE TABLE IF NOT EXISTS records (
@@ -138,11 +137,7 @@ export const recordsAfter = (
   after: number,
 ): ReadonlyArray<{ readonly seq: number; readonly record: SessionRecord }> =>
   sql
-    .exec(
-      "SELECT * FROM records WHERE session_id = ? AND seq > ? ORDER BY seq",
-      sessionId,
-      after,
-    )
+    .exec("SELECT * FROM records WHERE session_id = ? AND seq > ? ORDER BY seq", sessionId, after)
     .toArray()
     .map((row) => {
       const typed = row as unknown as RecordRow

@@ -1,10 +1,9 @@
-import { Cause, Deferred, Effect, Exit, Layer, ManagedRuntime, Stream } from "effect"
-import type { LanguageModel } from "effect/unstable/ai"
-
 import { AgentRunner, AgentRunnerLive, type StreamToolkit } from "@roop/core/AgentRunner.ts"
 import { SessionHub, SessionHubLive } from "@roop/core/SessionHub.ts"
 import { SessionLog, SessionLogLive } from "@roop/core/SessionLog.ts"
 import { SessionStore, type Actor, type SessionRecord } from "@roop/core/SessionStore.ts"
+import { Cause, Deferred, Effect, Exit, Layer, ManagedRuntime, Stream } from "effect"
+import type { LanguageModel } from "effect/unstable/ai"
 
 import type { Env } from "./env.ts"
 import { FakeFsToolkit, fakeFsHandlers, FILES_SCHEMA, sqliteFileStorage } from "./fakefs.ts"
@@ -75,7 +74,9 @@ export class Room {
   private runner!: AgentRunner["Service"]
   private toolkit!: StreamToolkit
   private model: LanguageModel.Service | undefined
-  private activeRun: { readonly runId: string; readonly interrupt: Deferred.Deferred<void> } | undefined
+  private activeRun:
+    | { readonly runId: string; readonly interrupt: Deferred.Deferred<void> }
+    | undefined
   private pumping = false
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -91,14 +92,8 @@ export class Room {
     this.sql.exec(FILES_SCHEMA)
     this.sql.exec(QUEUE_SCHEMA)
 
-    const storeLive = Layer.succeed(
-      SessionStore,
-      makeRoomSessionStore(this.sql, this.sessionId),
-    )
-    const logLive = SessionLogLive.pipe(
-      Layer.provide(storeLive),
-      Layer.provide(SessionHubLive),
-    )
+    const storeLive = Layer.succeed(SessionStore, makeRoomSessionStore(this.sql, this.sessionId))
+    const logLive = SessionLogLive.pipe(Layer.provide(storeLive), Layer.provide(SessionHubLive))
     const runnerLive = AgentRunnerLive.pipe(Layer.provide(logLive))
     this.runtime = ManagedRuntime.make(Layer.mergeAll(logLive, SessionHubLive, runnerLive))
 
@@ -167,9 +162,7 @@ export class Room {
 
   private actorOf(ws: WebSocket): Actor | undefined {
     const attachment = ws.deserializeAttachment() as Attachment | null
-    return attachment === null
-      ? undefined
-      : { id: attachment.actorId, name: attachment.name }
+    return attachment === null ? undefined : { id: attachment.actorId, name: attachment.name }
   }
 
   // --- fan-out ------------------------------------------------------------

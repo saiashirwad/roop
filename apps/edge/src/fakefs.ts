@@ -1,6 +1,4 @@
-import { Effect } from "effect"
-import { Toolkit } from "effect/unstable/ai"
-
+import type { ToolFailure } from "@roop/tools/failure.ts"
 import {
   ApplyPatch,
   applyHunks,
@@ -10,8 +8,9 @@ import {
   ReadFile,
   WriteFile,
 } from "@roop/tools/filesystem.ts"
-import type { ToolFailure } from "@roop/tools/failure.ts"
 import { isIgnoredPath } from "@roop/tools/workspace.ts"
+import { Effect } from "effect"
+import { Toolkit } from "effect/unstable/ai"
 
 /**
  * The room's shared virtual filesystem: flat map of posix-style relative
@@ -91,7 +90,8 @@ export const normalizePath = (raw: string): string | undefined => {
 const fail = (message: string, reason: string): Effect.Effect<never, ToolFailure> =>
   Effect.fail({ message, reason } satisfies ToolFailure)
 
-const invalidPath = (raw: string) => fail(`Invalid path (escapes workspace): ${raw}`, "InvalidInput")
+const invalidPath = (raw: string) =>
+  fail(`Invalid path (escapes workspace): ${raw}`, "InvalidInput")
 
 const LIST_CAP = 200
 
