@@ -12,13 +12,15 @@ import type { AgentEvent } from "./AgentEvent.ts"
 import { AgentRunner, RunNotFound, type StreamToolkit } from "./AgentRunner.ts"
 import { ModelCatalog } from "./ModelCatalog.ts"
 import { SessionLog } from "./SessionLog.ts"
-import type { SessionRecord } from "./SessionStore.ts"
+import type { Actor, SessionRecord } from "./SessionStore.ts"
 
 export type RunPromptOptions = {
   readonly prompt: string
   readonly sessionId?: string | undefined
   readonly modelId?: string | undefined
   readonly settings?: RunModelSettings | undefined
+  /** Multiplayer: who sent this prompt; recorded on the UserPrompt entry. */
+  readonly actor?: Actor | undefined
 }
 
 export { RunNotFound }
@@ -97,6 +99,7 @@ export const makeAgentLive = <Tools extends Record<string, Tool.Any>>(
                   runId,
                   interrupt,
                   systemPrompt: meta.systemPrompt,
+                  ...(options.actor !== undefined ? { actor: options.actor } : {}),
                 })
                 .pipe(Stream.ensuring(clearRun))
 

@@ -79,9 +79,11 @@ export const promptFromSessionRecords = (
   for (const record of records) {
     if (record.entry._tag === "UserPrompt") {
       flushRound()
+      const actor = record.entry.actor
+      const text = actor !== undefined ? `${actor.name}: ${record.entry.prompt}` : record.entry.prompt
       messages.push(
         Prompt.makeMessage("user", {
-          content: [Prompt.makePart("text", { text: record.entry.prompt })],
+          content: [Prompt.makePart("text", { text })],
         }),
       )
       continue

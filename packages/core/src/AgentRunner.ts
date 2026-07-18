@@ -7,7 +7,7 @@ import type { ResolvedAgentSpec } from "./AgentSpec.ts"
 import { CurrentRun } from "./CurrentRun.ts"
 import { promptFromSessionRecords } from "./sessionHistory.ts"
 import { SessionLog } from "./SessionLog.ts"
-import type { SessionNotFound, SessionRecord } from "./SessionStore.ts"
+import type { Actor, SessionNotFound, SessionRecord } from "./SessionStore.ts"
 
 export class RunNotFound extends Schema.TaggedErrorClass<RunNotFound>()("RunNotFound", {
   runId: Schema.String,
@@ -63,6 +63,8 @@ export type RunOnSessionOptions = {
   readonly maxTurns?: number | undefined
   readonly parentRunId?: string | undefined
   readonly depth?: number | undefined
+  /** Multiplayer: who sent this prompt; recorded on the UserPrompt entry. */
+  readonly actor?: Actor | undefined
 }
 
 export type SpawnAgentOptions = {
@@ -220,7 +222,11 @@ export const runPromptOnSession = (
 
       const chat = yield* Chat.fromPrompt(promptFromSessionRecords(history, systemPrompt))
 
-      yield* log.append(sessionId, { _tag: "UserPrompt", prompt })
+      yield* log.append(sessionId, {
+        _tag: "UserPrompt",
+        prompt,
+        ...(options.actor !== undefined ? { actor: options.actor } : {}),
+      })
 
       const offer = (event: AgentEvent) =>
         Effect.gen(function* () {

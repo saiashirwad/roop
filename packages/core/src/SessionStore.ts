@@ -6,6 +6,14 @@ export class SessionNotFound extends Schema.TaggedErrorClass<SessionNotFound>()(
   sessionId: Schema.String,
 }) {}
 
+/** Who sent a prompt — a human in a room, or an agent/system actor. */
+export const ActorSchema = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+})
+
+export type Actor = typeof ActorSchema.Type
+
 export const SessionRecordSchema = Schema.Struct({
   id: Schema.String,
   sessionId: Schema.String,
@@ -13,6 +21,7 @@ export const SessionRecordSchema = Schema.Struct({
   entry: Schema.Union([
     Schema.TaggedStruct("UserPrompt", {
       prompt: Schema.String,
+      actor: Schema.optionalKey(ActorSchema),
     }),
     Schema.TaggedStruct("Agent", {
       event: AgentEventSchema,
