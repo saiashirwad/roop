@@ -132,6 +132,24 @@ export class Room {
         }),
       ),
     )
+
+    // Hibernation recovery: a run active when the isolate died left no
+    // terminal event — close it out so the log and clients stay consistent.
+    const deadRunId = this.getMeta("activeRunId")
+    if (deadRunId !== undefined) {
+      await this.runtime
+        .runPromise(
+          this.log.append(this.sessionId, {
+            _tag: "Agent",
+            event: { _tag: "RunInterrupted", runId: deadRunId },
+          }),
+        )
+        .catch(() => undefined)
+      this.deleteMeta("activeRunId")
+    }
+
+    // Resume any prompts queued before the isolate went away.
+    this.pump()
   }
 
   // --- presence -----------------------------------------------------------
@@ -179,6 +197,21 @@ export class Room {
   }
 
   // --- run queue ------------------------------------------------------------
+
+  private getMeta(key: string): string | undefined {
+    const row = this.sql.exec("SELECT value FROM meta WHERE key = ?", key).toArray()[0] as
+      | { value: string }
+      | undefined
+    return row?.value
+  }
+
+  private setMeta(key: string, value: string): void {
+    this.sql.exec("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", key, value)
+  }
+
+  private deleteMeta(key: string): void {
+    this.sql.exec("DELETE FROM meta WHERE key = ?", key)
+  }
 
   private enqueue(actor: Actor, text: string): void {
     this.sql.exec(
@@ -240,6 +273,9 @@ export class Room {
     const interrupt = await this.runtime.runPromise(Deferred.make<void>())
     const history = (await this.runtime.runPromise(this.log.get(this.sessionId))).records
     this.activeRun = { runId, interrupt }
+    // Durable marker: if the isolate dies mid-run, init() finds this and
+    // closes the run out as interrupted.
+    this.setMeta("activeRunId", runId)
 
     try {
       const exit = await this.runtime.runPromiseExit(
@@ -270,6 +306,7 @@ export class Room {
       }
     } finally {
       this.activeRun = undefined
+      this.deleteMeta("activeRunId")
     }
   }
 
