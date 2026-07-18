@@ -1,0 +1,29 @@
+{
+  "name": "@roop/edge",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "client": "tsx src/client.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@effect/ai-openai-compat": "4.0.0-beta.94",
+    "@roop/core": "workspace:*",
+    "@roop/pack": "workspace:*",
+    "@roop/tools": "workspace:*",
+    "effect": "4.0.0-beta.94"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250617.0",
+    "@effect/vitest": "4.0.0-beta.94",
+    "@types/node": "^26.1.1",
+    "tsx": "^4.23.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.10",
+    "wrangler": "^4.0.0"
+  }
+}

@@ -5,6 +5,8 @@ packages:
 allowBuilds:
   esbuild: true
   msgpackr-extract: true
+  sharp: false
+  workerd: true
 
 minimumReleaseAgeExclude:
   - "@effect/ai-openai-compat@4.0.0-beta.94"
