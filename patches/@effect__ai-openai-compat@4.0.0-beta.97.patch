@@ -1,8 +1,6 @@
-diff --git a/dist/OpenAiLanguageModel.js b/dist/OpenAiLanguageModel.js
-index 23227e349834378af61b1b7b8d359082e774e6d0..ef7ba03e54e1f2e42c8e1ea17532df81701e889d 100644
 --- a/dist/OpenAiLanguageModel.js
 +++ b/dist/OpenAiLanguageModel.js
-@@ -1123,10 +1123,40 @@ const toChatMessages = input => {
+@@ -1121,10 +1121,40 @@
        content: input
      }];
    }
@@ -43,7 +41,7 @@ index 23227e349834378af61b1b7b8d359082e774e6d0..ef7ba03e54e1f2e42c8e1ea17532df81
    return messages;
  };
  const toChatMessagesFromItem = item => {
-@@ -1145,6 +1175,7 @@ const toChatMessagesFromItem = item => {
+@@ -1143,6 +1173,7 @@
    switch (item.type) {
      case "function_call":
        {
@@ -51,11 +49,9 @@ index 23227e349834378af61b1b7b8d359082e774e6d0..ef7ba03e54e1f2e42c8e1ea17532df81
          return [{
            role: "assistant",
            content: null,
-diff --git a/src/OpenAiLanguageModel.ts b/src/OpenAiLanguageModel.ts
-index 25a653c07b46b8c3f08f6b41405dca924a4f3d0b..63e9bd9e045b53da256984342ef0f5f7f25540e5 100644
 --- a/src/OpenAiLanguageModel.ts
 +++ b/src/OpenAiLanguageModel.ts
-@@ -1723,11 +1723,50 @@ const toChatMessages = (
+@@ -1721,11 +1721,50 @@
      return [{ role: "user", content: input }]
    }
  
@@ -106,7 +102,7 @@ index 25a653c07b46b8c3f08f6b41405dca924a4f3d0b..63e9bd9e045b53da256984342ef0f5f7
  
    return messages
  }
-@@ -1751,6 +1790,7 @@ const toChatMessagesFromItem = (
+@@ -1749,6 +1788,7 @@
  
    switch (item.type) {
      case "function_call": {

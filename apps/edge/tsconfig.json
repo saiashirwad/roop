@@ -1,8 +1,38 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "types": ["@cloudflare/workers-types"]
+    "types": [
+      "@cloudflare/workers-types"
+    ],
+    "paths": {
+      "effect": [
+        "../../node_modules/effect/dist/index.d.ts"
+      ],
+      "effect/*": [
+        "../../node_modules/effect/dist/*"
+      ],
+      "liminal": [
+        "../../../liminal/liminal/dist/index.d.ts"
+      ],
+      "liminal/*": [
+        "../../../liminal/liminal/dist/*"
+      ],
+      "effect-workerd": [
+        "../../../liminal/effect-workerd/dist/index.d.ts"
+      ],
+      "effect-workerd/*": [
+        "../../../liminal/effect-workerd/dist/*"
+      ],
+      "liminal-util/*": [
+        "../../../liminal/liminal-util/dist/*"
+      ]
+    }
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"],
-  "exclude": ["src/client.ts"]
+  "include": [
+    "src/**/*.ts",
+    "test/**/*.ts"
+  ],
+  "exclude": [
+    "src/client.ts"
+  ]
 }

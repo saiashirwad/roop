@@ -1,7 +1,9 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "types": ["node"],
+    "types": ["bun"],
+    "jsx": "preserve",
+    "jsxImportSource": "@opentui/solid",
     "paths": {
       "effect": ["../../node_modules/effect/dist/index.d.ts"],
       "effect/*": ["../../node_modules/effect/dist/*"],
@@ -10,5 +12,5 @@
       "liminal-util/*": ["../../../liminal/liminal-util/dist/*"]
     }
   },
-  "include": ["src/client.ts", "src/RoomClient.ts", "src/errors.ts", "src/external.ts", "src/reducers.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
 }

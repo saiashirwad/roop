@@ -17,7 +17,7 @@
   },
   "devDependencies": {
     "@effect/language-service": "^0.86.4",
-    "@effect/vitest": "4.0.0-beta.94",
+    "@effect/vitest": "4.0.0-beta.97",
     "@types/node": "^26.1.1",
     "oxfmt": "^0.58.0",
     "oxlint": "^1.73.0",

@@ -23,7 +23,60 @@ CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS chat (
+  id TEXT PRIMARY KEY,
+  created_at INTEGER NOT NULL,
+  actor_id TEXT NOT NULL,
+  actor_name TEXT NOT NULL,
+  text TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS chat_created_at ON chat (created_at);
 `
+
+export type ChatRow = {
+  readonly id: string
+  readonly from: { readonly id: string; readonly name: string }
+  readonly text: string
+  readonly at: number
+}
+
+export const insertChat = (
+  sql: SqlStorage,
+  row: ChatRow,
+): void => {
+  sql.exec(
+    "INSERT INTO chat (id, created_at, actor_id, actor_name, text) VALUES (?, ?, ?, ?, ?)",
+    row.id,
+    row.at,
+    row.from.id,
+    row.from.name,
+    row.text,
+  )
+}
+
+/** Last N human chat lines for reconnect hydrate (oldest → newest). */
+export const recentChat = (sql: SqlStorage, limit = 200): ReadonlyArray<ChatRow> => {
+  const rows = sql
+    .exec(
+      "SELECT id, created_at, actor_id, actor_name, text FROM chat ORDER BY created_at DESC LIMIT ?",
+      limit,
+    )
+    .toArray() as Array<{
+    id: string
+    created_at: number
+    actor_id: string
+    actor_name: string
+    text: string
+  }>
+  return rows
+    .reverse()
+    .map((r) => ({
+      id: r.id,
+      at: r.created_at,
+      from: { id: r.actor_id, name: r.actor_name },
+      text: r.text,
+    }))
+}
 
 const decodeRecord = Schema.decodeUnknownSync(SessionRecordSchema)
 

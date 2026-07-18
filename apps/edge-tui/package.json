@@ -1,0 +1,25 @@
+{
+  "name": "@roop/edge-tui",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun run --conditions=browser src/main.tsx",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@effect/platform-node": "4.0.0-beta.97",
+    "@opentui/core": "0.1.97",
+    "@opentui/solid": "0.1.97",
+    "@roop/core": "workspace:*",
+    "@roop/edge": "workspace:*",
+    "effect": "4.0.0-beta.97",
+    "liminal": "file:../../../liminal/liminal",
+    "liminal-util": "file:../../../liminal/liminal-util",
+    "solid-js": "^1.9.9"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "typescript": "^6.0.3"
+  }
+}

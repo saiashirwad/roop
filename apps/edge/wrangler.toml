@@ -1,5 +1,6 @@
 name = "roop-edge"
-main = "src/index.ts"
+# liminal ActorRuntime worker (RoomRuntime exported as Room)
+main = "src/main.ts"
 compatibility_date = "2026-07-01"
 compatibility_flags = ["nodejs_compat"]
 

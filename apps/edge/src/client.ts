@@ -1,14 +1,21 @@
 /**
  * roop room client — join a multiplayer coding room from your terminal.
  *
+ * Speaks the liminal Schema protocol (not the old ad-hoc JSON types).
+ *
  *   pnpm --filter=@roop/edge client <url> <name>
  *   e.g. pnpm client http://localhost:8787/room/demo/ws alice
  *
- * Commands: /interrupt stops the active run, /users lists the room, /quit exits.
+ * Commands: /say <msg> human chat, /interrupt, /users, /quit.
+ * Plain lines go to the agent (Prompt).
  */
+import * as NodeSocket from "@effect/platform-node/NodeSocket"
 import * as readline from "node:readline/promises"
+import { Cause, Effect, Exit, Fiber, Layer, Stream } from "effect"
+import * as Client from "liminal/Client"
 
-import type { ServerMessage } from "./protocol.ts"
+import { RoomClient } from "./RoomClient.ts"
+import * as reducers from "./reducers.ts"
 
 const [urlArg, name] = process.argv.slice(2)
 if (urlArg === undefined || name === undefined) {
@@ -16,11 +23,12 @@ if (urlArg === undefined || name === undefined) {
   process.exit(1)
 }
 
-const wsUrl = urlArg.replace(/^http/, "ws")
+const baseUrl = urlArg.replace(/^http/, "ws")
+const withName = `${baseUrl}${baseUrl.includes("?") ? "&" : "?"}name=${encodeURIComponent(name)}`
 
 let lastSeq = 0
 let inAgentText = false
-let intentionalClose = false
+let members: ReadonlyArray<{ id: string; name: string }> = []
 
 const endAgentText = () => {
   if (inAgentText) {
@@ -92,109 +100,154 @@ const renderRecord = (record: {
       break
     }
     default: {
-      // ReasoningDelta, ToolProgress, subagent events: too noisy for the CLI.
       break
     }
   }
 }
 
-const handle = (message: ServerMessage) => {
-  switch (message.type) {
-    case "welcome": {
-      console.log(
-        `joined as ${message.self.name} — online: ${message.members.map((m) => m.name).join(", ")}` +
-          (message.running ? " (a run is active)" : ""),
-      )
-      break
-    }
-    case "presence": {
-      endAgentText()
-      console.log(`~ online: ${message.members.map((m) => m.name).join(", ")}`)
-      break
-    }
-    case "record": {
-      if (message.seq > lastSeq) lastSeq = message.seq
-      renderRecord(message.record)
-      break
-    }
-    case "error": {
-      endAgentText()
-      console.log(`! ${message.message}`)
-      break
-    }
-  }
-}
+const clientLayer = (url: string) =>
+  Client.layerSocket({
+    client: RoomClient,
+    url,
+    replay: { mode: "startup" },
+    reducers,
+    onConnect: (state) =>
+      Effect.sync(() => {
+        lastSeq = state.cursor
+        members = state.members
+        console.log(
+          `joined as ${state.self.name} — online: ${state.members.map((m) => m.name).join(", ")}` +
+            (state.running ? " (a run is active)" : ""),
+        )
+      }),
+  }).pipe(Layer.provide(NodeSocket.layerWebSocketConstructor))
 
-let socket: WebSocket | undefined
+const listenEvents = RoomClient.events.pipe(
+  Stream.runForEach((event) =>
+    Effect.sync(() => {
+      if (event._tag === "Presence") {
+        endAgentText()
+        members = event.members
+        console.log(`~ online: ${event.members.map((m) => m.name).join(", ")}`)
+        return
+      }
+      if (event._tag === "Chat") {
+        endAgentText()
+        console.log(`[chat] ${event.from.name}: ${event.text}`)
+        return
+      }
+      if (event._tag === "Record") {
+        if (event.seq > lastSeq) lastSeq = event.seq
+        renderRecord(event.record)
+      }
+    }),
+  ),
+)
 
-const connect = (): void => {
-  const url = `${wsUrl}${wsUrl.includes("?") ? "&" : "?"}name=${encodeURIComponent(name)}&after=${lastSeq}`
-  const ws = new WebSocket(url)
-  socket = ws
-
-  ws.addEventListener("message", (event) => {
-    if (typeof event.data !== "string") return
-    try {
-      handle(JSON.parse(event.data) as ServerMessage)
-    } catch {
-      // Ignore malformed frames.
-    }
+/**
+ * Read one line. Returns null on stdin EOF so piped smoke tests can exit cleanly
+ * (Node readline's question() hangs after the pipe closes).
+ */
+const readLine = (rl: readline.Interface) =>
+  Effect.tryPromise({
+    try: () =>
+      new Promise<string | null>((resolve) => {
+        if (process.stdin.readableEnded) {
+          resolve(null)
+          return
+        }
+        let settled = false
+        const finish = (value: string | null) => {
+          if (settled) return
+          settled = true
+          rl.off("close", onClose)
+          process.stdin.off("end", onEnd)
+          resolve(value)
+        }
+        const onClose = () => finish(null)
+        const onEnd = () => finish(null)
+        rl.once("close", onClose)
+        process.stdin.once("end", onEnd)
+        void rl.question("").then(
+          (line) => finish(line),
+          () => finish(null),
+        )
+      }),
+    catch: () => null as null,
   })
 
-  ws.addEventListener("close", () => {
-    if (intentionalClose) return
+const readInput = Effect.gen(function* () {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+  console.log("type a message and hit enter; /say <msg>, /interrupt, /users, /quit")
+
+  try {
+    while (true) {
+      const line = yield* readLine(rl)
+      if (line === null) break
+      const text = line.trim()
+      if (text.length === 0) continue
+
+      if (text === "/quit" || text === "/exit") break
+
+      if (text === "/interrupt") {
+        yield* RoomClient.fn("Interrupt")({}).pipe(Effect.ignore)
+        continue
+      }
+      if (text === "/users") {
+        console.log(`~ online: ${members.map((m) => m.name).join(", ") || "(none)"}`)
+        continue
+      }
+      if (text.startsWith("/say ") || text === "/say") {
+        const msg = text.slice(5).trim()
+        if (msg.length === 0) {
+          console.log("usage: /say <message>")
+          continue
+        }
+        yield* RoomClient.fn("Say")({ text: msg }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.sync(() => {
+              endAgentText()
+              console.log(`! ${Cause.pretty(cause)}`)
+            }),
+          ),
+        )
+        continue
+      }
+
+      yield* RoomClient.fn("Prompt")({ text }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.sync(() => {
+            endAgentText()
+            console.log(`! ${Cause.pretty(cause)}`)
+          }),
+        ),
+      )
+    }
+  } finally {
+    rl.close()
+  }
+})
+
+const program = Effect.gen(function* () {
+  while (true) {
+    const url = `${withName}&after=${lastSeq}`
+    const session = Effect.gen(function* () {
+      const fiber = yield* Effect.forkChild(listenEvents)
+      yield* readInput
+      yield* Fiber.interrupt(fiber).pipe(Effect.ignore)
+    }).pipe(Effect.provide(clientLayer(url)), Effect.scoped)
+
+    const exit = yield* session.pipe(Effect.exit)
+    if (Exit.isSuccess(exit)) break
+
     endAgentText()
     console.log("~ disconnected; reconnecting…")
-    setTimeout(connect, 1000)
-  })
-
-  ws.addEventListener("error", () => {
-    // The close handler performs the reconnect.
-  })
-}
-
-const main = async () => {
-  connect()
-
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
-  rl.on("SIGINT", () => {
-    intentionalClose = true
-    socket?.close()
-    process.exit(0)
-  })
-
-  console.log("type a message and hit enter; /interrupt, /users, /quit")
-  for await (const line of rl) {
-    const text = line.trim()
-    if (text.length === 0) continue
-
-    if (text === "/quit" || text === "/exit") {
-      intentionalClose = true
-      socket?.close()
-      process.exit(0)
-    }
-
-    if (socket === undefined || socket.readyState !== WebSocket.OPEN) {
-      console.log("! not connected yet")
-      continue
-    }
-
-    if (text === "/interrupt") {
-      socket.send(JSON.stringify({ type: "interrupt" }))
-      continue
-    }
-    if (text === "/users") {
-      console.log("~ (see the last presence line; a fresh one prints on join/leave)")
-      continue
-    }
-
-    socket.send(JSON.stringify({ type: "prompt", text }))
+    console.error(Cause.pretty(exit.cause).split("\n")[0] ?? "")
+    yield* Effect.sleep("1 second")
   }
+})
 
-  // stdin ended (piped input): leave politely.
-  intentionalClose = true
-  socket?.close()
-  process.exit(0)
-}
-
-await main()
+await Effect.runPromise(program).catch((error) => {
+  console.error(error)
+  process.exit(1)
+})

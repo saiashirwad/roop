@@ -6,20 +6,32 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "client": "tsx src/client.ts",
+    "client": "bun run src/client.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
     "test": "vitest run"
   },
+  "exports": {
+    "./RoomClient": "./src/RoomClient.ts",
+    "./errors": "./src/errors.ts",
+    "./external": "./src/external.ts",
+    "./reducers": "./src/reducers.ts"
+  },
   "dependencies": {
-    "@effect/ai-openai-compat": "4.0.0-beta.94",
+    "@effect/ai-openai-compat": "4.0.0-beta.97",
+    "@effect/platform-browser": "4.0.0-beta.97",
+    "@effect/platform-node": "4.0.0-beta.97",
+    "@effect/sql-d1": "4.0.0-beta.97",
     "@roop/core": "workspace:*",
     "@roop/pack": "workspace:*",
     "@roop/tools": "workspace:*",
-    "effect": "4.0.0-beta.94"
+    "effect": "4.0.0-beta.97",
+    "effect-workerd": "file:../../../liminal/effect-workerd",
+    "liminal": "file:../../../liminal/liminal",
+    "liminal-util": "file:../../../liminal/liminal-util"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250617.0",
-    "@effect/vitest": "4.0.0-beta.94",
+    "@effect/vitest": "4.0.0-beta.97",
     "@types/node": "^26.1.1",
     "tsx": "^4.23.0",
     "typescript": "^6.0.3",
