@@ -4,9 +4,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "prepare": "./scripts/prepare-effect.sh",
-    "dev": "pnpm --filter=@roop/server dev",
-    "start": "pnpm --filter=@roop/server start",
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",
     "lint": "oxlint .",
