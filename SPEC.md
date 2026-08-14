@@ -11,6 +11,8 @@ A smol, Effect-native agents layer. One kernel, one protocol, one Node adapter.
 - `packages/agent-node` — the Node adapter: a readline CLI over the kernel.
 - `packages/plugin-openai` / `plugin-claude` / `plugin-codex` — model plugins: any OpenAI-compatible
   API, the local `claude` CLI, and the local `codex` CLI.
+- `packages/plugin-skills` — `SkillsDir(dir)` scans `*/SKILL.md`, advertises the skills, and serves
+  their content through a `skill` tool plus a system prompt fragment.
 - `packages/plugin-web` / `plugin-todo` — tool plugins: `webFetch` over `HttpClient` and a
   `writeTodos` planning tool.
 - `packages/coding-tools` — a toolkit as a library. Four coding tools (`readFile`, `writeFile`,

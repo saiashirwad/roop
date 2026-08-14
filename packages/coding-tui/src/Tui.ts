@@ -1,10 +1,12 @@
 import {
+  CombinedAutocompleteProvider,
   Container,
   Editor,
   Loader,
   Markdown,
   matchesKey,
   ProcessTerminal,
+  type SlashCommand,
   Text,
   TUI,
 } from "@mariozechner/pi-tui"
@@ -26,7 +28,8 @@ const main = Effect.gen(function* () {
   const url = process.argv[2] ?? "http://localhost:8787/rpc"
   const client = yield* RpcClient.make(AgentRpc).pipe(Effect.provide(AgentRpcClientHttp(url)))
   const caps = yield* client.Capabilities()
-  const sessionId = crypto.randomUUID()
+  let sessionId = crypto.randomUUID()
+  let modelId = caps.defaultModelId
   const actions = yield* Queue.unbounded<Action>()
 
   const tui = new TUI(new ProcessTerminal())
@@ -50,20 +53,97 @@ const main = Effect.gen(function* () {
     }
     return undefined
   })
-  tui.addChild(
-    new Text(
-      `${bold("roop")} ${dim(`— ${url}`)}\n${dim(
-        `model ${caps.defaultModelId} · tools ${caps.tools.map((tool) => tool.name).join(", ")} · enter to send · esc to interrupt · ctrl+c to quit`,
-      )}`,
-      0,
-      1,
-    ),
-  )
+  const headerText = () =>
+    `${bold("roop")} ${dim(`— ${url}`)}\n${dim(
+      `model ${modelId} · tools ${caps.tools.map((tool) => tool.name).join(", ")} · enter to send · esc to interrupt · ctrl+c to quit`,
+    )}`
+  const header = new Text(headerText(), 0, 1)
+  tui.addChild(header)
   tui.addChild(chat)
   tui.addChild(editor)
   tui.setFocus(editor)
   tui.start()
   yield* Effect.addFinalizer(() => Effect.sync(() => tui.stop()))
+
+  const info = (text: string) => {
+    chat.addChild(new Text(text, 0, 1))
+    tui.requestRender()
+  }
+  const commands: Array<SlashCommand> = [
+    {
+      name: "models",
+      description: "list models, or switch with /models <id>",
+      argumentHint: "[id]",
+      getArgumentCompletions: (prefix) =>
+        caps.models
+          .filter((model) => model.id.startsWith(prefix))
+          .map((model) => ({
+            value: model.id,
+            label: model.id,
+            ...(model.description === undefined ? {} : { description: model.description }),
+          })),
+    },
+    { name: "skills", description: "list the agent's skills" },
+    { name: "tools", description: "list the agent's tools" },
+    { name: "new", description: "start a new session" },
+    { name: "help", description: "list commands" },
+  ]
+  editor.setAutocompleteProvider(new CombinedAutocompleteProvider(commands, process.cwd()))
+  const command = (line: string) => {
+    const [name, arg] = line.slice(1).split(/\s+/, 2)
+    switch (name) {
+      case "models": {
+        if (arg === undefined) {
+          info(
+            caps.models
+              .map(
+                (model) =>
+                  `${model.id === modelId ? cyan("●") : dim("○")} ${model.id}${
+                    model.description === undefined ? "" : dim(` — ${model.description}`)
+                  }`,
+              )
+              .join("\n"),
+          )
+        } else if (caps.models.some((model) => model.id === arg)) {
+          modelId = arg
+          header.setText(headerText())
+          info(dim(`model → ${arg}`))
+        } else {
+          info(red(`unknown model: ${arg}`))
+        }
+        return
+      }
+      case "skills": {
+        info(
+          caps.skills.length === 0
+            ? dim("no skills")
+            : caps.skills.map((skill) => `${bold(skill.id)} ${dim(skill.description)}`).join("\n"),
+        )
+        return
+      }
+      case "tools": {
+        info(caps.tools.map((tool) => `${bold(tool.name)} ${dim(tool.description)}`).join("\n"))
+        return
+      }
+      case "new": {
+        sessionId = crypto.randomUUID()
+        chat.clear()
+        info(dim("new session"))
+        return
+      }
+      case "help": {
+        info(
+          commands
+            .map((entry) => `${bold(`/${entry.name}`)} ${dim(entry.description ?? "")}`)
+            .join("\n"),
+        )
+        return
+      }
+      default: {
+        info(red(`unknown command: /${name}`))
+      }
+    }
+  }
 
   const run = (prompt: string) =>
     Effect.gen(function* () {
@@ -129,7 +209,7 @@ const main = Effect.gen(function* () {
           }
         }
       }
-      yield* client.Prompt({ prompt, sessionId, maxTurns: 50 }).pipe(
+      yield* client.Prompt({ prompt, sessionId, modelId, maxTurns: 50 }).pipe(
         Stream.runForEach((event) =>
           Effect.sync(() => {
             render(event)
@@ -151,6 +231,9 @@ const main = Effect.gen(function* () {
     Stream.runForEach((action) => {
       switch (action._tag) {
         case "Submit": {
+          if (action.text.startsWith("/")) {
+            return Effect.sync(() => command(action.text))
+          }
           if (busy) {
             return Effect.sync(() => {
               chat.addChild(new Text(dim("busy — esc to interrupt"), 0, 0))

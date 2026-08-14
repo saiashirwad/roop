@@ -28,12 +28,14 @@ Start here:
 - `@roop/plugin-codex` — your ChatGPT subscription via the local `codex` CLI.
 - `@roop/plugin-web` — `webFetch` tool over the Effect `HttpClient`.
 - `@roop/plugin-todo` — `writeTodos` planning tool with a prompt nudge.
+- `@roop/plugin-skills` — serves a directory of `SKILL.md` files through a `skill` tool.
 - `@roop/coding-tools` — coding toolkit (`readFile`/`writeFile`/`listFiles`/`bash`), a plain library
   composed into an agent at build time.
 - `@roop/coding-harness` — the composition: kernel + coding tools + DeepSeek behind an RPC HTTP
   server.
-- `@roop/coding-tui` — a pi-like terminal UI over `@mariozechner/pi-tui`; talks to the server only
-  through the RPC client (guarded by a test).
+- `@roop/coding-tui` — a pi-like terminal UI over `@mariozechner/pi-tui` with slash commands
+  (`/models`, `/skills`, `/tools`, `/new`, `/help`); talks to the server only through the RPC client
+  (guarded by a test).
 
 ## Scripts
 
