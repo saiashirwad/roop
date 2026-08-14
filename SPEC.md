@@ -8,8 +8,11 @@ A smol, Effect-native agents layer. One kernel, one protocol, one Node adapter.
   platform-specific (`test/portability.test.ts` guards imports) and the core suite runs inside real
   workerd (`test-workerd/`).
 - `packages/agent-rpc` — the protocol. One `RpcGroup` over the kernel, plus HTTP transport helpers.
-- `packages/agent-node` — the Node adapter. DeepSeek model catalog, a readline CLI, and the live
-  smoke test.
+- `packages/agent-node` — the Node adapter: a readline CLI over the kernel.
+- `packages/plugin-openai` / `plugin-claude` / `plugin-codex` — model plugins: any OpenAI-compatible
+  API, the local `claude` CLI, and the local `codex` CLI.
+- `packages/plugin-web` / `plugin-todo` — tool plugins: `webFetch` over `HttpClient` and a
+  `writeTodos` planning tool.
 - `packages/coding-tools` — a toolkit as a library. Four coding tools (`readFile`, `writeFile`,
   `listFiles`, `bash`) that declare their service `dependencies` (`FileSystem`,
   `ChildProcessSpawner`); nothing agent-specific, composed in at harness build time.

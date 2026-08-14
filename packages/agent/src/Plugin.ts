@@ -27,16 +27,21 @@ export const Plugin = <Tools extends Record<string, Tool.Any>, R = never>(option
 
 type ErasedTools = Record<string, Tool.Any>
 
-export const AgentPlugins = <R = never>(
-  plugins: ReadonlyArray<Plugin<R>>,
+export type PluginRequirements<Plugins extends ReadonlyArray<Plugin<any>>> =
+  Plugins[number] extends Plugin<infer R> ? R : never
+
+export const AgentPlugins = <const Plugins extends ReadonlyArray<Plugin<any>>>(
+  plugins: Plugins,
   options?: { readonly systemPrompt?: string | undefined },
-): Layer.Layer<Agent, never, SessionStore | R> => {
+): Layer.Layer<Agent, never, SessionStore | PluginRequirements<Plugins>> => {
   const toolkit = Toolkit.merge(
     ...plugins.flatMap((plugin) => (plugin.toolkit === undefined ? [] : [plugin.toolkit])),
   ) as Toolkit.Toolkit<ErasedTools>
   const handlers = plugins.flatMap((plugin) =>
     plugin.handlers === undefined ? [] : [plugin.handlers],
-  ) as unknown as ReadonlyArray<Layer.Layer<Tool.HandlersFor<ErasedTools>, never, R>>
+  ) as unknown as ReadonlyArray<
+    Layer.Layer<Tool.HandlersFor<ErasedTools>, never, PluginRequirements<Plugins>>
+  >
   const models = plugins.flatMap((plugin) => plugin.models ?? [])
   const skills = plugins.flatMap((plugin) => plugin.skills ?? [])
   const systemPrompt = [options?.systemPrompt, ...plugins.map((plugin) => plugin.systemPrompt)]
@@ -45,5 +50,5 @@ export const AgentPlugins = <R = never>(
 
   return AgentLiveToolkit(toolkit, { systemPrompt }).pipe(
     Layer.provide([ModelCatalogLive(models), Layer.succeed(Skills)({ list: skills }), ...handlers]),
-  ) as Layer.Layer<Agent, never, SessionStore | R>
+  ) as Layer.Layer<Agent, never, SessionStore | PluginRequirements<Plugins>>
 }

@@ -10,7 +10,9 @@ platform wiring lives in packages/agent-node; a Cloudflare/Workers adapter would
 package with the same shape. packages/coding-harness is the example: coding tools + a CLI that talks
 to the agent over Effect RPC (server + client modes).
 
-patches/@effect__ai-openai-compat@4.0.0-beta.97.patch is load-bearing: DeepSeek's chat-completions
-API rejects consecutive tool calls unless they are coalesced into one assistant message and
-content-less assistant messages are dropped. Do not remove the patchedDependencies wiring in
-pnpm-workspace.yaml.
+All patches/ entries are load-bearing; do not remove the patchedDependencies wiring in
+pnpm-workspace.yaml. @effect__ai-openai-compat: DeepSeek's chat-completions API rejects consecutive
+tool calls unless they are coalesced into one assistant message and content-less assistant messages
+are dropped. @texoport__effect-ai-claude / -codex: the published dists target effect beta.104, whose
+part schemas made timestamp/request/response optional; beta.97 requires those keys present, so the
+patches add them as undefined in the encoded part helpers.

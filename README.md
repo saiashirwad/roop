@@ -22,7 +22,12 @@ Start here:
 - `@roop/agent` — kernel: agent loop, model catalog, session store, capability derivation,
   agent-as-tool. Imports only `effect`.
 - `@roop/agent-rpc` — `RpcGroup` protocol, server layer, HTTP transport helpers.
-- `@roop/agent-node` — Node adapter: DeepSeek model catalog and CLI.
+- `@roop/agent-node` — Node adapter: a readline CLI over the kernel.
+- `@roop/plugin-openai` — any OpenAI-compatible API (OpenAI, DeepSeek, local) as a model plugin.
+- `@roop/plugin-claude` — your Claude Code subscription via the local `claude` CLI.
+- `@roop/plugin-codex` — your ChatGPT subscription via the local `codex` CLI.
+- `@roop/plugin-web` — `webFetch` tool over the Effect `HttpClient`.
+- `@roop/plugin-todo` — `writeTodos` planning tool with a prompt nudge.
 - `@roop/coding-tools` — coding toolkit (`readFile`/`writeFile`/`listFiles`/`bash`), a plain library
   composed into an agent at build time.
 - `@roop/coding-harness` — the composition: kernel + coding tools + DeepSeek behind an RPC HTTP

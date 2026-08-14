@@ -3,17 +3,17 @@ import { Toolkit } from "effect/unstable/ai"
 
 import { Agent } from "./Agent.ts"
 import { delegation } from "./agentTool.ts"
-import { AgentPlugins, Plugin } from "./Plugin.ts"
+import { AgentPlugins, Plugin, type PluginRequirements } from "./Plugin.ts"
 import { SessionStoreMemory } from "./SessionStore.ts"
 
-export const subagent = <R = never>(options: {
+export const subagent = <const Plugins extends ReadonlyArray<Plugin<any>>>(options: {
   readonly name: string
   readonly description: string
-  readonly plugins: ReadonlyArray<Plugin<R>>
+  readonly plugins: Plugins
   readonly systemPrompt?: string | undefined
   readonly modelId?: string | undefined
   readonly maxTurns?: number | undefined
-}): Plugin<R> => {
+}): Plugin<PluginRequirements<Plugins>> => {
   const { tool, handler } = delegation(options)
   const toolkit = Toolkit.make(tool)
   const child = AgentPlugins(options.plugins, { systemPrompt: options.systemPrompt }).pipe(

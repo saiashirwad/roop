@@ -1,0 +1,22 @@
+diff --git a/dist/internal/response.js b/dist/internal/response.js
+index ccb96ed98949be654eb58f16119fe3768d7c277e..9c43116766484648d34dcb5ccc82c48b9b1840ff 100644
+--- a/dist/internal/response.js
++++ b/dist/internal/response.js
+@@ -26,12 +26,15 @@ const metadataEncoded = (result) => result.id === undefined && result.modelId ==
+     : {
+         type: "response-metadata",
+         id: result.id,
+-        modelId: result.modelId
++        modelId: result.modelId,
++        timestamp: undefined,
++        request: undefined
+     };
+ const finishEncoded = (result) => ({
+     type: "finish",
+     reason: result.finishReason ?? "stop",
+-    usage: encodeUsage(result.usage)
++    usage: encodeUsage(result.usage),
++    response: undefined
+ });
+ const textStreamBody = (id, text) => {
+     const parts = [{ type: "text-start", id }];

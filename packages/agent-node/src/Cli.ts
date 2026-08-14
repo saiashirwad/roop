@@ -1,14 +1,14 @@
 import { stdin as input, stdout as output } from "node:process"
 import { createInterface } from "node:readline/promises"
 
+import { NodeHttpClient } from "@effect/platform-node"
 import { Agent } from "@roop/agent/Agent.ts"
 import type { AgentEvent } from "@roop/agent/AgentEvent.ts"
 import { AgentPlugins, Plugin } from "@roop/agent/Plugin.ts"
 import { SessionStoreMemory } from "@roop/agent/SessionStore.ts"
+import { OpenAiCompatible } from "@roop/plugin-openai/OpenAiCompatible.ts"
 import { Effect, Layer, Schema, Stream } from "effect"
 import { Tool, Toolkit } from "effect/unstable/ai"
-
-import { DeepSeek } from "./DeepSeek.ts"
 
 const NowToolkit = Toolkit.make(
   Tool.make("now", {
@@ -73,6 +73,16 @@ if (apiKey === undefined) {
   process.exit(1)
 }
 
-const Live = AgentPlugins([DeepSeek(apiKey), now]).pipe(Layer.provide(SessionStoreMemory))
+const deepseek = OpenAiCompatible({
+  name: "deepseek",
+  apiUrl: "https://api.deepseek.com",
+  apiKey,
+  models: [{ id: "deepseek-chat", description: "DeepSeek V3 via the OpenAI-compatible API" }],
+})
+
+const Live = AgentPlugins([deepseek, now]).pipe(
+  Layer.provide(SessionStoreMemory),
+  Layer.provide(NodeHttpClient.layerUndici),
+)
 
 Effect.runPromise(main.pipe(Effect.provide(Live)))
