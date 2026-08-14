@@ -10,6 +10,7 @@ export type LoopOptions = {
   readonly model: LanguageModel.Service
   readonly toolkit: StreamToolkit
   readonly prompt: string
+  readonly maxTurns?: number | undefined
   readonly interrupt: Deferred.Deferred<void>
   readonly onTurn: () => Effect.Effect<void>
 }
@@ -46,10 +47,16 @@ export const runLoop = (options: LoopOptions): Stream.Stream<AgentEvent> =>
     Effect.gen(function* () {
       const emit = (event: AgentEvent) => Queue.offer(queue, event)
       let firstTurn = true
+      let turns = 0
 
       while (true) {
         if (yield* Deferred.isDone(options.interrupt)) {
           yield* emit({ _tag: "Finish", reason: "interrupted" })
+          return
+        }
+
+        if (options.maxTurns !== undefined && turns >= options.maxTurns) {
+          yield* emit({ _tag: "Finish", reason: "completed", message: "maxTurns reached" })
           return
         }
 
@@ -80,6 +87,7 @@ export const runLoop = (options: LoopOptions): Stream.Stream<AgentEvent> =>
         }
 
         firstTurn = false
+        turns += 1
         yield* options.onTurn()
 
         if (!outcome.some((part) => part.type === "tool-call")) {

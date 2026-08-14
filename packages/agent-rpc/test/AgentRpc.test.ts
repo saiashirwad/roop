@@ -5,9 +5,13 @@ import { SessionStoreMemory } from "@roop/agent/SessionStore.ts"
 import { Skills } from "@roop/agent/Skills.ts"
 import { Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect"
 import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
+import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient"
+import * as HttpRouter from "effect/unstable/http/HttpRouter"
+import { RpcClient } from "effect/unstable/rpc"
 import * as RpcTest from "effect/unstable/rpc/RpcTest"
 
 import { AgentRpc } from "../src/AgentRpc.ts"
+import { AgentRpcClientHttp, AgentRpcServerHttp } from "../src/AgentRpcHttp.ts"
 import { AgentRpcServer } from "../src/AgentRpcServer.ts"
 
 const Echo = Tool.make("echo", {
@@ -131,6 +135,30 @@ it.layer(AgentRpcServer.pipe(Layer.provide(TestLayer)))("AgentRpc", (it) => {
       assert.strictEqual(
         (Option.getOrThrow(Exit.findErrorOption(historyExit)) as any)._tag,
         "SessionNotFound",
+      )
+    }),
+  )
+})
+
+it.layer(AgentRpcServer.pipe(Layer.provide(TestLayer)))("AgentRpc over HTTP", (it) => {
+  it.effect("round-trips over the HTTP transport", () =>
+    Effect.gen(function* () {
+      const serverLayer = AgentRpcServerHttp("/rpc").pipe(Layer.provide(TestLayer))
+      const { handler, dispose } = HttpRouter.toWebHandler(serverLayer, { disableLogger: true })
+      yield* Effect.addFinalizer(() => Effect.promise(() => dispose()))
+      const fetchWithHandler: typeof fetch = (input, init) =>
+        handler(input instanceof Request ? input : new Request(input, init))
+      const clientLayer = AgentRpcClientHttp("http://localhost/rpc").pipe(
+        Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetchWithHandler)),
+      )
+      const client = yield* RpcClient.make(AgentRpc).pipe(Effect.provide(clientLayer))
+      const events = yield* Stream.runCollect(
+        client.Prompt({ prompt: "say hi", sessionId: "s-http" }),
+      )
+
+      assert.deepStrictEqual(
+        [...events].map((event) => event._tag),
+        ["ToolCall", "ToolResult", "TextDelta", "Finish"],
       )
     }),
   )

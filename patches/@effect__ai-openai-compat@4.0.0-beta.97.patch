@@ -1,63 +1,8 @@
---- a/dist/OpenAiLanguageModel.js
-+++ b/dist/OpenAiLanguageModel.js
-@@ -1121,10 +1121,40 @@
-       content: input
-     }];
-   }
-+  // Coalesce consecutive function_call items into one assistant message with
-+  // multiple tool_calls. Chat Completions APIs (Kimi, DeepSeek, OpenAI chat)
-+  // require a single assistant tool_calls message, then one tool message per id.
-   const messages = [];
-+  let pendingToolCalls = undefined;
-+  const flushToolCalls = () => {
-+    if (pendingToolCalls !== undefined && pendingToolCalls.length > 0) {
-+      messages.push({
-+        role: "assistant",
-+        content: null,
-+        tool_calls: pendingToolCalls
-+      });
-+    }
-+    pendingToolCalls = undefined;
-+  };
-   for (const item of input) {
-+    if (Predicate.hasProperty(item, "type") && item.type === "function_call") {
-+      if (pendingToolCalls === undefined) {
-+        pendingToolCalls = [];
-+      }
-+      pendingToolCalls.push({
-+        id: item.call_id,
-+        type: "function",
-+        function: {
-+          name: item.name,
-+          arguments: item.arguments
-+        }
-+      });
-+      continue;
-+    }
-+    flushToolCalls();
-     messages.push(...toChatMessagesFromItem(item));
-   }
-+  flushToolCalls();
-   return messages;
- };
- const toChatMessagesFromItem = item => {
-@@ -1143,6 +1173,7 @@
-   switch (item.type) {
-     case "function_call":
-       {
-+        // Handled by toChatMessages coalesce path; keep single-call fallback.
-         return [{
-           role: "assistant",
-           content: null,
 --- a/src/OpenAiLanguageModel.ts
 +++ b/src/OpenAiLanguageModel.ts
-@@ -1721,11 +1721,50 @@
-     return [{ role: "user", content: input }]
+@@ -1722,12 +1722,54 @@
    }
  
-+  // Coalesce consecutive function_call items into one assistant message with
-+  // multiple tool_calls. Chat Completions APIs (Kimi, DeepSeek, OpenAI chat)
-+  // require a single assistant tool_calls message, then one tool message per id.
    const messages: Array<CreateResponseRequestJson["messages"][number]> = []
 +  type ToolCallMessage = {
 +    readonly id: string
@@ -100,13 +45,57 @@
    }
 +  flushToolCalls()
  
-   return messages
+-  return messages
++  return messages.filter((message) => {
++    if (!Predicate.hasProperty(message, "role") || message.role !== "assistant") {
++      return true
++    }
++    const assistant = message as { readonly content: unknown; readonly tool_calls?: unknown }
++    return !(assistant.content == null && assistant.tool_calls === undefined)
++  })
  }
-@@ -1749,6 +1788,7 @@
  
-   switch (item.type) {
-     case "function_call": {
-+      // Handled by toChatMessages coalesce path; keep single-call fallback.
-       return [{
-         role: "assistant",
-         content: null,
+ const toChatMessagesFromItem = (
+--- a/dist/OpenAiLanguageModel.js
++++ b/dist/OpenAiLanguageModel.js
+@@ -1124,10 +1124,39 @@
+     }];
+   }
+   const messages = [];
++  let pendingToolCalls = undefined;
++  const flushToolCalls = () => {
++    if (pendingToolCalls !== undefined && pendingToolCalls.length > 0) {
++      messages.push({
++        role: "assistant",
++        content: null,
++        tool_calls: pendingToolCalls
++      });
++    }
++    pendingToolCalls = undefined;
++  };
+   for (const item of input) {
++    if (Predicate.hasProperty(item, "type") && item.type === "function_call") {
++      if (pendingToolCalls === undefined) {
++        pendingToolCalls = [];
++      }
++      pendingToolCalls.push({
++        id: item.call_id,
++        type: "function",
++        function: {
++          name: item.name,
++          arguments: item.arguments
++        }
++      });
++      continue;
++    }
++    flushToolCalls();
+     messages.push(...toChatMessagesFromItem(item));
+   }
+-  return messages;
++  flushToolCalls();
++  return messages.filter(message =>
++    !(message.role === "assistant" && message.content == null && message.tool_calls === undefined)
++  );
+ };
+ const toChatMessagesFromItem = item => {
+   if (Predicate.hasProperty(item, "type") && item.type === "message") {

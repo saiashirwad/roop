@@ -3,6 +3,7 @@ import { Effect, Exit, Fiber, Layer, Option, Queue, Ref, Schema, Stream } from "
 import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
 
 import { Agent, AgentLiveToolkit } from "../src/Agent.ts"
+import { asTool } from "../src/agentTool.ts"
 import { ModelCatalogLive } from "../src/ModelCatalog.ts"
 import { SessionStoreMemory } from "../src/SessionStore.ts"
 import { Skills } from "../src/Skills.ts"
@@ -198,6 +199,50 @@ it.layer(
         caps.skills.map((skill) => skill.id),
         ["summarize"],
       )
+    }),
+  )
+})
+it.layer(
+  Main(
+    scripted([
+      [{ type: "tool-call" as const, id: "c1", name: "echo", params: { note: "hi" } }],
+      [{ type: "text-delta" as const, id: "t1", delta: "done" }],
+    ]),
+  ),
+)("agent as tool", (it) => {
+  it.effect("delegates and returns a summary", () =>
+    Effect.gen(function* () {
+      const agent = yield* Agent
+      const { tool, handler } = asTool(agent, { name: "Delegator", description: "delegate work" })
+      assert.strictEqual(tool.name, "Delegator")
+      const result = yield* handler({ task: "please echo hi" })
+      assert.deepStrictEqual(result, { summary: "done" })
+    }),
+  )
+})
+
+it.layer(
+  Main(
+    scripted([[{ type: "tool-call" as const, id: "c1", name: "echo", params: { note: "hi" } }]]),
+  ),
+)("maxTurns", (it) => {
+  it.effect("stops the loop at maxTurns", () =>
+    Effect.gen(function* () {
+      const agent = yield* Agent
+      const events = yield* collect(
+        agent.prompt({
+          prompt: "loop",
+          sessionId: "m1",
+          maxTurns: 1,
+        }),
+      )
+      assert.deepStrictEqual(
+        events.map((event: any) => event._tag),
+        ["ToolCall", "ToolResult", "Finish"],
+      )
+      const finish = events[2] as any
+      assert.strictEqual(finish.reason, "completed")
+      assert.strictEqual(finish.message, "maxTurns reached")
     }),
   )
 })

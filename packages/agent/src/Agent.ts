@@ -23,7 +23,10 @@ export type PromptOptions = {
   readonly prompt: string
   readonly sessionId?: string | undefined
   readonly modelId?: string | undefined
+  readonly maxTurns?: number | undefined
 }
+
+export type AgentService = Context.Service.Shape<typeof Agent>
 
 export class Agent extends Context.Service<
   Agent,
@@ -91,6 +94,7 @@ export const AgentLive = (
                 model,
                 toolkit,
                 prompt: request.prompt,
+                maxTurns: request.maxTurns,
                 interrupt,
                 onTurn: () =>
                   Effect.asVoid(

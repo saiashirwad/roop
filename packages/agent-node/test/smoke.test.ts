@@ -1,28 +1,24 @@
 import { assert, it } from "@effect/vitest"
-import { AgentLiveToolkit } from "@roop/agent/Agent.ts"
-import { DeepSeekLive } from "@roop/agent/DeepSeek.ts"
+import { Agent, AgentLiveToolkit } from "@roop/agent/Agent.ts"
 import { SessionStoreMemory } from "@roop/agent/SessionStore.ts"
 import { Effect, Layer, Stream } from "effect"
 import { Toolkit } from "effect/unstable/ai"
-import * as RpcTest from "effect/unstable/rpc/RpcTest"
 
-import { AgentRpc } from "../src/AgentRpc.ts"
-import { AgentRpcServer } from "../src/AgentRpcServer.ts"
-
-const LiveLayer = (apiKey: string) =>
-  AgentLiveToolkit(Toolkit.empty).pipe(
-    Layer.provide(DeepSeekLive(apiKey)),
-    Layer.provide(SessionStoreMemory),
-  )
+import { DeepSeekLive } from "../src/DeepSeek.ts"
 
 const apiKey = process.env.DEEPSEEK_API_KEY
 
-it.layer(AgentRpcServer.pipe(Layer.provide(LiveLayer(apiKey ?? ""))))("DeepSeek live", (it) => {
+it.layer(
+  AgentLiveToolkit(Toolkit.empty).pipe(
+    Layer.provide(DeepSeekLive(apiKey ?? "")),
+    Layer.provide(SessionStoreMemory),
+  ),
+)("DeepSeek live", (it) => {
   it.effect.skipIf(apiKey === undefined)("streams a text reply", () =>
     Effect.gen(function* () {
-      const client = yield* RpcTest.makeClient(AgentRpc)
+      const agent = yield* Agent
       const events = yield* Stream.runCollect(
-        client.Prompt({
+        agent.prompt({
           prompt: "Reply with exactly the word banana and nothing else.",
           sessionId: "live",
         }),
