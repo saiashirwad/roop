@@ -5,7 +5,8 @@ A smol, Effect-native agents layer. One kernel, one protocol, one Node adapter.
 ## Packages
 
 - `packages/agent` — the kernel. Plain Effect services over `effect/unstable/ai`; imports nothing
-  platform-specific (enforced by `test/portability.test.ts`).
+  platform-specific (`test/portability.test.ts` guards imports) and the core suite runs inside real
+  workerd (`test-workerd/`).
 - `packages/agent-rpc` — the protocol. One `RpcGroup` over the kernel, plus HTTP transport helpers.
 - `packages/agent-node` — the Node adapter. DeepSeek model catalog, a readline CLI, and the live
   smoke test.
