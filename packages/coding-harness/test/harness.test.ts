@@ -6,8 +6,8 @@ import { NodeChildProcessSpawner, NodeFileSystem, NodePath } from "@effect/platf
 import { assert, it } from "@effect/vitest"
 import { AgentRpc } from "@roop/agent-rpc/AgentRpc.ts"
 import { AgentRpcClientHttp, AgentRpcServerHttp } from "@roop/agent-rpc/AgentRpcHttp.ts"
-import { Agent, AgentLiveToolkit } from "@roop/agent/Agent.ts"
-import { ModelCatalogLive } from "@roop/agent/ModelCatalog.ts"
+import { Agent } from "@roop/agent/Agent.ts"
+import { AgentPlugins, Plugin } from "@roop/agent/Plugin.ts"
 import { SessionStoreMemory } from "@roop/agent/SessionStore.ts"
 import { CodingTools } from "@roop/coding-tools/CodingTools.ts"
 import { Effect, Layer, Ref, Stream } from "effect"
@@ -35,15 +35,16 @@ const scripted = (turns: ReadonlyArray<ReadonlyArray<Record<string, unknown>>>) 
     })
   })
 
-const modelLayer = (model: Effect.Effect<LanguageModel.Service>) =>
-  Layer.effect(LanguageModel.LanguageModel, model)
-
-const tools = CodingTools(root)
-
 const agentLayer = (model: Effect.Effect<LanguageModel.Service>) =>
-  AgentLiveToolkit(tools.toolkit).pipe(
-    Layer.provide(tools.live),
-    Layer.provide(ModelCatalogLive([{ id: "fake", provider: "test", layer: modelLayer(model) }])),
+  AgentPlugins([
+    CodingTools(root),
+    Plugin({
+      name: "fake-model",
+      models: [
+        { id: "fake", provider: "test", layer: Layer.effect(LanguageModel.LanguageModel, model) },
+      ],
+    }),
+  ]).pipe(
     Layer.provide(SessionStoreMemory),
     Layer.provide(NodeChildProcessSpawner.layer),
     Layer.provide(NodeFileSystem.layer),

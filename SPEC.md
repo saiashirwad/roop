@@ -36,6 +36,19 @@ Four replaceable services.
 produced tool calls. `maxTurns` caps the loop; a `Deferred` per active session gives cooperative
 interrupt. `agentTool.ts` wraps one `Agent` as an Effect AI `Tool` so agents compose.
 
+## Plugins
+
+A `Plugin` is a value: a name plus optional contributions — a toolkit with its handlers layer, model
+specs, skills, and a system prompt fragment. `AgentPlugins(plugins)` merges the toolkits, provides
+the handler layers, builds one model catalog, concatenates prompts, and returns an `Agent` layer
+that still asks the host for a `SessionStore` and the handlers' platform services. Anything an agent
+is made of arrives as a plugin; a custom plugin is just another record.
+
+`subagent({ name, description, plugins, ... })` is a plugin built from plugins: it composes a child
+agent (with its own ephemeral in-memory sessions), wraps it in the delegation tool from
+`agentTool.ts`, and hands the parent a single tool that takes a task and returns a summary.
+Delegation depth is unbounded because a subagent's plugins may themselves contain subagents.
+
 ## The protocol
 
 ```

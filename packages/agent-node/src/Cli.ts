@@ -1,21 +1,30 @@
 import { stdin as input, stdout as output } from "node:process"
 import { createInterface } from "node:readline/promises"
 
-import { Agent, AgentLiveToolkit } from "@roop/agent/Agent.ts"
+import { Agent } from "@roop/agent/Agent.ts"
 import type { AgentEvent } from "@roop/agent/AgentEvent.ts"
+import { AgentPlugins, Plugin } from "@roop/agent/Plugin.ts"
 import { SessionStoreMemory } from "@roop/agent/SessionStore.ts"
 import { Effect, Layer, Schema, Stream } from "effect"
 import { Tool, Toolkit } from "effect/unstable/ai"
 
-import { DeepSeekLive } from "./DeepSeek.ts"
+import { DeepSeek } from "./DeepSeek.ts"
 
-const Now = Tool.make("now", {
-  description: "Current wall-clock time as ISO-8601",
-  parameters: Schema.Struct({ utc: Schema.optionalKey(Schema.Boolean) }),
-  success: Schema.Struct({ iso: Schema.String }),
+const NowToolkit = Toolkit.make(
+  Tool.make("now", {
+    description: "Current wall-clock time as ISO-8601",
+    parameters: Schema.Struct({ utc: Schema.optionalKey(Schema.Boolean) }),
+    success: Schema.Struct({ iso: Schema.String }),
+  }),
+)
+
+const now = Plugin({
+  name: "now",
+  toolkit: NowToolkit,
+  handlers: NowToolkit.toLayer({
+    now: () => Effect.succeed({ iso: new Date().toISOString() }),
+  }),
 })
-
-const NowToolkit = Toolkit.make(Now)
 
 const render = (event: AgentEvent): string | undefined => {
   switch (event._tag) {
@@ -37,12 +46,7 @@ const render = (event: AgentEvent): string | undefined => {
   }
 }
 
-export const main = Effect.gen(function* () {
-  const apiKey = process.env["DEEPSEEK_API_KEY"]
-  if (apiKey === undefined) {
-    return yield* Effect.logError("DEEPSEEK_API_KEY is not set")
-  }
-
+const main = Effect.gen(function* () {
   const agent = yield* Agent
   const lines = createInterface({ input, output })
 
@@ -63,14 +67,12 @@ export const main = Effect.gen(function* () {
   )
 })
 
-const Live = AgentLiveToolkit(NowToolkit).pipe(
-  Layer.provide(DeepSeekLive(process.env["DEEPSEEK_API_KEY"] ?? "")),
-  Layer.provide(SessionStoreMemory),
-  Layer.provide(
-    NowToolkit.toLayer({
-      now: () => Effect.succeed({ iso: new Date().toISOString() }),
-    }),
-  ),
-)
+const apiKey = process.env["DEEPSEEK_API_KEY"]
+if (apiKey === undefined) {
+  console.error("DEEPSEEK_API_KEY is not set")
+  process.exit(1)
+}
+
+const Live = AgentPlugins([DeepSeek(apiKey), now]).pipe(Layer.provide(SessionStoreMemory))
 
 Effect.runPromise(main.pipe(Effect.provide(Live)))

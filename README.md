@@ -5,7 +5,8 @@ A smol, Effect-native agents layer. The agent is the protocol: an agent is expos
 `Toolkit`, a model catalog, and a skill list.
 
 Built from replaceable Effect services, so models, tools, storage, and transports can be swapped
-without changing the loop.
+without changing the loop. Agents are composed from plugins — values contributing tools, models,
+skills, and prompt fragments — and `subagent(...)` turns a plugin list into a delegation tool.
 
 Start here:
 

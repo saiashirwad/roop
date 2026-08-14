@@ -52,10 +52,8 @@ export const AgentLive = <Tools extends Record<string, Tool.Any>>(
       const active = yield* Ref.make(new Map<string, Deferred.Deferred<void>>())
       const loop = toolkit as unknown as ErasedToolkit
 
-      const seed = (messages: ReadonlyArray<Session["messages"][number]>) =>
-        messages.length > 0 || (options?.systemPrompt ?? "") === ""
-          ? messages
-          : [{ role: "system" as const, content: options?.systemPrompt ?? "" }]
+      const systemPrompt = options?.systemPrompt ?? ""
+      const seed = systemPrompt === "" ? [] : [{ role: "system" as const, content: systemPrompt }]
 
       const clearActive = (sessionId: string) =>
         Ref.update(active, (map) => {
@@ -78,7 +76,7 @@ export const AgentLive = <Tools extends Record<string, Tool.Any>>(
               const sessionId = request.sessionId ?? crypto.randomUUID()
 
               const stored = yield* Effect.option(store.load(sessionId))
-              const messages = stored._tag === "Some" ? stored.value.messages : seed([])
+              const messages = stored._tag === "Some" ? stored.value.messages : seed
               const chat = yield* Chat.fromPrompt([
                 ...messages,
                 {
@@ -133,5 +131,6 @@ export const AgentLive = <Tools extends Record<string, Tool.Any>>(
 
 export const AgentLiveToolkit = <Tools extends Record<string, Tool.Any>>(
   toolkit: Toolkit.Toolkit<Tools>,
+  options?: { readonly systemPrompt?: string | undefined },
 ): Layer.Layer<Agent, never, Tool.HandlersFor<Tools> | ModelCatalog | SessionStore> =>
-  Layer.unwrap(Effect.map(toolkit, (withHandler) => AgentLive(withHandler)))
+  Layer.unwrap(Effect.map(toolkit, (withHandler) => AgentLive(withHandler, options)))

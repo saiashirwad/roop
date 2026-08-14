@@ -3,7 +3,7 @@ import { Effect, Exit, Fiber, Layer, Option, Queue, Ref, Schema, Stream } from "
 import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
 
 import { Agent, AgentLiveToolkit } from "../src/Agent.ts"
-import { asTool } from "../src/agentTool.ts"
+import { delegation } from "../src/agentTool.ts"
 import { ModelCatalogLive } from "../src/ModelCatalog.ts"
 import { SessionStoreMemory } from "../src/SessionStore.ts"
 import { Skills } from "../src/Skills.ts"
@@ -229,7 +229,11 @@ it.layer(
   it.effect("delegates and returns a summary", () =>
     Effect.gen(function* () {
       const agent = yield* Agent
-      const { tool, handler } = asTool(agent, { name: "Delegator", description: "delegate work" })
+      const { tool, handler: make } = delegation({
+        name: "Delegator",
+        description: "delegate work",
+      })
+      const handler = make(agent)
       assert.strictEqual(tool.name, "Delegator")
       const result = yield* handler({ task: "please echo hi" })
       assert.deepStrictEqual(result, { summary: "done" })

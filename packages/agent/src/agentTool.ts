@@ -8,15 +8,14 @@ export class DelegationFailed extends Schema.TaggedErrorClass<DelegationFailed>(
   { message: Schema.String },
 ) {}
 
-export const asTool = (
-  agent: AgentService,
-  options: {
-    readonly name: string
-    readonly description: string
-    readonly modelId?: string | undefined
-    readonly maxTurns?: number | undefined
-  },
-) => {
+export type DelegationOptions = {
+  readonly name: string
+  readonly description: string
+  readonly modelId?: string | undefined
+  readonly maxTurns?: number | undefined
+}
+
+export const delegation = (options: DelegationOptions) => {
   const tool = Tool.make(options.name, {
     description: options.description,
     parameters: Schema.Struct({ task: Schema.String }),
@@ -25,7 +24,7 @@ export const asTool = (
     failureMode: "return",
   })
 
-  const handler = (params: { readonly task: string }) =>
+  const handler = (agent: AgentService) => (params: { readonly task: string }) =>
     Effect.gen(function* () {
       const events = yield* Stream.runCollect(
         agent.prompt({

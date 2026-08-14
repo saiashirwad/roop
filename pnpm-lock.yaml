@@ -153,6 +153,9 @@ importers:
 
   packages/coding-tools:
     dependencies:
+      '@roop/agent':
+        specifier: workspace:*
+        version: link:../agent
       effect:
         specifier: 4.0.0-beta.97
         version: 4.0.0-beta.97

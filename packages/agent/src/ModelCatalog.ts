@@ -35,18 +35,16 @@ export const ModelCatalogLive = <E, R>(specs: ReadonlyArray<ModelSpec<E, R>>) =>
   Layer.effect(
     ModelCatalog,
     Effect.gen(function* () {
-      const entries: Array<{ readonly ad: ModelAd; readonly model: LanguageModel.Service }> = []
-      for (const spec of specs) {
-        const context = yield* Layer.build(spec.layer)
-        entries.push({
+      const entries = yield* Effect.forEach(specs, (spec) =>
+        Effect.map(Layer.build(spec.layer), (context) => ({
           ad: {
             id: spec.id,
             provider: spec.provider,
             ...(spec.description !== undefined ? { description: spec.description } : {}),
           },
           model: Context.get(context, LanguageModel.LanguageModel),
-        })
-      }
+        })),
+      )
 
       const resolve = (modelId: string | undefined) => {
         const id = modelId ?? entries[0]?.ad.id ?? ""

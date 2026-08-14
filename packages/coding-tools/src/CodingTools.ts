@@ -1,5 +1,6 @@
 import { isAbsolute, relative, resolve as resolvePath, sep } from "node:path"
 
+import { Plugin } from "@roop/agent/Plugin.ts"
 import { Effect, FileSystem, Schema, Stream } from "effect"
 import { Tool, Toolkit } from "effect/unstable/ai"
 import { ChildProcess } from "effect/unstable/process"
@@ -9,7 +10,7 @@ export class ToolFailure extends Schema.TaggedErrorClass<ToolFailure>()("ToolFai
   message: Schema.String,
 }) {}
 
-export const CodingTools = (root: string) => {
+export const CodingTools = (root: string): Plugin<FileSystem.FileSystem | ChildProcessSpawner> => {
   const workspace = resolvePath(root)
 
   const within = (path: string): Effect.Effect<string, ToolFailure> => {
@@ -65,9 +66,10 @@ export const CodingTools = (root: string) => {
     }),
   )
 
-  return {
+  return Plugin({
+    name: "coding-tools",
     toolkit,
-    live: toolkit.toLayer({
+    handlers: toolkit.toLayer({
       readFile: ({ path }) =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem
@@ -110,5 +112,5 @@ export const CodingTools = (root: string) => {
           }).pipe(Effect.mapError((error) => new ToolFailure({ message: error.message }))),
         ),
     }),
-  }
+  })
 }
