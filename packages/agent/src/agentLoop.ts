@@ -1,18 +1,18 @@
 import { Cause, Deferred, Effect, Queue, Stream } from "effect"
-import { Chat, LanguageModel, type Response } from "effect/unstable/ai"
+import { Chat, LanguageModel, Toolkit, type Response } from "effect/unstable/ai"
 import type * as Tool from "effect/unstable/ai/Tool"
 
-import type { StreamToolkit } from "./Agent.ts"
 import type { AgentEvent } from "./AgentEvent.ts"
+
+export type ErasedToolkit = Toolkit.WithHandler<Record<string, Tool.Any>>
 
 export type LoopOptions = {
   readonly chat: Chat.Service
   readonly model: LanguageModel.Service
-  readonly toolkit: StreamToolkit
-  readonly prompt: string
+  readonly toolkit: ErasedToolkit
   readonly maxTurns?: number | undefined
   readonly interrupt: Deferred.Deferred<void>
-  readonly onTurn: () => Effect.Effect<void>
+  readonly persist: () => Effect.Effect<void>
 }
 
 const toEvent = (part: Response.StreamPart<Record<string, Tool.Any>>): AgentEvent | undefined => {
@@ -46,7 +46,6 @@ export const runLoop = (options: LoopOptions): Stream.Stream<AgentEvent> =>
   Stream.callback<AgentEvent>((queue) =>
     Effect.gen(function* () {
       const emit = (event: AgentEvent) => Queue.offer(queue, event)
-      let firstTurn = true
       let turns = 0
 
       while (true) {
@@ -56,13 +55,13 @@ export const runLoop = (options: LoopOptions): Stream.Stream<AgentEvent> =>
         }
 
         if (options.maxTurns !== undefined && turns >= options.maxTurns) {
-          yield* emit({ _tag: "Finish", reason: "completed", message: "maxTurns reached" })
+          yield* emit({ _tag: "Finish", reason: "stopped" })
           return
         }
 
         const turn = options.chat
           .streamText({
-            prompt: firstTurn ? options.prompt : [],
+            prompt: [],
             toolkit: options.toolkit,
             concurrency: "unbounded",
           })
@@ -86,9 +85,8 @@ export const runLoop = (options: LoopOptions): Stream.Stream<AgentEvent> =>
           return
         }
 
-        firstTurn = false
         turns += 1
-        yield* options.onTurn()
+        yield* options.persist()
 
         if (!outcome.some((part) => part.type === "tool-call")) {
           yield* emit({ _tag: "Finish", reason: "completed" })

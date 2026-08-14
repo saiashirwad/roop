@@ -15,6 +15,7 @@ export const AgentRpc = RpcGroup.make(
       prompt: Schema.String,
       sessionId: Schema.optionalKey(Schema.String),
       modelId: Schema.optionalKey(Schema.String),
+      maxTurns: Schema.optionalKey(Schema.Number),
     },
     success: AgentEvent,
     error: Schema.Union([ModelNotFound, SessionBusy]),

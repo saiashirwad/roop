@@ -40,9 +40,9 @@ RpcGroup "Agent"
 ```
 
 `AgentEvent` is a schema union: `TextDelta`, `ReasoningDelta`, `ToolCall`, `ToolResult`,
-`Finish{ completed | failed | interrupted }`. Run failures fold into `Finish.failed`; only protocol
-faults (`ModelNotFound`, `SessionBusy`, `RunNotFound`, `SessionNotFound`) use the typed error
-channel.
+`Finish{ completed | failed | interrupted | stopped }`. Run failures fold into `Finish.failed`; only
+protocol faults (`ModelNotFound`, `SessionBusy`, `RunNotFound`, `SessionNotFound`) use the typed
+error channel.
 
 `AgentRpcServer` is thin — every handler is one line into `Agent`. `AgentRpcHttp.ts` mounts the
 group over HTTP (`RpcServer.layerHttp` + ndjson) and builds a typed client

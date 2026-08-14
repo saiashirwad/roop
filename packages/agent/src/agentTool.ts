@@ -53,6 +53,9 @@ export const asTool = (
           if (event.reason === "interrupted") {
             return yield* new DelegationFailed({ message: "delegated agent was interrupted" })
           }
+          if (event.reason === "stopped") {
+            return yield* new DelegationFailed({ message: "delegated agent hit its turn cap" })
+          }
         }
         if (event._tag === "TextDelta") {
           summary += event.delta

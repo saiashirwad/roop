@@ -104,20 +104,20 @@ it.layer(
     }),
   )
 
-  it.effect("rejects a missing model id", () =>
+  it.effect("rejects a missing model id and does not poison the session", () =>
     Effect.gen(function* () {
+      const agent = yield* Agent
+
       const exit = yield* Effect.exit(
-        Stream.runDrain(
-          (yield* Agent).prompt({
-            prompt: "hi",
-            sessionId: "s2",
-            modelId: "nope",
-          }),
-        ),
+        Stream.runDrain(agent.prompt({ prompt: "hi", sessionId: "s2", modelId: "nope" })),
       )
       assert.ok(Exit.isFailure(exit))
       const failure = Option.getOrThrow(Exit.findErrorOption(exit)) as any
       assert.strictEqual(failure._tag, "ModelNotFound")
+
+      const events = yield* collect(agent.prompt({ prompt: "hi again", sessionId: "s2" }))
+      const finish = events[events.length - 1] as any
+      assert.strictEqual(finish.reason, "completed")
     }),
   )
 })
@@ -169,6 +169,22 @@ it.layer(Main(hanging))("Agent kernel concurrency", (it) => {
         ["Finish"],
       )
       assert.strictEqual(rest[0].reason, "interrupted")
+    }),
+  )
+
+  it.effect("persists the user prompt even when interrupted", () =>
+    Effect.gen(function* () {
+      const agent = yield* Agent
+      const { fiber } = yield* startRun(agent, "work", "s5")
+
+      yield* agent.interrupt("s5")
+      yield* Fiber.join(fiber)
+
+      const session = yield* agent.history("s5")
+      assert.deepStrictEqual(
+        session.messages.map((message) => message.role),
+        ["user"],
+      )
     }),
   )
 
@@ -241,8 +257,7 @@ it.layer(
         ["ToolCall", "ToolResult", "Finish"],
       )
       const finish = events[2] as any
-      assert.strictEqual(finish.reason, "completed")
-      assert.strictEqual(finish.message, "maxTurns reached")
+      assert.strictEqual(finish.reason, "stopped")
     }),
   )
 })

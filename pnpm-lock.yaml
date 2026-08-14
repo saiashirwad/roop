@@ -5,7 +5,7 @@ settings:
   excludeLinksFromLockfile: false
 
 patchedDependencies:
-  '@effect/ai-openai-compat@4.0.0-beta.97': 05c7f751f1b7b91343c27b4f877f3c30ede0075c1111d69bef237dfab836eeca
+  '@effect/ai-openai-compat@4.0.0-beta.97': 8a7f7bbcdc5e49a25e28e9bc58228c81e18870440374927c9b9746dc475c473c
 
 importers:
 
@@ -65,7 +65,7 @@ importers:
     dependencies:
       '@effect/ai-openai-compat':
         specifier: 4.0.0-beta.97
-        version: 4.0.0-beta.97(patch_hash=05c7f751f1b7b91343c27b4f877f3c30ede0075c1111d69bef237dfab836eeca)(effect@4.0.0-beta.97)
+        version: 4.0.0-beta.97(patch_hash=8a7f7bbcdc5e49a25e28e9bc58228c81e18870440374927c9b9746dc475c473c)(effect@4.0.0-beta.97)
       '@effect/platform-node':
         specifier: 4.0.0-beta.97
         version: 4.0.0-beta.97(effect@4.0.0-beta.97)(ioredis@5.11.1)
@@ -1550,7 +1550,7 @@ snapshots:
     dependencies:
       '@jridgewell/trace-mapping': 0.3.9
 
-  '@effect/ai-openai-compat@4.0.0-beta.97(patch_hash=05c7f751f1b7b91343c27b4f877f3c30ede0075c1111d69bef237dfab836eeca)(effect@4.0.0-beta.97)':
+  '@effect/ai-openai-compat@4.0.0-beta.97(patch_hash=8a7f7bbcdc5e49a25e28e9bc58228c81e18870440374927c9b9746dc475c473c)(effect@4.0.0-beta.97)':
     dependencies:
       effect: 4.0.0-beta.97
 

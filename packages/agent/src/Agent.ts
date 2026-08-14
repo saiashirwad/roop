@@ -3,7 +3,7 @@ import { Chat, Toolkit } from "effect/unstable/ai"
 import type * as Tool from "effect/unstable/ai/Tool"
 
 import { AgentEvent } from "./AgentEvent.ts"
-import { runLoop } from "./agentLoop.ts"
+import { runLoop, type ErasedToolkit } from "./agentLoop.ts"
 import { capabilitiesFrom, type Capabilities } from "./Capabilities.ts"
 import { ModelCatalog, ModelNotFound } from "./ModelCatalog.ts"
 import { SessionNotFound, SessionStore, type Session } from "./SessionStore.ts"
@@ -17,8 +17,6 @@ export class SessionBusy extends Schema.TaggedErrorClass<SessionBusy>()("Session
   sessionId: Schema.String,
 }) {}
 
-export type StreamToolkit = Toolkit.WithHandler<Record<string, Tool.Any>>
-
 export type PromptOptions = {
   readonly prompt: string
   readonly sessionId?: string | undefined
@@ -26,7 +24,7 @@ export type PromptOptions = {
   readonly maxTurns?: number | undefined
 }
 
-export type AgentService = Context.Service.Shape<typeof Agent>
+export type AgentService = Agent["Service"]
 
 export class Agent extends Context.Service<
   Agent,
@@ -40,8 +38,8 @@ export class Agent extends Context.Service<
   }
 >()("roop/Agent") {}
 
-export const AgentLive = (
-  toolkit: StreamToolkit,
+export const AgentLive = <Tools extends Record<string, Tool.Any>>(
+  toolkit: Toolkit.WithHandler<Tools>,
   options?: { readonly systemPrompt?: string | undefined },
 ): Layer.Layer<Agent, never, ModelCatalog | SessionStore> =>
   Layer.effect(
@@ -52,6 +50,7 @@ export const AgentLive = (
       const skillsOption = yield* Effect.serviceOption(Skills)
       const skills = skillsOption._tag === "Some" ? skillsOption.value.list : []
       const active = yield* Ref.make(new Map<string, Deferred.Deferred<void>>())
+      const loop = toolkit as unknown as ErasedToolkit
 
       const seed = (messages: ReadonlyArray<Session["messages"][number]>) =>
         messages.length > 0 || (options?.systemPrompt ?? "") === ""
@@ -60,8 +59,10 @@ export const AgentLive = (
 
       const clearActive = (sessionId: string) =>
         Ref.update(active, (map) => {
-          map.delete(sessionId)
-          return map
+          if (!map.has(sessionId)) return map
+          const next = new Map(map)
+          next.delete(sessionId)
+          return next
         })
 
       return Agent.of({
@@ -69,39 +70,50 @@ export const AgentLive = (
           Effect.map(
             Effect.all([catalog.list(), catalog.defaultModelId()]),
             ([models, defaultModelId]) =>
-              capabilitiesFrom({ toolkit, models, defaultModelId, skills }),
+              capabilitiesFrom({ tools: toolkit.tools, models, defaultModelId, skills }),
           ),
         prompt: (request) =>
           Stream.unwrap(
             Effect.gen(function* () {
               const sessionId = request.sessionId ?? crypto.randomUUID()
-              const busy = yield* Ref.get(active).pipe(Effect.map((map) => map.has(sessionId)))
-              if (busy) {
-                return yield* Effect.fail(new SessionBusy({ sessionId }))
-              }
 
               const stored = yield* Effect.option(store.load(sessionId))
               const messages = stored._tag === "Some" ? stored.value.messages : seed([])
-              const chat = yield* Chat.fromPrompt(messages)
+              const chat = yield* Chat.fromPrompt([
+                ...messages,
+                {
+                  role: "user" as const,
+                  content: [{ type: "text" as const, text: request.prompt }],
+                },
+              ])
+              const model = yield* catalog.resolve(request.modelId)
 
               const interrupt = yield* Deferred.make<void>()
-              yield* Ref.update(active, (map) => new Map(map).set(sessionId, interrupt))
+              const claimed = yield* Ref.modify(active, (map) =>
+                map.has(sessionId)
+                  ? ([false, map] as const)
+                  : ([true, new Map(map).set(sessionId, interrupt)] as const),
+              )
+              if (!claimed) {
+                return yield* Effect.fail(new SessionBusy({ sessionId }))
+              }
 
-              const model = yield* catalog.resolve(request.modelId)
+              const persist = () =>
+                Effect.asVoid(
+                  Ref.get(chat.history).pipe(
+                    Effect.flatMap((history) => store.save(sessionId, history.content)),
+                  ),
+                )
+
+              yield* persist()
 
               return runLoop({
                 chat,
                 model,
-                toolkit,
-                prompt: request.prompt,
+                toolkit: loop,
                 maxTurns: request.maxTurns,
                 interrupt,
-                onTurn: () =>
-                  Effect.asVoid(
-                    Ref.get(chat.history).pipe(
-                      Effect.flatMap((history) => store.save(sessionId, history.content)),
-                    ),
-                  ),
+                persist,
               }).pipe(Stream.ensuring(clearActive(sessionId)))
             }),
           ),
@@ -122,6 +134,4 @@ export const AgentLive = (
 export const AgentLiveToolkit = <Tools extends Record<string, Tool.Any>>(
   toolkit: Toolkit.Toolkit<Tools>,
 ): Layer.Layer<Agent, never, Tool.HandlersFor<Tools> | ModelCatalog | SessionStore> =>
-  Layer.unwrap(
-    Effect.map(toolkit, (withHandler) => AgentLive(withHandler as unknown as StreamToolkit)),
-  )
+  Layer.unwrap(Effect.map(toolkit, (withHandler) => AgentLive(withHandler)))

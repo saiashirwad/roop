@@ -19,7 +19,7 @@ export const AgentEvent = Schema.Union([
     result: Schema.Unknown,
   }),
   Schema.TaggedStruct("Finish", {
-    reason: Schema.Literals(["completed", "failed", "interrupted"]),
+    reason: Schema.Literals(["completed", "failed", "interrupted", "stopped"]),
     message: Schema.optionalKey(Schema.String),
   }),
 ])

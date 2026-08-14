@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "turbo run build",
+    "prepare": "./scripts/prepare-effect.sh",
     "typecheck": "turbo run typecheck",
     "lint": "oxlint .",
     "format": "oxfmt --write .",

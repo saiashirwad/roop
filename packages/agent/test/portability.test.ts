@@ -18,11 +18,17 @@ const allowed = (specifier: string) =>
 it("portability: agent core imports only effect and effect/unstable/ai", () => {
   const files = walk(srcDir).filter((file) => file.endsWith(".ts"))
   assert.strictEqual(files.length > 0, true)
+
   for (const file of files) {
     const source = readFileSync(file, "utf8")
-    for (const match of source.matchAll(/from\s+["']([^"']+)["']/g)) {
-      const specifier = match[1] ?? ""
+    for (const match of source.matchAll(
+      /from\s*["']([^"']+)["']|import\s*\(["']([^"']+)["']\)|import\s*["']([^"']+)["']/g,
+    )) {
+      const specifier = match[1] ?? match[2] ?? match[3] ?? ""
       assert.strictEqual(allowed(specifier), true, `${file} imports "${specifier}"`)
+    }
+    for (const banned of ["node:", "process", "Buffer", "require("]) {
+      assert.strictEqual(source.includes(banned), false, `${file} references "${banned}"`)
     }
   }
 })
