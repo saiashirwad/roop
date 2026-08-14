@@ -1,5 +1,5 @@
 import { Context, Effect, Layer, Schema } from "effect"
-import { LanguageModel, Model } from "effect/unstable/ai"
+import { LanguageModel } from "effect/unstable/ai"
 
 export const ModelAd = Schema.Struct({
   id: Schema.String,
@@ -17,7 +17,7 @@ export type ModelSpec<E, R> = {
   readonly id: string
   readonly provider: string
   readonly description?: string | undefined
-  readonly layer: Layer.Layer<LanguageModel.LanguageModel | Model.ProviderName | Model.ModelName, E, R>
+  readonly layer: Layer.Layer<LanguageModel.LanguageModel, E, R>
 }
 
 export class ModelCatalog extends Context.Service<

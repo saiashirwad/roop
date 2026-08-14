@@ -1,0 +1,38 @@
+import { Schema } from "effect"
+import { Rpc, RpcGroup } from "effect/unstable/rpc"
+
+import { AgentEvent } from "@roop/agent/AgentEvent.ts"
+import { Capabilities } from "@roop/agent/Capabilities.ts"
+import { ModelNotFound } from "@roop/agent/ModelCatalog.ts"
+import { RunNotFound, SessionBusy } from "@roop/agent/Agent.ts"
+import { Session, SessionNotFound } from "@roop/agent/SessionStore.ts"
+
+export const AgentRpc = RpcGroup.make(
+  Rpc.make("Capabilities", {
+    success: Capabilities,
+  }),
+  Rpc.make("Prompt", {
+    payload: {
+      prompt: Schema.String,
+      sessionId: Schema.optionalKey(Schema.String),
+      modelId: Schema.optionalKey(Schema.String),
+    },
+    success: AgentEvent,
+    error: Schema.Union([ModelNotFound, SessionBusy]),
+    stream: true,
+  }),
+  Rpc.make("Interrupt", {
+    payload: {
+      sessionId: Schema.String,
+    },
+    success: Schema.Void,
+    error: RunNotFound,
+  }),
+  Rpc.make("GetHistory", {
+    payload: {
+      sessionId: Schema.String,
+    },
+    success: Session,
+    error: SessionNotFound,
+  }),
+)
