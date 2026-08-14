@@ -1,12 +1,11 @@
 import { assert, it } from "@effect/vitest"
-import { Effect, Layer, Ref, Schema, Stream } from "effect"
-import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
-import * as RpcTest from "effect/unstable/rpc/RpcTest"
-
 import { AgentLiveToolkit } from "@roop/agent/Agent.ts"
 import { ModelCatalogLive } from "@roop/agent/ModelCatalog.ts"
 import { SessionStoreMemory } from "@roop/agent/SessionStore.ts"
 import { Skills } from "@roop/agent/Skills.ts"
+import { Effect, Layer, Ref, Schema, Stream } from "effect"
+import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
+import * as RpcTest from "effect/unstable/rpc/RpcTest"
 
 import { AgentRpc } from "../src/AgentRpc.ts"
 import { AgentRpcServer } from "../src/AgentRpcServer.ts"
@@ -35,25 +34,32 @@ const scripted = (turns: ReadonlyArray<ReadonlyArray<Record<string, unknown>>>) 
   })
 
 const TestLayer = AgentLiveToolkit(EchoToolkit).pipe(
-  Layer.provide(ModelCatalogLive([
-    {
-      id: "deepseek-chat",
-      provider: "deepseek",
-      layer: Layer.effect(LanguageModel.LanguageModel, scripted([
-        [
-          { type: "tool-call" as const, id: "c1", name: "echo", params: { note: "hi" } },
-        ],
-        [{ type: "text-delta" as const, id: "t1", delta: "done" }],
-      ])),
-    },
-  ])),
+  Layer.provide(
+    ModelCatalogLive([
+      {
+        id: "deepseek-chat",
+        provider: "deepseek",
+        layer: Layer.effect(
+          LanguageModel.LanguageModel,
+          scripted([
+            [{ type: "tool-call" as const, id: "c1", name: "echo", params: { note: "hi" } }],
+            [{ type: "text-delta" as const, id: "t1", delta: "done" }],
+          ]),
+        ),
+      },
+    ]),
+  ),
   Layer.provide(SessionStoreMemory),
-  Layer.provide(EchoToolkit.toLayer({
-    echo: ({ note }) => Effect.succeed({ reply: note }),
-  })),
-  Layer.provide(Layer.succeed(Skills, {
-    list: [{ id: "summarize", description: "summarize text" }],
-  })),
+  Layer.provide(
+    EchoToolkit.toLayer({
+      echo: ({ note }) => Effect.succeed({ reply: note }),
+    }),
+  ),
+  Layer.provide(
+    Layer.succeed(Skills, {
+      list: [{ id: "summarize", description: "summarize text" }],
+    }),
+  ),
 )
 
 it.layer(AgentRpcServer.pipe(Layer.provide(TestLayer)))("AgentRpc", (it) => {
@@ -62,13 +68,23 @@ it.layer(AgentRpcServer.pipe(Layer.provide(TestLayer)))("AgentRpc", (it) => {
       const client = yield* RpcTest.makeClient(AgentRpc)
       const caps = yield* client.Capabilities()
 
-      assert.deepStrictEqual(caps.tools.map((tool) => tool.name), ["echo"])
-      assert.deepStrictEqual(caps.models.map((model) => model.id), ["deepseek-chat"])
+      assert.deepStrictEqual(
+        caps.tools.map((tool) => tool.name),
+        ["echo"],
+      )
+      assert.deepStrictEqual(
+        caps.models.map((model) => model.id),
+        ["deepseek-chat"],
+      )
       assert.strictEqual(caps.defaultModelId, "deepseek-chat")
-      assert.deepStrictEqual(caps.skills.map((skill) => skill.id), ["summarize"])
+      assert.deepStrictEqual(
+        caps.skills.map((skill) => skill.id),
+        ["summarize"],
+      )
       const parameters = caps.tools[0]!.parameters as any
       assert.deepStrictEqual(Object.keys(parameters.properties ?? {}), ["note"])
-    }))
+    }),
+  )
 
   it.effect("streams prompt deltas and tool round-trips", () =>
     Effect.gen(function* () {
@@ -80,10 +96,10 @@ it.layer(AgentRpcServer.pipe(Layer.provide(TestLayer)))("AgentRpc", (it) => {
         ["ToolCall", "ToolResult", "TextDelta", "Finish"],
       )
       const history = yield* client.GetHistory({ sessionId: "s1" })
-      assert.deepStrictEqual(history.messages.map((message) => message.role), [
-        "user",
-        "assistant",
-        "tool",
-      ])
-    }))
+      assert.deepStrictEqual(
+        history.messages.map((message) => message.role),
+        ["user", "assistant", "tool"],
+      )
+    }),
+  )
 })

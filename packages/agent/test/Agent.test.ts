@@ -45,24 +45,26 @@ const modelLayer = (model: Effect.Effect<LanguageModel.Service>) =>
 
 const Main = (model: Effect.Effect<LanguageModel.Service>) =>
   AgentLiveToolkit(EchoToolkit).pipe(
-    Layer.provide(ModelCatalogLive([
-      { id: "fake", provider: "test", layer: modelLayer(model) },
-    ])),
+    Layer.provide(ModelCatalogLive([{ id: "fake", provider: "test", layer: modelLayer(model) }])),
     Layer.provide(SessionStoreMemory),
-    Layer.provide(EchoToolkit.toLayer({
-      echo: ({ note }) => Effect.succeed({ reply: note }),
-    })),
+    Layer.provide(
+      EchoToolkit.toLayer({
+        echo: ({ note }) => Effect.succeed({ reply: note }),
+      }),
+    ),
   )
 
 const collect = (stream: Stream.Stream<unknown, unknown>) =>
   Stream.runCollect(stream).pipe(Effect.map((chunk) => [...chunk]))
 
-it.layer(Main(scripted([
-  [
-    { type: "tool-call" as const, id: "c1", name: "echo", params: { note: "hi" } },
-  ],
-  [{ type: "text-delta" as const, id: "t1", delta: "done" }],
-])))("Agent kernel", (it) => {
+it.layer(
+  Main(
+    scripted([
+      [{ type: "tool-call" as const, id: "c1", name: "echo", params: { note: "hi" } }],
+      [{ type: "text-delta" as const, id: "t1", delta: "done" }],
+    ]),
+  ),
+)("Agent kernel", (it) => {
   it.effect("runs the tool loop and persists history", () =>
     Effect.gen(function* () {
       const agent = yield* Agent
@@ -76,35 +78,47 @@ it.layer(Main(scripted([
       assert.strictEqual(finish.reason, "completed")
 
       const session = yield* agent.history("s1")
-      assert.deepStrictEqual(session.messages.map((message) => message.role), [
-        "user",
-        "assistant",
-        "tool",
-      ])
-    }))
+      assert.deepStrictEqual(
+        session.messages.map((message) => message.role),
+        ["user", "assistant", "tool"],
+      )
+    }),
+  )
 
   it.effect("reports capabilities derived from the toolkit and catalog", () =>
     Effect.gen(function* () {
       const caps = yield* (yield* Agent).capabilities()
 
-      assert.deepStrictEqual(caps.tools.map((tool) => tool.name), ["echo"])
-      assert.deepStrictEqual(caps.models.map((model) => model.id), ["fake"])
+      assert.deepStrictEqual(
+        caps.tools.map((tool) => tool.name),
+        ["echo"],
+      )
+      assert.deepStrictEqual(
+        caps.models.map((model) => model.id),
+        ["fake"],
+      )
       assert.strictEqual(caps.defaultModelId, "fake")
       const parameters = caps.tools[0]!.parameters as any
       assert.deepStrictEqual(Object.keys(parameters.properties ?? {}), ["note"])
-    }))
+    }),
+  )
 
   it.effect("rejects a missing model id", () =>
     Effect.gen(function* () {
-      const exit = yield* Effect.exit(Stream.runDrain((yield* Agent).prompt({
-        prompt: "hi",
-        sessionId: "s2",
-        modelId: "nope",
-      })))
+      const exit = yield* Effect.exit(
+        Stream.runDrain(
+          (yield* Agent).prompt({
+            prompt: "hi",
+            sessionId: "s2",
+            modelId: "nope",
+          }),
+        ),
+      )
       assert.ok(Exit.isFailure(exit))
       const failure = Option.getOrThrow(Exit.findErrorOption(exit)) as any
       assert.strictEqual(failure._tag, "ModelNotFound")
-    }))
+    }),
+  )
 })
 
 const startRun = (agent: Agent["Service"], prompt: string, sessionId: string) =>
@@ -124,17 +138,22 @@ it.layer(Main(hanging))("Agent kernel concurrency", (it) => {
       const agent = yield* Agent
       const { fiber } = yield* startRun(agent, "first", "s3")
 
-      const exit = yield* Effect.exit(Stream.runDrain(agent.prompt({
-        prompt: "second",
-        sessionId: "s3",
-      })))
+      const exit = yield* Effect.exit(
+        Stream.runDrain(
+          agent.prompt({
+            prompt: "second",
+            sessionId: "s3",
+          }),
+        ),
+      )
       assert.ok(Exit.isFailure(exit))
       const failure = Option.getOrThrow(Exit.findErrorOption(exit)) as any
       assert.strictEqual(failure._tag, "SessionBusy")
 
       yield* agent.interrupt("s3")
       yield* Fiber.join(fiber)
-    }))
+    }),
+  )
 
   it.effect("interrupts an active run", () =>
     Effect.gen(function* () {
@@ -144,9 +163,13 @@ it.layer(Main(hanging))("Agent kernel concurrency", (it) => {
       yield* agent.interrupt("s4")
       yield* Fiber.join(fiber)
       const rest = yield* Queue.takeAll(queue)
-      assert.deepStrictEqual(rest.map((event: any) => event._tag), ["Finish"])
+      assert.deepStrictEqual(
+        rest.map((event: any) => event._tag),
+        ["Finish"],
+      )
       assert.strictEqual(rest[0].reason, "interrupted")
-    }))
+    }),
+  )
 
   it.effect("errors on unknown session and missing run", () =>
     Effect.gen(function* () {
@@ -155,19 +178,26 @@ it.layer(Main(hanging))("Agent kernel concurrency", (it) => {
       assert.ok(Exit.isFailure(history))
       const interrupt = yield* Effect.exit(agent.interrupt("nope"))
       assert.ok(Exit.isFailure(interrupt))
-    }))
+    }),
+  )
 })
 
 it.layer(
   Main(scripted([[]])).pipe(
-    Layer.provide(Layer.succeed(Skills, {
-      list: [{ id: "summarize", description: "summarize text" }],
-    })),
+    Layer.provide(
+      Layer.succeed(Skills, {
+        list: [{ id: "summarize", description: "summarize text" }],
+      }),
+    ),
   ),
 )("capabilities with skills", (it) => {
   it.effect("lists skills when provided", () =>
     Effect.gen(function* () {
       const caps = yield* (yield* Agent).capabilities()
-      assert.deepStrictEqual(caps.skills.map((skill) => skill.id), ["summarize"])
-    }))
+      assert.deepStrictEqual(
+        caps.skills.map((skill) => skill.id),
+        ["summarize"],
+      )
+    }),
+  )
 })

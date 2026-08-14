@@ -1,6 +1,5 @@
-import { Effect } from "effect"
-
 import { Agent } from "@roop/agent/Agent.ts"
+import { Effect } from "effect"
 
 import { AgentRpc } from "./AgentRpc.ts"
 

@@ -1,9 +1,9 @@
 import { Schema } from "effect"
 import { Tool } from "effect/unstable/ai"
 
+import type { StreamToolkit } from "./Agent.ts"
 import { ModelAd } from "./ModelCatalog.ts"
 import type { Skill } from "./Skills.ts"
-import type { StreamToolkit } from "./Agent.ts"
 
 export const ToolAd = Schema.Struct({
   name: Schema.String,

@@ -3,9 +3,9 @@ import { Chat, Toolkit } from "effect/unstable/ai"
 import type * as Tool from "effect/unstable/ai/Tool"
 
 import { AgentEvent } from "./AgentEvent.ts"
+import { runLoop } from "./agentLoop.ts"
 import { capabilitiesFrom, type Capabilities } from "./Capabilities.ts"
 import { ModelCatalog, ModelNotFound } from "./ModelCatalog.ts"
-import { runLoop } from "./agentLoop.ts"
 import { SessionNotFound, SessionStore, type Session } from "./SessionStore.ts"
 import { Skills } from "./Skills.ts"
 
@@ -72,9 +72,7 @@ export const AgentLive = (
           Stream.unwrap(
             Effect.gen(function* () {
               const sessionId = request.sessionId ?? crypto.randomUUID()
-              const busy = yield* Ref.get(active).pipe(
-                Effect.map((map) => map.has(sessionId)),
-              )
+              const busy = yield* Ref.get(active).pipe(Effect.map((map) => map.has(sessionId)))
               if (busy) {
                 return yield* Effect.fail(new SessionBusy({ sessionId }))
               }

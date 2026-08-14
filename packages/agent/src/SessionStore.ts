@@ -1,12 +1,9 @@
 import { Context, Effect, Layer, Ref, Schema } from "effect"
 import { Prompt } from "effect/unstable/ai"
 
-export class SessionNotFound extends Schema.TaggedErrorClass<SessionNotFound>()(
-  "SessionNotFound",
-  {
-    sessionId: Schema.String,
-  },
-) {}
+export class SessionNotFound extends Schema.TaggedErrorClass<SessionNotFound>()("SessionNotFound", {
+  sessionId: Schema.String,
+}) {}
 
 export const Session = Schema.Struct({
   id: Schema.String,

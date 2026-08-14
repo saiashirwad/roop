@@ -2,8 +2,8 @@ import { Cause, Deferred, Effect, Queue, Stream } from "effect"
 import { Chat, LanguageModel, type Response } from "effect/unstable/ai"
 import type * as Tool from "effect/unstable/ai/Tool"
 
-import type { AgentEvent } from "./AgentEvent.ts"
 import type { StreamToolkit } from "./Agent.ts"
+import type { AgentEvent } from "./AgentEvent.ts"
 
 export type LoopOptions = {
   readonly chat: Chat.Service
@@ -92,10 +92,10 @@ export const runLoop = (options: LoopOptions): Stream.Stream<AgentEvent> =>
         Cause.hasInterruptsOnly(cause)
           ? Effect.void
           : Queue.offer(queue, {
-            _tag: "Finish",
-            reason: "failed",
-            message: Cause.pretty(cause).trim(),
-          }),
+              _tag: "Finish",
+              reason: "failed",
+              message: Cause.pretty(cause).trim(),
+            }),
       ),
       Effect.ensuring(Queue.end(queue)),
       Effect.asVoid,

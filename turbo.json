@@ -11,7 +11,8 @@
     },
     "test": {
       "dependsOn": ["^typecheck"],
-      "inputs": ["$TURBO_DEFAULT$", "test/**"]
+      "inputs": ["$TURBO_DEFAULT$", "test/**"],
+      "env": ["DEEPSEEK_API_KEY"]
     },
     "dev": {
       "cache": false,
