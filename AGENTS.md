@@ -7,7 +7,8 @@ Module naming: PascalCase for modules exporting an Effect service/tag or schema 
 packages/agent is the portable kernel — it may import only `effect` and `effect/unstable/ai`
 (enforced by test/portability.test.ts; proven by the workerd suite in test-workerd/). Provider and
 platform wiring lives in packages/agent-node; a Cloudflare/Workers adapter would be a sibling
-package with the same shape.
+package with the same shape. packages/coding-harness is the example: coding tools + a CLI that talks
+to the agent over Effect RPC (server + client modes).
 
 patches/@effect__ai-openai-compat@4.0.0-beta.97.patch is load-bearing: DeepSeek's chat-completions
 API rejects consecutive tool calls unless they are coalesced into one assistant message and
