@@ -1,5 +1,5 @@
 {
-  "name": "@roop/coding-harness",
+  "name": "@roop/coding-tui",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -8,19 +8,16 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run",
-    "serve": "tsx src/Serve.ts"
+    "start": "tsx src/Tui.ts",
+    "test": "vitest run"
   },
   "dependencies": {
-    "@effect/platform-node": "4.0.0-beta.97",
+    "@mariozechner/pi-tui": "^0.73.1",
     "@roop/agent": "workspace:*",
-    "@roop/agent-node": "workspace:*",
     "@roop/agent-rpc": "workspace:*",
-    "@roop/coding-tools": "workspace:*",
     "effect": "4.0.0-beta.97"
   },
   "devDependencies": {
-    "@effect/vitest": "4.0.0-beta.97",
     "@types/node": "^26.1.1",
     "tsx": "^4.23.0",
     "typescript": "^6.0.3",

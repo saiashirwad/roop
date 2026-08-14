@@ -3,6 +3,7 @@ packages:
 
 allowBuilds:
   esbuild: true
+  koffi: true
   msgpackr-extract: true
   workerd: true
 

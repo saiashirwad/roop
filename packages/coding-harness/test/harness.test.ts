@@ -9,14 +9,13 @@ import { AgentRpcClientHttp, AgentRpcServerHttp } from "@roop/agent-rpc/AgentRpc
 import { Agent, AgentLiveToolkit } from "@roop/agent/Agent.ts"
 import { ModelCatalogLive } from "@roop/agent/ModelCatalog.ts"
 import { SessionStoreMemory } from "@roop/agent/SessionStore.ts"
+import { CodingTools } from "@roop/coding-tools/CodingTools.ts"
 import { Effect, Layer, Ref, Stream } from "effect"
 import { LanguageModel } from "effect/unstable/ai"
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient"
 import * as HttpRouter from "effect/unstable/http/HttpRouter"
 import { RpcClient } from "effect/unstable/rpc"
 import { afterAll } from "vitest"
-
-import { HarnessTools } from "../src/HarnessTools.ts"
 
 const root = mkdtempSync(join(tmpdir(), "roop-harness-"))
 afterAll(() => rmSync(root, { recursive: true, force: true }))
@@ -39,11 +38,11 @@ const scripted = (turns: ReadonlyArray<ReadonlyArray<Record<string, unknown>>>) 
 const modelLayer = (model: Effect.Effect<LanguageModel.Service>) =>
   Layer.effect(LanguageModel.LanguageModel, model)
 
-const harness = HarnessTools(root)
+const tools = CodingTools(root)
 
 const agentLayer = (model: Effect.Effect<LanguageModel.Service>) =>
-  AgentLiveToolkit(harness.toolkit).pipe(
-    Layer.provide(harness.live),
+  AgentLiveToolkit(tools.toolkit).pipe(
+    Layer.provide(tools.live),
     Layer.provide(ModelCatalogLive([{ id: "fake", provider: "test", layer: modelLayer(model) }])),
     Layer.provide(SessionStoreMemory),
     Layer.provide(NodeChildProcessSpawner.layer),

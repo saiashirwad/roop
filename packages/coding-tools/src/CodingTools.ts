@@ -9,7 +9,7 @@ export class ToolFailure extends Schema.TaggedErrorClass<ToolFailure>()("ToolFai
   message: Schema.String,
 }) {}
 
-export const HarnessTools = (root: string) => {
+export const CodingTools = (root: string) => {
   const workspace = resolvePath(root)
 
   const within = (path: string): Effect.Effect<string, ToolFailure> => {

@@ -22,13 +22,17 @@ Start here:
   agent-as-tool. Imports only `effect`.
 - `@roop/agent-rpc` — `RpcGroup` protocol, server layer, HTTP transport helpers.
 - `@roop/agent-node` — Node adapter: DeepSeek model catalog and CLI.
-- `@roop/coding-harness` — example: a coding agent (`readFile`/`writeFile`/`listFiles`/`bash` tools)
-  served over Effect RPC, with a CLI client.
+- `@roop/coding-tools` — coding toolkit (`readFile`/`writeFile`/`listFiles`/`bash`), a plain library
+  composed into an agent at build time.
+- `@roop/coding-harness` — the composition: kernel + coding tools + DeepSeek behind an RPC HTTP
+  server.
+- `@roop/coding-tui` — a pi-like terminal UI over `@mariozechner/pi-tui`; talks to the server only
+  through the RPC client (guarded by a test).
 
 ## Scripts
 
 - `pnpm typecheck` — typecheck all packages.
 - `pnpm test` — run all tests (a live DeepSeek smoke test runs when `DEEPSEEK_API_KEY` is set).
 - `pnpm --filter=@roop/agent-node cli` — chat with an agent over DeepSeek.
-- `pnpm --filter=@roop/coding-harness cli server [port]` — serve the coding harness over RPC (HTTP).
-- `pnpm --filter=@roop/coding-harness cli client [url]` — chat with it over RPC.
+- `pnpm --filter=@roop/coding-harness serve [port]` — serve the coding agent over RPC (HTTP).
+- `pnpm --filter=@roop/coding-tui start [url]` — the pi-like TUI client.

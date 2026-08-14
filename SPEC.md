@@ -10,10 +10,13 @@ A smol, Effect-native agents layer. One kernel, one protocol, one Node adapter.
 - `packages/agent-rpc` — the protocol. One `RpcGroup` over the kernel, plus HTTP transport helpers.
 - `packages/agent-node` — the Node adapter. DeepSeek model catalog, a readline CLI, and the live
   smoke test.
-- `packages/coding-harness` — a worked example. Four coding tools (`readFile`, `writeFile`,
-  `listFiles`, `bash`) behind an agent served over the RPC group, plus a CLI client. The tools
-  declare their service `dependencies` (`FileSystem`, `ChildProcessSpawner`), so the toolkit's
-  handler requirements flow through `AgentLiveToolkit` unchanged.
+- `packages/coding-tools` — a toolkit as a library. Four coding tools (`readFile`, `writeFile`,
+  `listFiles`, `bash`) that declare their service `dependencies` (`FileSystem`,
+  `ChildProcessSpawner`); nothing agent-specific, composed in at harness build time.
+- `packages/coding-harness` — the composition. Kernel + coding tools + DeepSeek mounted behind the
+  RPC group on a Node HTTP server.
+- `packages/coding-tui` — the client. A pi-like terminal UI (`@mariozechner/pi-tui`) that talks to
+  the harness exclusively through the typed RPC client; a test rejects any other import.
 
 ## The kernel
 
