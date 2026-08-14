@@ -3,7 +3,7 @@ import { AgentLiveToolkit } from "@roop/agent/Agent.ts"
 import { ModelCatalogLive } from "@roop/agent/ModelCatalog.ts"
 import { SessionStoreMemory } from "@roop/agent/SessionStore.ts"
 import { Skills } from "@roop/agent/Skills.ts"
-import { Effect, Layer, Ref, Schema, Stream } from "effect"
+import { Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect"
 import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
 import * as RpcTest from "effect/unstable/rpc/RpcTest"
 
@@ -99,6 +99,38 @@ it.layer(AgentRpcServer.pipe(Layer.provide(TestLayer)))("AgentRpc", (it) => {
       assert.deepStrictEqual(
         history.messages.map((message) => message.role),
         ["user", "assistant", "tool"],
+      )
+    }),
+  )
+
+  it.effect("propagates protocol errors through the typed error channel", () =>
+    Effect.gen(function* () {
+      const client = yield* RpcTest.makeClient(AgentRpc)
+
+      const modelExit = yield* Effect.exit(
+        Stream.runDrain(
+          client.Prompt({
+            prompt: "hi",
+            sessionId: "s2",
+            modelId: "nope",
+          }),
+        ),
+      )
+      assert.strictEqual(
+        (Option.getOrThrow(Exit.findErrorOption(modelExit)) as any)._tag,
+        "ModelNotFound",
+      )
+
+      const interruptExit = yield* Effect.exit(client.Interrupt({ sessionId: "nope" }))
+      assert.strictEqual(
+        (Option.getOrThrow(Exit.findErrorOption(interruptExit)) as any)._tag,
+        "RunNotFound",
+      )
+
+      const historyExit = yield* Effect.exit(client.GetHistory({ sessionId: "nope" }))
+      assert.strictEqual(
+        (Option.getOrThrow(Exit.findErrorOption(historyExit)) as any)._tag,
+        "SessionNotFound",
       )
     }),
   )
