@@ -9,6 +9,7 @@ const allowed = [
   /^@roop\/agent-rpc\//,
   /^@stylexjs\/stylex$/,
   /^effect$/,
+  /^cmdk$/,
   /^effect\/unstable\/(reactivity|rpc)$/,
   /^marked$/,
   /^react(-dom\/client)?$/,

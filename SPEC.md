@@ -29,13 +29,15 @@ A smol, Effect-native agents layer. One kernel, one protocol, one Node adapter.
 
 Four replaceable services.
 
-- `Agent` — `prompt` (a stream of `AgentEvent`), `interrupt`, `history`, `capabilities`. Built by
-  `AgentLive(toolkit, { systemPrompt? })`.
+- `Agent` — `prompt` (a stream of `AgentEvent`), `interrupt`, `history`, `sessions`, `capabilities`.
+  Built by `AgentLive(toolkit, { systemPrompt? })`.
 - `ModelCatalog` — `list`, `defaultModelId`, `resolve(id?)`. Built by `ModelCatalogLive(specs)` from
   `{ id, provider, description?, layer }` entries; adding an entry changes both what the protocol
   advertises and what `resolve` serves.
-- `SessionStore` — `load`/`save` of a session's `Prompt.Message` list. `SessionStoreMemory` ships; a
-  durable store is a new layer.
+- `SessionStore` — `load`/`save` of a session's `Prompt.Message` list plus `list` of `SessionMeta`
+  (`id`, `title`, `updatedAt`; title is the first user message). Storage is a layer choice:
+  `SessionStoreMemory` and `SessionStoreFs(dir)` (any `FileSystem`) ship; a database store is
+  another layer with the same shape.
 - `Skills` — `{ id, description }` list, advertised but not executed. Optional.
 
 `agentLoop.ts` drives Effect's `Chat`: seed from the session,

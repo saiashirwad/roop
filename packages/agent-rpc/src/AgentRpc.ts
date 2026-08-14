@@ -2,7 +2,7 @@ import { RunNotFound, SessionBusy } from "@roop/agent/Agent.ts"
 import { AgentEvent } from "@roop/agent/AgentEvent.ts"
 import { Capabilities } from "@roop/agent/Capabilities.ts"
 import { ModelNotFound } from "@roop/agent/ModelCatalog.ts"
-import { Session, SessionNotFound } from "@roop/agent/SessionStore.ts"
+import { Session, SessionMeta, SessionNotFound } from "@roop/agent/SessionStore.ts"
 import { Schema } from "effect"
 import { Rpc, RpcGroup } from "effect/unstable/rpc"
 
@@ -34,5 +34,8 @@ export const AgentRpc = RpcGroup.make(
     },
     success: Session,
     error: SessionNotFound,
+  }),
+  Rpc.make("ListSessions", {
+    success: Schema.Array(SessionMeta),
   }),
 )

@@ -11,7 +11,7 @@ import {
 } from "@effect/platform-node"
 import { AgentRpcServerHttp } from "@roop/agent-rpc/AgentRpcHttp.ts"
 import { AgentPlugins } from "@roop/agent/Plugin.ts"
-import { SessionStoreMemory } from "@roop/agent/SessionStore.ts"
+import { SessionStoreFs } from "@roop/agent/SessionStore.ts"
 import { subagent } from "@roop/agent/subagent.ts"
 import { CodingTools } from "@roop/coding-tools/CodingTools.ts"
 import { OpenAiCompatible } from "@roop/plugin-openai/OpenAiCompatible.ts"
@@ -52,7 +52,7 @@ export const server = (options: {
       ])
     }),
   ).pipe(
-    Layer.provide(SessionStoreMemory),
+    Layer.provide(SessionStoreFs(join(options.root, ".roop", "sessions"))),
     Layer.provide(NodeChildProcessSpawner.layer),
     Layer.provide(NodeFileSystem.layer),
     Layer.provide(NodeHttpClient.layerUndici),

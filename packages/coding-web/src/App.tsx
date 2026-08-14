@@ -3,12 +3,15 @@ import * as stylex from "@stylexjs/stylex"
 import { useEffect, useRef, useState } from "react"
 
 import { Markdown } from "./Markdown.tsx"
+import { Palette, type PaletteAction } from "./Palette.tsx"
 import {
   capsAtom,
   interruptAtom,
   modelAtom,
   promptAtom,
+  selectSessionAtom,
   sessionAtom,
+  sessionsAtom,
   transcriptAtom,
 } from "./state.ts"
 import { ToolCard } from "./toolViews.tsx"
@@ -21,13 +24,13 @@ const styles = stylex.create({
     borderRightWidth: 1,
     display: "flex",
     flexDirection: "column",
-    gap: 24,
+    gap: 16,
     overflowY: "auto",
     paddingBlock: 20,
     paddingInline: 16,
   },
   wordmark: { fontSize: 18, fontWeight: 700, letterSpacing: "-0.02em" },
-  section: { display: "flex", flexDirection: "column", gap: 6 },
+  modelTag: { color: "var(--muted)", fontSize: 12 },
   sectionTitle: {
     color: "var(--faint)",
     fontSize: 11,
@@ -35,29 +38,28 @@ const styles = stylex.create({
     letterSpacing: "0.08em",
     textTransform: "uppercase",
   },
-  model: {
+  sessions: { display: "flex", flexDirection: "column", gap: 2 },
+  session: {
     backgroundColor: { default: "transparent", ":hover": "var(--accent-soft)" },
     borderRadius: 8,
     borderWidth: 0,
     cursor: "pointer",
     display: "flex",
     flexDirection: "column",
+    fontFamily: "inherit",
     fontSize: 13,
+    gap: 1,
     paddingBlock: 6,
     paddingInline: 8,
     textAlign: "left",
   },
-  modelActive: { backgroundColor: "var(--accent-soft)", color: "var(--accent)" },
-  entryName: { fontWeight: 600 },
-  entryDescription: {
-    color: "var(--muted)",
-    display: "-webkit-box",
-    fontSize: 12,
+  sessionActive: { backgroundColor: "var(--accent-soft)" },
+  sessionTitle: {
     overflow: "hidden",
-    WebkitBoxOrient: "vertical",
-    WebkitLineClamp: 2,
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
   },
-  entry: { fontSize: 13, paddingBlock: 2, paddingInline: 8 },
+  sessionTime: { color: "var(--faint)", fontSize: 11 },
   newSession: {
     backgroundColor: "var(--text)",
     borderRadius: 8,
@@ -67,6 +69,14 @@ const styles = stylex.create({
     fontSize: 13,
     fontWeight: 600,
     paddingBlock: 8,
+  },
+  hint: { color: "var(--faint)", fontSize: 12, marginTop: "auto" },
+  key: {
+    backgroundColor: "var(--accent-soft)",
+    borderRadius: 4,
+    fontFamily: "var(--mono)",
+    paddingBlock: 1,
+    paddingInline: 5,
   },
   main: { display: "flex", flexDirection: "column", overflow: "hidden" },
   chat: { flexGrow: 1, overflowY: "auto" },
@@ -133,66 +143,66 @@ const styles = stylex.create({
   stop: { backgroundColor: "var(--red)" },
 })
 
-const Sidebar = ({ busy }: { readonly busy: boolean }) => {
+const ago = (timestamp: number) => {
+  const minutes = Math.round((Date.now() - timestamp) / 60_000)
+  if (minutes < 1) return "now"
+  if (minutes < 60) return `${minutes}m`
+  if (minutes < 1_440) return `${Math.round(minutes / 60)}h`
+  return `${Math.round(minutes / 1_440)}d`
+}
+
+const Sidebar = ({ busy, onNew }: { readonly busy: boolean; readonly onNew: () => void }) => {
   const caps = useAtomValue(capsAtom)
-  const [modelId, setModelId] = useAtom(modelAtom)
-  const setSession = useAtomSet(sessionAtom)
-  const setTranscript = useAtomSet(transcriptAtom)
-  if (caps._tag !== "Success") return <aside {...stylex.props(styles.sidebar)} />
-  const { models, defaultModelId, skills, tools } = caps.value
-  const active = modelId ?? defaultModelId
+  const sessions = useAtomValue(sessionsAtom)
+  const active = useAtomValue(sessionAtom)
+  const modelId = useAtomValue(modelAtom)
+  const select = useAtomSet(selectSessionAtom)
   return (
     <aside {...stylex.props(styles.sidebar)}>
-      <span {...stylex.props(styles.wordmark)}>roop{busy ? " ·" : ""}</span>
-      <button
-        {...stylex.props(styles.newSession)}
-        onClick={() => {
-          setSession(crypto.randomUUID())
-          setTranscript([])
-        }}
-      >
+      <div>
+        <div {...stylex.props(styles.wordmark)}>roop{busy ? " ·" : ""}</div>
+        <div {...stylex.props(styles.modelTag)}>
+          {modelId ?? (caps._tag === "Success" ? caps.value.defaultModelId : "")}
+        </div>
+      </div>
+      <button {...stylex.props(styles.newSession)} onClick={onNew}>
         New session
       </button>
-      <div {...stylex.props(styles.section)}>
-        <span {...stylex.props(styles.sectionTitle)}>Models</span>
-        {models.map((model) => (
-          <button
-            key={model.id}
-            {...stylex.props(styles.model, model.id === active && styles.modelActive)}
-            onClick={() => setModelId(model.id)}
-          >
-            <span {...stylex.props(styles.entryName)}>{model.id}</span>
-            {model.description !== undefined && (
-              <span {...stylex.props(styles.entryDescription)}>{model.description}</span>
-            )}
-          </button>
-        ))}
-      </div>
-      {skills.length > 0 && (
-        <div {...stylex.props(styles.section)}>
-          <span {...stylex.props(styles.sectionTitle)}>Skills</span>
-          {skills.map((skill) => (
-            <div key={skill.id} {...stylex.props(styles.entry)}>
-              <span {...stylex.props(styles.entryName)}>{skill.id}</span>
-              <div {...stylex.props(styles.entryDescription)}>{skill.description}</div>
-            </div>
+      <span {...stylex.props(styles.sectionTitle)}>Sessions</span>
+      <div {...stylex.props(styles.sessions)}>
+        {sessions._tag === "Success" &&
+          sessions.value.map((session) => (
+            <button
+              key={session.id}
+              {...stylex.props(styles.session, session.id === active && styles.sessionActive)}
+              onClick={() => select(session.id)}
+            >
+              <span {...stylex.props(styles.sessionTitle)}>
+                {session.title === "" ? "untitled" : session.title}
+              </span>
+              <span {...stylex.props(styles.sessionTime)}>{ago(session.updatedAt)}</span>
+            </button>
           ))}
-        </div>
-      )}
-      <div {...stylex.props(styles.section)}>
-        <span {...stylex.props(styles.sectionTitle)}>Tools</span>
-        {tools.map((tool) => (
-          <div key={tool.name} {...stylex.props(styles.entry)} title={tool.description}>
-            <span {...stylex.props(styles.entryName)}>{tool.name}</span>
-          </div>
-        ))}
       </div>
+      <span {...stylex.props(styles.hint)}>
+        <span {...stylex.props(styles.key)}>/</span> or{" "}
+        <span {...stylex.props(styles.key)}>⌘K</span> for commands
+      </span>
     </aside>
   )
 }
 
-const Composer = ({ busy }: { readonly busy: boolean }) => {
-  const [text, setText] = useState("")
+const Composer = ({
+  busy,
+  text,
+  setText,
+  onSlash,
+}: {
+  readonly busy: boolean
+  readonly text: string
+  readonly setText: (text: string) => void
+  readonly onSlash: () => void
+}) => {
   const send = useAtomSet(promptAtom)
   const interrupt = useAtomSet(interruptAtom)
   const submit = () => {
@@ -207,11 +217,17 @@ const Composer = ({ busy }: { readonly busy: boolean }) => {
         <textarea
           {...stylex.props(styles.input)}
           autoFocus
-          placeholder="Message the agent…"
+          id="composer"
+          placeholder="Message the agent, / for commands…"
           rows={2}
           value={text}
           onChange={(event) => setText(event.target.value)}
           onKeyDown={(event) => {
+            if (event.key === "/" && text === "") {
+              event.preventDefault()
+              onSlash()
+              return
+            }
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault()
               submit()
@@ -238,15 +254,56 @@ const Composer = ({ busy }: { readonly busy: boolean }) => {
 
 export const App = () => {
   const transcript = useAtomValue(transcriptAtom)
+  const setTranscript = useAtomSet(transcriptAtom)
+  const setSession = useAtomSet(sessionAtom)
+  const [modelId, setModelId] = useAtom(modelAtom)
+  const caps = useAtomValue(capsAtom)
   const prompt = useAtomValue(promptAtom)
   const busy = prompt.waiting
+  const [text, setText] = useState("")
+  const [paletteOpen, setPaletteOpen] = useState(false)
   const bottom = useRef<HTMLDivElement>(null)
   useEffect(() => {
     bottom.current?.scrollIntoView({ behavior: "smooth" })
   }, [transcript])
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "k" && (event.metaKey || event.ctrlKey)) {
+        event.preventDefault()
+        setPaletteOpen((open) => !open)
+      }
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [])
+  const newSession = () => {
+    setSession(crypto.randomUUID())
+    setTranscript([])
+  }
+  const close = () => {
+    setPaletteOpen(false)
+    document.getElementById("composer")?.focus()
+  }
+  const onAction = (action: PaletteAction) => {
+    switch (action.kind) {
+      case "new": {
+        newSession()
+        break
+      }
+      case "model": {
+        setModelId(action.id)
+        break
+      }
+      case "insert": {
+        setText(action.text)
+        break
+      }
+    }
+    close()
+  }
   return (
     <div {...stylex.props(styles.app)}>
-      <Sidebar busy={busy} />
+      <Sidebar busy={busy} onNew={newSession} />
       <main {...stylex.props(styles.main)}>
         <div {...stylex.props(styles.chat)}>
           <div {...stylex.props(styles.column)}>
@@ -276,8 +333,18 @@ export const App = () => {
             <div ref={bottom} />
           </div>
         </div>
-        <Composer busy={busy} />
+        <Composer busy={busy} text={text} setText={setText} onSlash={() => setPaletteOpen(true)} />
       </main>
+      {paletteOpen && caps._tag === "Success" && (
+        <Palette
+          activeModel={modelId ?? caps.value.defaultModelId}
+          models={caps.value.models}
+          skills={caps.value.skills}
+          tools={caps.value.tools}
+          onAction={onAction}
+          onClose={close}
+        />
+      )}
     </div>
   )
 }

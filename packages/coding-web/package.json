@@ -14,6 +14,7 @@
     "@roop/agent": "workspace:*",
     "@roop/agent-rpc": "workspace:*",
     "@stylexjs/stylex": "^0.19.0",
+    "cmdk": "^1.1.1",
     "effect": "4.0.0-beta.97",
     "marked": "^17.0.1",
     "react": "^19.2.4",

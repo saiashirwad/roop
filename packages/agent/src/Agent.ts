@@ -6,7 +6,7 @@ import { AgentEvent } from "./AgentEvent.ts"
 import { runLoop, type ErasedToolkit } from "./agentLoop.ts"
 import { capabilitiesFrom, type Capabilities } from "./Capabilities.ts"
 import { ModelCatalog, ModelNotFound } from "./ModelCatalog.ts"
-import { SessionNotFound, SessionStore, type Session } from "./SessionStore.ts"
+import { SessionNotFound, SessionStore, type Session, type SessionMeta } from "./SessionStore.ts"
 import { Skills } from "./Skills.ts"
 
 export class RunNotFound extends Schema.TaggedErrorClass<RunNotFound>()("RunNotFound", {
@@ -35,6 +35,7 @@ export class Agent extends Context.Service<
     ) => Stream.Stream<AgentEvent, ModelNotFound | SessionBusy>
     readonly interrupt: (sessionId: string) => Effect.Effect<void, RunNotFound>
     readonly history: (sessionId: string) => Effect.Effect<Session, SessionNotFound>
+    readonly sessions: () => Effect.Effect<ReadonlyArray<SessionMeta>>
   }
 >()("roop/Agent") {}
 
@@ -125,6 +126,7 @@ export const AgentLive = <Tools extends Record<string, Tool.Any>>(
             }),
           ),
         history: (sessionId) => store.load(sessionId),
+        sessions: () => store.list(),
       })
     }),
   )

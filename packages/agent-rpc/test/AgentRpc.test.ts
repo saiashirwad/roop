@@ -104,6 +104,12 @@ it.layer(AgentRpcServer.pipe(Layer.provide(TestLayer)))("AgentRpc", (it) => {
         history.messages.map((message) => message.role),
         ["user", "assistant", "tool"],
       )
+
+      const sessions = yield* client.ListSessions()
+      assert.deepStrictEqual(
+        sessions.map((meta) => [meta.id, meta.title]),
+        [["s1", "say hi"]],
+      )
     }),
   )
 

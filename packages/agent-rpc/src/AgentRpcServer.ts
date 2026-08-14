@@ -18,6 +18,7 @@ export const AgentRpcServer = AgentRpc.toLayer(
         }),
       Interrupt: ({ sessionId }) => agent.interrupt(sessionId),
       GetHistory: ({ sessionId }) => agent.history(sessionId),
+      ListSessions: () => agent.sessions(),
     })
   }),
 )

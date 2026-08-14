@@ -53,10 +53,52 @@ const apply = (items: ReadonlyArray<Item>, event: AgentEvent): ReadonlyArray<Ite
   }
 }
 
+const fromMessages = (
+  messages: ReadonlyArray<{ readonly role: string; readonly content: unknown }>,
+): ReadonlyArray<Item> => {
+  let items: ReadonlyArray<Item> = []
+  for (const message of messages) {
+    if (message.role === "system" || typeof message.content === "string") continue
+    for (const part of message.content as ReadonlyArray<Record<string, unknown>>) {
+      switch (part["type"]) {
+        case "text": {
+          const text = part["text"] as string
+          items =
+            message.role === "user"
+              ? [...items, { kind: "user", text }]
+              : [...items, { kind: "assistant", text }]
+          break
+        }
+        case "tool-call": {
+          items = [
+            ...items,
+            {
+              kind: "tool",
+              id: part["id"] as string,
+              name: part["name"] as string,
+              params: part["params"],
+            },
+          ]
+          break
+        }
+        case "tool-result": {
+          items = items.map((item) =>
+            item.kind === "tool" && item.id === part["id"]
+              ? { ...item, result: part["result"], isFailure: part["isFailure"] as boolean }
+              : item,
+          )
+          break
+        }
+      }
+    }
+  }
+  return items
+}
+
 const runtime = Atom.runtime(AgentRpcClientHttp("/rpc"))
 
 export const transcriptAtom = Atom.make<ReadonlyArray<Item>>([])
-export const sessionAtom = Atom.make(crypto.randomUUID())
+export const sessionAtom = Atom.make<string>(crypto.randomUUID())
 export const modelAtom = Atom.make<string | undefined>(undefined)
 
 export const capsAtom = runtime.atom(
@@ -90,7 +132,24 @@ export const promptAtom = runtime.fn((text: string, ctx: Atom.FnContext) =>
             ]),
           ),
         ),
+        Effect.ensuring(Effect.sync(() => ctx.refresh(sessionsAtom))),
       )
+  }),
+)
+
+export const sessionsAtom = runtime.atom(
+  Effect.gen(function* () {
+    const client = yield* RpcClient.make(AgentRpc)
+    return yield* client.ListSessions()
+  }),
+)
+
+export const selectSessionAtom = runtime.fn((sessionId: string, ctx: Atom.FnContext) =>
+  Effect.gen(function* () {
+    const client = yield* RpcClient.make(AgentRpc)
+    const session = yield* client.GetHistory({ sessionId })
+    ctx.set(sessionAtom, sessionId)
+    ctx.set(transcriptAtom, fromMessages(session.messages))
   }),
 )
 
