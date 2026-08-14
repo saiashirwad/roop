@@ -20,6 +20,8 @@ A smol, Effect-native agents layer. One kernel, one protocol, one Node adapter.
   `ChildProcessSpawner`); nothing agent-specific, composed in at harness build time.
 - `packages/coding-harness` — the composition. Kernel + coding tools + DeepSeek mounted behind the
   RPC group on a Node HTTP server.
+- `packages/coding-web` — the web client. React + StyleX + `@effect/atom-react` atoms over the same
+  RPC client; streaming transcript, tool cards, model picker, skills and tools panels.
 - `packages/coding-tui` — the client. A pi-like terminal UI (`@mariozechner/pi-tui`) that talks to
   the harness exclusively through the typed RPC client; a test rejects any other import.
 

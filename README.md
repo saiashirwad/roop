@@ -35,7 +35,8 @@ Start here:
   server.
 - `@roop/coding-tui` — a pi-like terminal UI over `@mariozechner/pi-tui` with slash commands
   (`/models`, `/skills`, `/tools`, `/new`, `/help`); talks to the server only through the RPC client
-  (guarded by a test).
+- `@roop/coding-web` — a web client: React + StyleX + `@effect/atom-react`; same RPC-only constraint
+  as the TUI. (guarded by a test).
 
 ## Scripts
 
@@ -44,3 +45,5 @@ Start here:
 - `pnpm --filter=@roop/agent-node cli` — chat with an agent over DeepSeek.
 - `pnpm --filter=@roop/coding-harness serve [port]` — serve the coding agent over RPC (HTTP).
 - `pnpm --filter=@roop/coding-tui start [url]` — the pi-like TUI client.
+- `pnpm --filter=@roop/coding-web dev` — the web client (proxies `/rpc` to `HARNESS_URL`, default
+  `http://localhost:8787`).
