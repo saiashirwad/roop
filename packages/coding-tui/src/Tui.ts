@@ -14,17 +14,13 @@ import type { AgentEvent } from "@roop/agent/AgentEvent.ts"
 import { Effect, Queue, Stream } from "effect"
 import { RpcClient } from "effect/unstable/rpc"
 
-import { bold, cyan, dim, editorTheme, green, markdownTheme, red } from "./theme.ts"
+import { bold, cyan, dim, editorTheme, markdownTheme, red } from "./theme.ts"
+import { renderToolCall } from "./toolViews.ts"
 
 type Action =
   | { readonly _tag: "Submit"; readonly text: string }
   | { readonly _tag: "Interrupt" }
   | { readonly _tag: "Quit" }
-
-const preview = (value: unknown) => {
-  const json = JSON.stringify(value)
-  return json.length > 100 ? `${json.slice(0, 100)}…` : json
-}
 
 const main = Effect.gen(function* () {
   const url = process.argv[2] ?? "http://localhost:8787/rpc"
@@ -77,6 +73,7 @@ const main = Effect.gen(function* () {
       loader.start()
       let markdown: Markdown | undefined
       let buffer = ""
+      const calls = new Map<string, { readonly text: Text; readonly params: unknown }>()
       const flush = () => {
         markdown = undefined
         buffer = ""
@@ -97,17 +94,24 @@ const main = Effect.gen(function* () {
           }
           case "ToolCall": {
             flush()
-            chat.addChild(
-              new Text(`${cyan("⚒")} ${bold(event.name)} ${dim(preview(event.params))}`, 0, 0),
-            )
+            const text = new Text(renderToolCall({ name: event.name, params: event.params }), 0, 0)
+            calls.set(event.id, { text, params: event.params })
+            chat.addChild(text)
             return
           }
           case "ToolResult": {
-            chat.addChild(
-              event.isFailure
-                ? new Text(`${red("✗")} ${event.name} ${dim(preview(event.result))}`, 0, 0)
-                : new Text(`${green("✓")} ${event.name} ${dim(preview(event.result))}`, 0, 0),
-            )
+            const call = calls.get(event.id)
+            const rendered = renderToolCall({
+              name: event.name,
+              params: call?.params,
+              result: event.result,
+              isFailure: event.isFailure,
+            })
+            if (call === undefined) {
+              chat.addChild(new Text(rendered, 0, 0))
+            } else {
+              call.text.setText(rendered)
+            }
             return
           }
           case "Finish": {
