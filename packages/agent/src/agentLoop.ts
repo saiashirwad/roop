@@ -13,7 +13,9 @@ export type LoopOptions = {
   readonly sessionId: string
   readonly chat: Chat.Service
   readonly model: LanguageModel.Service
-  readonly toolkit: ErasedToolkit
+  /** A request-bound capability snapshot. */
+  readonly toolkit: () => Effect.Effect<ErasedToolkit>
+  readonly beforeRequest?: (() => Effect.Effect<void>) | undefined
   readonly maxTurns?: number | undefined
   readonly interrupt: Deferred.Deferred<void>
   readonly append: (event: SessionEvent) => Effect.Effect<void>
@@ -62,11 +64,19 @@ const appendStepEvents = (
         .map((part) => ({ type: part.type, text: part.text }))
       if (parts.length > 0) events.push({ _tag: "assistant/message", parts })
       for (const part of message.content) {
-        if (part.type === "tool-call") events.push({ _tag: "tool/call", id: part.id, name: part.name, params: part.params })
+        if (part.type === "tool-call")
+          events.push({ _tag: "tool/call", id: part.id, name: part.name, params: part.params })
       }
     } else if (typeof message.content !== "string") {
       for (const part of message.content) {
-        if (part.type === "tool-result") events.push({ _tag: "tool/result", id: part.id, name: part.name, isFailure: part.isFailure, result: part.result })
+        if (part.type === "tool-result")
+          events.push({
+            _tag: "tool/result",
+            id: part.id,
+            name: part.name,
+            isFailure: part.isFailure,
+            result: part.result,
+          })
       }
     }
   }
@@ -193,10 +203,14 @@ export const runLoop = (options: LoopOptions): Stream.Stream<AgentEvent> =>
             break
           }
 
+          if (options.beforeRequest !== undefined) {
+            yield* options.beforeRequest()
+          }
+
           const stepStream = options.chat
             .streamText({
               prompt: [],
-              toolkit: interceptToolkit(options.toolkit, hooks, () => context),
+              toolkit: interceptToolkit(yield* options.toolkit(), hooks, () => context),
               concurrency: "unbounded",
             })
             .pipe(
@@ -251,10 +265,7 @@ export const runLoop = (options: LoopOptions): Stream.Stream<AgentEvent> =>
         }
         yield* append({ _tag: "user/message", content: continuation.prompt })
         yield* Ref.update(options.chat.history, (history) =>
-          Prompt.concat(
-            history,
-            Prompt.make(continuation.prompt),
-          ),
+          Prompt.concat(history, Prompt.make(continuation.prompt)),
         )
       }
     })

@@ -19,14 +19,20 @@ export const subagent = <const Plugins extends ReadonlyArray<Plugin<any>>>(optio
   const child = AgentPlugins(options.plugins, { systemPrompt: options.systemPrompt }).pipe(
     Layer.provide(SessionStoreMemory),
   )
-  const handlers = toolkit
-    .toLayer(
-      Effect.gen(function* () {
-        const agent = yield* Agent
-        return { [options.name]: handler(agent) }
-      }),
-    )
-    .pipe(Layer.provide(child))
+  const handlers = toolkit.toLayer(
+    Effect.gen(function* () {
+      const context = yield* Effect.context<PluginRequirements<Plugins>>()
+      return {
+        [options.name]: (params: { readonly task: string }) =>
+          Effect.scoped(
+            Effect.gen(function* () {
+              const agent = yield* Agent
+              return yield* handler(agent)(params)
+            }).pipe(Effect.provide(child), Effect.provide(context)),
+          ),
+      }
+    }),
+  )
 
   return Plugin({ name: options.name, toolkit, handlers })
 }

@@ -1,8 +1,9 @@
-import { Layer } from "effect"
+import { Effect, Layer } from "effect"
 import { Toolkit } from "effect/unstable/ai"
 import type * as Tool from "effect/unstable/ai/Tool"
 
-import { AgentLiveToolkit, type Agent } from "./Agent.ts"
+import { AgentLive, type Agent } from "./Agent.ts"
+import { AgentContextLive } from "./AgentContext.ts"
 import { AgentHooks, layerNoop } from "./AgentHooks.ts"
 import { ModelCatalogLive, type ModelSpec } from "./ModelCatalog.ts"
 import type { SessionStore } from "./SessionStore.ts"
@@ -26,11 +27,7 @@ export type Plugin<R = never, RH = never> = {
   readonly _hookRequirements?: RH
 }
 
-export const Plugin = <
-  Tools extends Record<string, Tool.Any>,
-  R = never,
-  RH = never,
->(options: {
+export const Plugin = <Tools extends Record<string, Tool.Any>, R = never, RH = never>(options: {
   readonly name: string
   readonly toolkit?: Toolkit.Toolkit<Tools>
   readonly handlers?: Layer.Layer<Tool.HandlersFor<Tools>, never, R>
@@ -74,10 +71,11 @@ export const AgentPlugins = <const Plugins extends ReadonlyArray<Plugin<any>>>(
     layerNoop as unknown as Layer.Layer<AgentHooks, never, PluginRequirements<Plugins>>,
   )
 
-  return AgentLiveToolkit(toolkit, { systemPrompt }).pipe(
+  return Layer.unwrap(Effect.map(toolkit, (withHandler) => AgentLive(withHandler))).pipe(
     Layer.provide([
-      ModelCatalogLive(models),
-      Layer.succeed(Skills)({ list: skills }),
+      AgentContextLive({ systemPrompt }).pipe(
+        Layer.provide([ModelCatalogLive(models), Layer.succeed(Skills)({ list: skills })]),
+      ),
       hooks,
       ...handlers,
     ]),

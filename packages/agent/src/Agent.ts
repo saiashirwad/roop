@@ -1,10 +1,11 @@
 import { Context, Crypto, Deferred, Effect, Layer, Option, Ref, Schema, Stream } from "effect"
-import { Chat, Toolkit } from "effect/unstable/ai"
+import { Chat, Prompt, Toolkit } from "effect/unstable/ai"
 import type * as Tool from "effect/unstable/ai/Tool"
 
+import { AgentContext, AgentContextLive } from "./AgentContext.ts"
 import { AgentEvent } from "./AgentEvent.ts"
 import { AgentHooks } from "./AgentHooks.ts"
-import { runLoop, type ErasedToolkit } from "./agentLoop.ts"
+import { runLoop } from "./agentLoop.ts"
 import { capabilitiesFrom, type Capabilities } from "./Capabilities.ts"
 import { ModelCatalog, ModelNotFound } from "./ModelCatalog.ts"
 import type { SessionEvent } from "./SessionEvent.ts"
@@ -24,7 +25,6 @@ import {
   type Session,
   type SessionMeta,
 } from "./SessionStore.ts"
-import { Skills } from "./Skills.ts"
 
 export class RunNotFound extends Schema.TaggedErrorClass<RunNotFound>()("RunNotFound", {
   sessionId: Schema.String,
@@ -60,21 +60,22 @@ export class Agent extends Context.Service<
 
 export const AgentLive = <Tools extends Record<string, Tool.Any>>(
   toolkit: Toolkit.WithHandler<Tools>,
-  options?: { readonly systemPrompt?: string | undefined },
-): Layer.Layer<Agent, never, Crypto.Crypto | ModelCatalog | SessionStore> =>
+): Layer.Layer<Agent, never, AgentContext | Crypto.Crypto | SessionStore> =>
   Layer.effect(
     Agent,
     Effect.gen(function* () {
-      const catalog = yield* ModelCatalog
       const store = yield* SessionStore
       const crypto = yield* Crypto.Crypto
-      const skillsOption = yield* Effect.serviceOption(Skills)
-      const skills = skillsOption._tag === "Some" ? skillsOption.value.list : []
       const hooks = yield* AgentHooks
       const active = yield* Ref.make(new Map<string, Deferred.Deferred<void>>())
-      const loop = toolkit as unknown as ErasedToolkit
-
-      const systemPrompt = options?.systemPrompt ?? ""
+      const context = yield* AgentContext
+      yield* Effect.forEach(
+        Object.values(toolkit.tools),
+        (tool) => context.registerTool(tool, toolkit as any),
+        {
+          discard: true,
+        },
+      )
 
       const clearActive = (sessionId: string) =>
         Ref.update(active, (map) => {
@@ -87,15 +88,21 @@ export const AgentLive = <Tools extends Record<string, Tool.Any>>(
       return Agent.of({
         capabilities: () =>
           Effect.map(
-            Effect.all([catalog.list(), catalog.defaultModelId()]),
-            ([models, defaultModelId]) =>
-              capabilitiesFrom({ tools: toolkit.tools, models, defaultModelId, skills }),
+            Effect.all([
+              context.tools(),
+              context.models(),
+              context.defaultModelId(),
+              context.skills(),
+            ]),
+            ([tools, models, defaultModelId, skills]) =>
+              capabilitiesFrom({ tools, models, defaultModelId, skills }),
           ),
         prompt: (request) =>
           Stream.unwrap(
             Effect.gen(function* () {
               const sessionId = request.sessionId ?? (yield* Effect.orDie(crypto.randomUUIDv4))
-              const model = yield* catalog.resolve(request.modelId)
+              const model = yield* context.resolveModel(request.modelId)
+              const systemPrompt = yield* context.systemPrompt()
 
               const interrupt = yield* Deferred.make<void>()
               const claimed = yield* Ref.modify(active, (map) =>
@@ -104,7 +111,7 @@ export const AgentLive = <Tools extends Record<string, Tool.Any>>(
                   : ([true, new Map(map).set(sessionId, interrupt)] as const),
               )
               if (!claimed) {
-                return yield* Effect.fail(new SessionBusy({ sessionId }))
+                return yield* new SessionBusy({ sessionId })
               }
 
               const append = (event: SessionEvent) => store.append(sessionId, event)
@@ -142,11 +149,25 @@ export const AgentLive = <Tools extends Record<string, Tool.Any>>(
                 ),
               )
 
+              const journaledSections = new Set<string>()
+              if (systemPrompt !== "") journaledSections.add(systemPrompt)
+
               return runLoop({
                 sessionId,
                 chat,
                 model,
-                toolkit: loop,
+                toolkit: context.toolkit,
+                beforeRequest: () =>
+                  Effect.gen(function* () {
+                    for (const section of yield* context.promptSections()) {
+                      if (journaledSections.has(section)) continue
+                      journaledSections.add(section)
+                      yield* append({ _tag: "system/message", content: section })
+                      yield* Ref.update(chat.history, (history) =>
+                        Prompt.concat(history, Prompt.make([{ role: "system", content: section }])),
+                      )
+                    }
+                  }),
                 maxTurns: request.maxTurns,
                 interrupt,
                 append,
@@ -176,4 +197,9 @@ export const AgentLiveToolkit = <Tools extends Record<string, Tool.Any>>(
   Agent,
   never,
   Crypto.Crypto | Tool.HandlersFor<Tools> | ModelCatalog | SessionStore
-> => Layer.unwrap(Effect.map(toolkit, (withHandler) => AgentLive(withHandler, options)))
+> =>
+  Layer.unwrap(
+    Effect.map(toolkit, (withHandler) =>
+      AgentLive(withHandler).pipe(Layer.provide(AgentContextLive(options))),
+    ),
+  )
