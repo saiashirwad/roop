@@ -36,6 +36,7 @@ export const server = (options: {
   })
   const codingTools = CodingTools(options.root)
   const webTools = WebTools()
+  const codex = Codex()
 
   const agent = Layer.unwrap(
     Effect.gen(function* () {
@@ -48,12 +49,12 @@ export const server = (options: {
         skills,
         deepseek,
         Claude(),
-        Codex(),
+        codex,
         subagent({
           name: delegationToolName,
           description:
             "Delegate a self-contained coding task to a subagent with its own coding tools. Give it one complete task and receive a summary.",
-          plugins: [codingTools, webTools, deepseek],
+          plugins: [codingTools, webTools, codex, deepseek],
           maxTurns: 25,
         }),
       ]).pipe(Layer.provide(SessionStoreFs(path.join(options.root, ".roop", "sessions"))))
