@@ -3,9 +3,9 @@ import { Effect, Layer, Ref, Schema, Stream } from "effect"
 import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
 
 import { Agent, AgentLiveToolkit } from "../src/Agent.ts"
+import { cryptoWeb } from "../src/cryptoWeb.ts"
 import { ModelCatalogLive } from "../src/ModelCatalog.ts"
 import { SessionStoreMemory } from "../src/SessionStore.ts"
-import { cryptoWeb } from "../src/cryptoWeb.ts"
 
 const Ping = Tool.make("ping", {
   description: "reply with ok",

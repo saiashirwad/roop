@@ -95,7 +95,11 @@ export const AgentHooks = Context.Reference<AgentHooks>("roop/AgentHooks", {
 })
 
 /** Explicit layer retained for composing hook waterfalls. */
-export const layerNoop = Layer.succeed(AgentHooks, hooksNoop) as Layer.Layer<AgentHooks, never, never>
+export const layerNoop = Layer.succeed(AgentHooks, hooksNoop) as Layer.Layer<
+  AgentHooks,
+  never,
+  never
+>
 
 /**
  * Build one waterfall stage. The returned layer requires the downstream

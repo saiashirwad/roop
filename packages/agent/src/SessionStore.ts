@@ -176,11 +176,10 @@ export const SessionStoreFs = (
           }).pipe(
             Effect.catchCause((cause) =>
               Effect.asVoid(
-                fs.remove(tmp, { force: true }).pipe(
-                  Effect.ignore,
-                  Effect.andThen(Effect.failCause(cause)),
-                ),
-              )
+                fs
+                  .remove(tmp, { force: true })
+                  .pipe(Effect.ignore, Effect.andThen(Effect.failCause(cause))),
+              ),
             ),
             Effect.orDie,
           )
@@ -191,7 +190,7 @@ export const SessionStoreFs = (
           Effect.catchTag("PlatformError", (error) =>
             isFileNotFound(error)
               ? Effect.fail(new SessionNotFound({ sessionId }))
-              : Effect.die(error)
+              : Effect.die(error),
           ),
           Effect.flatMap((json) => decodeSession(sessionId, json)),
         )

@@ -11,7 +11,9 @@ export const cryptoWeb: Layer.Layer<Crypto.Crypto> = Layer.succeed(
     randomBytes: (size) => globalThis.crypto.getRandomValues(new Uint8Array(size)),
     digest: (algorithm, data) =>
       Effect.promise(() =>
-        globalThis.crypto.subtle.digest(algorithm, new Uint8Array(data)).then((bytes) => new Uint8Array(bytes)),
+        globalThis.crypto.subtle
+          .digest(algorithm, new Uint8Array(data))
+          .then((bytes) => new Uint8Array(bytes)),
       ),
   }),
 )

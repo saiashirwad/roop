@@ -257,8 +257,8 @@ it.layer(
       ])
       const request = session.events.find((event) => event._tag === "model/request") as any
       assert.deepStrictEqual(request.request.prompt, [
-          Prompt.makeMessage("system", { content: "summary of everything so far" }),
-        ])
+        Prompt.makeMessage("system", { content: "summary of everything so far" }),
+      ])
     }),
   )
 })

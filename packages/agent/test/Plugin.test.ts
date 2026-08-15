@@ -149,8 +149,14 @@ const recording = (name: string): Layer.Layer<AgentHooks, never, never> =>
     }),
   ) as unknown as Layer.Layer<AgentHooks, never, never>
 
-const outerHook = Plugin<Record<string, never>, never>({ name: "outer-hook", hooks: recording("outer") })
-const innerHook = Plugin<Record<string, never>, never>({ name: "inner-hook", hooks: recording("inner") })
+const outerHook = Plugin<Record<string, never>, never>({
+  name: "outer-hook",
+  hooks: recording("outer"),
+})
+const innerHook = Plugin<Record<string, never>, never>({
+  name: "inner-hook",
+  hooks: recording("inner"),
+})
 const Hooked = AgentPlugins([
   outerHook,
   innerHook,

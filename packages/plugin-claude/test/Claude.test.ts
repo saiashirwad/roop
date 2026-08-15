@@ -1,8 +1,8 @@
 import { NodeChildProcessSpawner, NodeFileSystem, NodePath } from "@effect/platform-node"
 import { assert, it } from "@effect/vitest"
 import { Agent } from "@roop/agent/Agent.ts"
-import { AgentPlugins } from "@roop/agent/Plugin.ts"
 import { cryptoWeb } from "@roop/agent/cryptoWeb.ts"
+import { AgentPlugins } from "@roop/agent/Plugin.ts"
 import { SessionStoreMemory } from "@roop/agent/SessionStore.ts"
 import { Effect, Layer, Stream } from "effect"
 

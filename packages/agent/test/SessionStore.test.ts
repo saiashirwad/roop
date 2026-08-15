@@ -177,7 +177,7 @@ it.layer(StoreLive)("SessionStoreFs", (it) => {
         entries.filter((entry) => entry.endsWith(".tmp")),
         [],
       )
-    }).pipe(Effect.provide(NodeFileSystem.layer), Effect.provide(cryptoWeb)),
+    }).pipe(Effect.provide([NodeFileSystem.layer, cryptoWeb])),
   )
 
   // A read permission error (EACCES) on append must die as a defect, not be
@@ -243,12 +243,7 @@ it.layer(StoreLive)("SessionStoreFs", (it) => {
 
       const metas = yield* (yield* SessionStore).list()
       // timestamps can collide within a millisecond, so only assert membership
-      assert.deepStrictEqual([...metas.map((meta) => meta.id)].sort(), [
-        "a",
-        "good",
-        "grow",
-        "tmpcheck",
-      ])
+      assert.deepStrictEqual(metas.map((meta) => meta.id).sort(), ["a", "good", "grow", "tmpcheck"])
     }),
   )
 

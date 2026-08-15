@@ -4,11 +4,11 @@ import { createInterface } from "node:readline/promises"
 import { NodeHttpClient } from "@effect/platform-node"
 import { Agent } from "@roop/agent/Agent.ts"
 import type { AgentEvent } from "@roop/agent/AgentEvent.ts"
-import { AgentPlugins, Plugin } from "@roop/agent/Plugin.ts"
 import { cryptoWeb } from "@roop/agent/cryptoWeb.ts"
+import { AgentPlugins, Plugin } from "@roop/agent/Plugin.ts"
 import { SessionStoreMemory } from "@roop/agent/SessionStore.ts"
 import { OpenAiCompatible } from "@roop/plugin-openai/OpenAiCompatible.ts"
-import { Effect, Layer, Schema, Stream } from "effect"
+import { Cause, Effect, Layer, Schema, Stream } from "effect"
 import { Tool, Toolkit } from "effect/unstable/ai"
 
 const NowToolkit = Toolkit.make(
@@ -52,7 +52,7 @@ const main = Effect.gen(function* () {
   const lines = createInterface({ input, output })
 
   yield* Stream.runForEach(
-    Stream.fromAsyncIterable(lines, () => Effect.die("stdin failed")),
+    Stream.fromAsyncIterable(lines, (cause) => new Cause.UnknownError(cause, "stdin failed")),
     (line) =>
       Effect.gen(function* () {
         const prompt = line.trim()
@@ -83,7 +83,7 @@ const deepseek = OpenAiCompatible({
 
 const Live = AgentPlugins([deepseek, now]).pipe(
   Layer.provide(SessionStoreMemory),
-    Layer.provide(cryptoWeb),
+  Layer.provide(cryptoWeb),
   Layer.provide(NodeHttpClient.layerUndici),
 )
 
