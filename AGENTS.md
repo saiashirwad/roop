@@ -5,10 +5,10 @@ Module naming: PascalCase for modules exporting an Effect service/tag or schema 
 (SessionStore.ts, Agent.ts); camelCase for leaf pure-function helpers (agentLoop.ts, agentTool.ts).
 
 packages/agent is the portable kernel — it may import only `effect` and `effect/unstable/ai`
-(enforced by test/portability.test.ts; proven by the workerd suite in test-workerd/). Provider and
-platform wiring lives in packages/agent-node; a Cloudflare/Workers adapter would be a sibling
-package with the same shape. packages/coding-harness is the example: coding tools + a CLI that talks
-to the agent over Effect RPC (server + client modes).
+(enforced by test/portability.test.ts; proven by the workerd suite in test-workerd/). Platform
+wiring lives in packages/coding-harness today (it wires @effect/platform-node itself); a dedicated
+adapter package returns with issue D (ExecutionWorld). packages/coding-harness is the example:
+coding tools + a CLI that talks to the agent over Effect RPC (server + client modes).
 
 All patches/ entries are load-bearing; do not remove the patchedDependencies wiring in
 pnpm-workspace.yaml. @effect__ai-openai-compat: DeepSeek's chat-completions API rejects consecutive

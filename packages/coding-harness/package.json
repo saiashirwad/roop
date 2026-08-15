@@ -16,6 +16,8 @@
     "@roop/agent": "workspace:*",
     "@roop/agent-rpc": "workspace:*",
     "@roop/coding-tools": "workspace:*",
+    "@roop/plugin-claude": "workspace:*",
+    "@roop/plugin-codex": "workspace:*",
     "@roop/plugin-openai": "workspace:*",
     "@roop/plugin-skills": "workspace:*",
     "@roop/plugin-todo": "workspace:*",

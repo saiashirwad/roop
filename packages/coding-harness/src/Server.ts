@@ -12,6 +12,8 @@ import { AgentRpcServerHttp } from "@roop/agent-rpc/AgentRpcHttp.ts"
 import { AgentPlugins } from "@roop/agent/Plugin.ts"
 import { SessionStoreFs } from "@roop/agent/SessionStore.ts"
 import { subagent } from "@roop/agent/subagent.ts"
+import { Claude } from "@roop/plugin-claude/Claude.ts"
+import { Codex } from "@roop/plugin-codex/Codex.ts"
 import { CodingTools } from "@roop/coding-tools/CodingTools.ts"
 import { OpenAiCompatible } from "@roop/plugin-openai/OpenAiCompatible.ts"
 import { SkillsDir } from "@roop/plugin-skills/SkillsDir.ts"
@@ -42,6 +44,8 @@ export const server = (options: {
         Todos(),
         skills,
         deepseek,
+        Claude(),
+        Codex(),
         subagent({
           name: "task",
           description:

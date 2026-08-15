@@ -75,31 +75,6 @@ importers:
         specifier: ^4.1.10
         version: 4.1.10(@types/node@26.1.1)(vite@8.2.1(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
-  packages/agent-node:
-    dependencies:
-      '@effect/platform-node':
-        specifier: 4.0.0-beta.97
-        version: 4.0.0-beta.97(effect@4.0.0-beta.97)(ioredis@5.11.1)
-      '@roop/agent':
-        specifier: workspace:*
-        version: link:../agent
-      '@roop/plugin-openai':
-        specifier: workspace:*
-        version: link:../plugin-openai
-      effect:
-        specifier: 4.0.0-beta.97
-        version: 4.0.0-beta.97
-    devDependencies:
-      '@types/node':
-        specifier: ^26.1.1
-        version: 26.1.1
-      tsx:
-        specifier: ^4.23.0
-        version: 4.23.0
-      typescript:
-        specifier: ^7.0.2
-        version: 7.0.2
-
   packages/agent-rpc:
     dependencies:
       '@roop/agent':
@@ -139,6 +114,12 @@ importers:
       '@roop/coding-tools':
         specifier: workspace:*
         version: link:../coding-tools
+      '@roop/plugin-claude':
+        specifier: workspace:*
+        version: link:../plugin-claude
+      '@roop/plugin-codex':
+        specifier: workspace:*
+        version: link:../plugin-codex
       '@roop/plugin-openai':
         specifier: workspace:*
         version: link:../plugin-openai
