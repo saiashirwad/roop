@@ -5,13 +5,12 @@ import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
 import { Agent } from "../src/Agent.ts"
 import { AgentContext } from "../src/AgentContext.ts"
 import { layerHook } from "../src/AgentHooks.ts"
-import { scripted, scriptedPlugin } from "../src/Testing.ts"
 import { cryptoWeb } from "../src/cryptoWeb.ts"
 import { AgentPlugins, Plugin } from "../src/Plugin.ts"
 import { deriveMessages } from "../src/SessionEvent.ts"
 import { SessionStoreMemory } from "../src/SessionStore.ts"
 import { subagent } from "../src/subagent.ts"
-
+import { scripted, scriptedPlugin } from "../src/Testing.ts"
 
 const EchoToolkit = Toolkit.make(
   Tool.make("echo", {

@@ -9,12 +9,13 @@ import {
   NodePath,
 } from "@effect/platform-node"
 import { AgentRpcServerHttp } from "@roop/agent-rpc/AgentRpcHttp.ts"
+import { delegationToolName } from "@roop/agent-rpc/Transcript.ts"
 import { AgentPlugins } from "@roop/agent/Plugin.ts"
 import { SessionStoreFs } from "@roop/agent/SessionStore.ts"
 import { subagent } from "@roop/agent/subagent.ts"
+import { CodingTools } from "@roop/coding-tools/CodingTools.ts"
 import { Claude } from "@roop/plugin-claude/Claude.ts"
 import { Codex } from "@roop/plugin-codex/Codex.ts"
-import { CodingTools } from "@roop/coding-tools/CodingTools.ts"
 import { OpenAiCompatible } from "@roop/plugin-openai/OpenAiCompatible.ts"
 import { SkillsDir } from "@roop/plugin-skills/SkillsDir.ts"
 import { Todos } from "@roop/plugin-todo/Todos.ts"
@@ -47,7 +48,7 @@ export const server = (options: {
         Claude(),
         Codex(),
         subagent({
-          name: "task",
+          name: delegationToolName,
           description:
             "Delegate a self-contained coding task to a subagent with its own coding tools. Give it one complete task and receive a summary.",
           plugins: [CodingTools(options.root), WebTools(), deepseek],
