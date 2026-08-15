@@ -4,7 +4,20 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./*": "./src/*"
+    "./Agent.ts": "./src/Agent.ts",
+    "./AgentContext.ts": "./src/AgentContext.ts",
+    "./AgentEmit.ts": "./src/AgentEmit.ts",
+    "./AgentEvent.ts": "./src/AgentEvent.ts",
+    "./AgentHooks.ts": "./src/AgentHooks.ts",
+    "./Capabilities.ts": "./src/Capabilities.ts",
+    "./ModelCatalog.ts": "./src/ModelCatalog.ts",
+    "./Plugin.ts": "./src/Plugin.ts",
+    "./SessionEvent.ts": "./src/SessionEvent.ts",
+    "./SessionStore.ts": "./src/SessionStore.ts",
+    "./Skills.ts": "./src/Skills.ts",
+    "./agentTool.ts": "./src/agentTool.ts",
+    "./cryptoWeb.ts": "./src/cryptoWeb.ts",
+    "./subagent.ts": "./src/subagent.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
