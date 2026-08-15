@@ -4,7 +4,6 @@ import { LanguageModel, Response, Tool, Toolkit } from "effect/unstable/ai"
 
 import { Agent, AgentLiveToolkit } from "../src/Agent.ts"
 import { cryptoWeb } from "../src/cryptoWeb.ts"
-import { ModelCatalogLive } from "../src/ModelCatalog.ts"
 import { SessionStoreMemory } from "../src/SessionStore.ts"
 
 const Ping = Tool.make("ping", {
@@ -30,22 +29,21 @@ const scripted = (turns: ReadonlyArray<ReadonlyArray<Response.StreamPartEncoded>
     })
   })
 
-const Live = AgentLiveToolkit(PingToolkit).pipe(
-  Layer.provide(
-    ModelCatalogLive([
-      {
-        id: "tool",
-        provider: "test",
-        layer: Layer.effect(
-          LanguageModel.LanguageModel,
-          scripted([
-            [{ type: "tool-call" as const, id: "c", name: "ping", params: {} }],
-            [{ type: "text-delta" as const, id: "t", delta: "done" }],
-          ]),
-        ),
-      },
-    ]),
-  ),
+const Live = AgentLiveToolkit(PingToolkit, {
+  models: [
+    {
+      id: "tool",
+      provider: "test",
+      layer: Layer.effect(
+        LanguageModel.LanguageModel,
+        scripted([
+          [{ type: "tool-call" as const, id: "c", name: "ping", params: {} }],
+          [{ type: "text-delta" as const, id: "t", delta: "done" }],
+        ]),
+      ),
+    },
+  ],
+}).pipe(
   Layer.provide(SessionStoreMemory),
   Layer.provide(cryptoWeb),
   Layer.provide(

@@ -1,4 +1,4 @@
-import { Context, Schema } from "effect"
+import { Schema } from "effect"
 
 export const Skill = Schema.Struct({
   id: Schema.String,
@@ -6,7 +6,3 @@ export const Skill = Schema.Struct({
 })
 
 export type Skill = typeof Skill.Type
-
-export class Skills extends Context.Service<Skills, { readonly list: ReadonlyArray<Skill> }>()(
-  "roop/Skills",
-) {}

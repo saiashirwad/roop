@@ -1,40 +1,16 @@
 import { assert, it } from "@effect/vitest"
-import { Effect, Layer, Ref, Schema, Stream } from "effect"
-import { LanguageModel, Response, Tool, Toolkit } from "effect/unstable/ai"
+import { Effect, Exit, Layer, Ref, Schema, Scope, Stream } from "effect"
+import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
 
 import { Agent } from "../src/Agent.ts"
+import { AgentContext } from "../src/AgentContext.ts"
 import { layerHook } from "../src/AgentHooks.ts"
 import { cryptoWeb } from "../src/cryptoWeb.ts"
 import { AgentPlugins, Plugin } from "../src/Plugin.ts"
 import { deriveMessages } from "../src/SessionEvent.ts"
 import { SessionStoreMemory } from "../src/SessionStore.ts"
 import { subagent } from "../src/subagent.ts"
-
-const scripted = (turns: ReadonlyArray<ReadonlyArray<Response.StreamPartEncoded>>) =>
-  Effect.gen(function* () {
-    const index = yield* Ref.make(0)
-    return yield* LanguageModel.make({
-      generateText: () => Effect.succeed([]),
-      streamText: () =>
-        Stream.unwrap(
-          Effect.gen(function* () {
-            const i = yield* Ref.getAndUpdate(index, (n) => n + 1)
-            return Stream.fromIterable(turns[i] ?? [])
-          }),
-        ),
-    })
-  })
-
-const model = (
-  id: string,
-  turns: ReadonlyArray<ReadonlyArray<Response.StreamPartEncoded>>,
-): Plugin =>
-  Plugin({
-    name: `model-${id}`,
-    models: [
-      { id, provider: "test", layer: Layer.effect(LanguageModel.LanguageModel, scripted(turns)) },
-    ],
-  })
+import { scripted, scriptedPlugin } from "../src/Testing.ts"
 
 const EchoToolkit = Toolkit.make(
   Tool.make("echo", {
@@ -73,7 +49,7 @@ const collect = <A, E = never, R = never>(stream: Stream.Stream<A, E, R>) =>
 const Composed = AgentPlugins([
   echo,
   shout,
-  model("fake", [
+  scriptedPlugin("fake", [
     [
       { type: "tool-call", id: "c1", name: "echo", params: { note: "hi" } },
       { type: "tool-call", id: "c2", name: "shout", params: { note: "hi" } },
@@ -130,7 +106,7 @@ const worker = subagent({
   description: "delegate a task",
   plugins: [
     echo,
-    model("child", [
+    scriptedPlugin("child", [
       [{ type: "tool-call", id: "w1", name: "echo", params: { note: "from child" } }],
       [{ type: "text-delta", id: "w2", delta: "child did the task" }],
     ]),
@@ -164,7 +140,7 @@ const innerHook = Plugin<Record<string, never>, never>({
 const Hooked = AgentPlugins([
   outerHook,
   innerHook,
-  model("fake", [[{ type: "text-delta", id: "t1", delta: "done" }]]),
+  scriptedPlugin("fake", [[{ type: "text-delta", id: "t1", delta: "done" }]]),
 ]).pipe(Layer.provide(SessionStoreMemory), Layer.provide(cryptoWeb))
 
 it.layer(Hooked)("plugin hooks", (it) => {
@@ -188,7 +164,7 @@ it.layer(Hooked)("plugin hooks", (it) => {
 
 const Parent = AgentPlugins([
   worker,
-  model("parent", [
+  scriptedPlugin("parent", [
     [{ type: "tool-call", id: "p1", name: "worker", params: { task: "do the thing" } }],
     [{ type: "text-delta", id: "p2", delta: "delegated" }],
   ]),
@@ -222,6 +198,241 @@ it.layer(Parent)("subagent", (it) => {
           ["worker", "Finish"],
         ],
       )
+    }),
+  )
+})
+
+// --- issue C: scope-bound runtime registration ---
+
+const LaterTool = Tool.make("later", {
+  description: "registered at runtime",
+  parameters: Schema.Struct({}),
+  success: Schema.String,
+})
+const LaterToolkit = Toolkit.make(LaterTool)
+
+const ShadowTool = Tool.make("echo", {
+  description: "scoped shadow of the static echo",
+  parameters: Schema.Struct({ note: Schema.String }),
+  success: Schema.Struct({ reply: Schema.String }),
+})
+const ShadowToolkit = Toolkit.make(ShadowTool)
+
+const EphemeralTool = Tool.make("ephemeral", {
+  description: "removed by its disposer",
+  parameters: Schema.Struct({}),
+  success: Schema.String,
+})
+const EphemeralToolkit = Toolkit.make(EphemeralTool)
+
+const ProbeTool = Tool.make("probe", {
+  description: "registers the later tool mid-run",
+  parameters: Schema.Struct({}),
+  success: Schema.Struct({ ok: Schema.Boolean }),
+})
+const ProbeToolkit = Toolkit.make(ProbeTool)
+
+const laterHandle = LaterToolkit.pipe(
+  Effect.provide(LaterToolkit.toLayer({ later: () => Effect.succeed("late") })),
+)
+
+/** Stashes the live registry so tests can act on the agent's own AgentContext. */
+const registries = Ref.makeUnsafe<ReadonlyArray<AgentContext["Service"]>>([])
+
+const registryOf = Effect.map(Ref.get(registries), (all) => {
+  const context = all.at(-1)
+  if (context === undefined) throw new Error("no registry stashed")
+  return context
+})
+
+/** A plugin whose handler layer registers every kind of capability at build. */
+const registrar: Plugin<AgentContext> = {
+  name: "registrar",
+  handlers: Layer.effectDiscard(
+    Effect.gen(function* () {
+      const context = yield* AgentContext
+      yield* Ref.update(registries, (all) => [...all, context])
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
+      yield* Effect.asVoid(context.registerTool(LaterTool, (yield* laterHandle) as any))
+      yield* Effect.asVoid(
+        context.registerModel({
+          id: "late-model",
+          provider: "test",
+          layer: Layer.effect(LanguageModel.LanguageModel, scripted([[]])),
+        }),
+      )
+      yield* Effect.asVoid(
+        context.registerSkill({ id: "late-skill", description: "registered at runtime" }),
+      )
+      yield* Effect.asVoid(context.registerPromptSection("late section"))
+    }),
+  ),
+}
+
+/** A plugin whose tool handler registers mid-run, with no ambient scope. */
+const prober = Plugin({
+  name: "prober",
+  toolkit: ProbeToolkit,
+  handlers: ProbeToolkit.toLayer(
+    Effect.gen(function* () {
+      const context = yield* AgentContext
+      return {
+        probe: () =>
+          Effect.gen(function* () {
+            /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
+            yield* Effect.asVoid(context.registerTool(LaterTool, (yield* laterHandle) as any))
+            yield* Effect.asVoid(context.registerPromptSection("mid-run section"))
+            return { ok: true }
+          }),
+      }
+    }),
+  ),
+})
+
+const Registered = AgentPlugins([
+  echo,
+  registrar,
+  scriptedPlugin("fake", [[{ type: "text-delta", id: "t1", delta: "done" }]]),
+]).pipe(Layer.provide(SessionStoreMemory), Layer.provide(cryptoWeb))
+
+it.layer(Registered)("runtime registration", (it) => {
+  it.effect("reflects handler-registered tools, models, skills, and sections in capabilities", () =>
+    Effect.gen(function* () {
+      const caps = yield* (yield* Agent).capabilities
+      assert.deepStrictEqual(
+        caps.tools.map((tool) => tool.name),
+        ["later", "echo"],
+      )
+      assert.deepStrictEqual(
+        caps.models.map((entry) => entry.id),
+        ["fake", "late-model"],
+      )
+      assert.deepStrictEqual(
+        caps.skills.map((skill) => skill.id),
+        ["echoing", "late-skill"],
+      )
+      const context = yield* registryOf
+      assert.deepStrictEqual(yield* context.promptSections, ["echo things", "late section"])
+      assert.strictEqual(yield* context.systemPrompt, "echo things\n\nlate section")
+    }),
+  )
+
+  it.effect("a scoped registration shadows the static twin until its scope closes", () =>
+    Effect.gen(function* () {
+      const context = yield* registryOf
+      const shadow = yield* ShadowToolkit.pipe(
+        Effect.provide(
+          ShadowToolkit.toLayer({
+            echo: ({ note }) => Effect.succeed({ reply: `shadow:${note}` }),
+          }),
+        ),
+      )
+
+      const agent = yield* Agent
+      const before = yield* agent.capabilities
+      assert.strictEqual(before.tools.find((tool) => tool.name === "echo")?.description, "")
+
+      const target = yield* Scope.make()
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
+      yield* Effect.asVoid(context.registerTool(ShadowTool, shadow as any, { scope: target }))
+      const during = yield* agent.capabilities
+      assert.strictEqual(
+        during.tools.find((tool) => tool.name === "echo")?.description,
+        "scoped shadow of the static echo",
+      )
+      yield* Scope.close(target, Exit.succeed(undefined))
+
+      const after = yield* agent.capabilities
+      assert.strictEqual(after.tools.find((tool) => tool.name === "echo")?.description, "")
+    }),
+  )
+
+  it.effect("the explicit disposer removes a registration without closing the agent", () =>
+    Effect.gen(function* () {
+      const context = yield* registryOf
+      const ephemeral = yield* EphemeralToolkit.pipe(
+        Effect.provide(EphemeralToolkit.toLayer({ ephemeral: () => Effect.succeed("gone") })),
+      )
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
+      const dispose = yield* context.registerTool(EphemeralTool, ephemeral as any)
+      assert.ok((yield* context.tools).ephemeral !== undefined)
+
+      yield* dispose
+      const caps = yield* (yield* Agent).capabilities
+      assert.ok(caps.tools.every((tool) => tool.name !== "ephemeral"))
+    }),
+  )
+})
+
+it.effect("unwinds every registration when the agent layer's scope closes", () =>
+  Effect.gen(function* () {
+    yield* Ref.set(registries, [])
+    const scope = yield* Scope.make()
+    yield* Layer.buildWithScope(
+      AgentPlugins([
+        echo,
+        registrar,
+        scriptedPlugin("fake", [[{ type: "text-delta", id: "t1", delta: "done" }]]),
+      ]),
+      scope,
+    ).pipe(Effect.provide([SessionStoreMemory, cryptoWeb]))
+    const context = yield* registryOf
+    assert.deepStrictEqual(Object.keys(yield* context.tools), ["later", "echo"])
+
+    yield* Scope.close(scope, Exit.succeed(undefined))
+    assert.deepStrictEqual(Object.keys(yield* context.tools), [])
+    assert.deepStrictEqual(yield* context.models, [])
+    assert.deepStrictEqual(yield* context.skills, [])
+    assert.deepStrictEqual(yield* context.promptSections, [])
+  }),
+)
+
+const MidRun = AgentPlugins([
+  prober,
+  scriptedPlugin("fake", [
+    [{ type: "tool-call", id: "c1", name: "probe", params: {} }],
+    [{ type: "tool-call", id: "c2", name: "later", params: {} }],
+    [{ type: "text-delta", id: "t1", delta: "done" }],
+  ]),
+]).pipe(Layer.provide(SessionStoreMemory), Layer.provide(cryptoWeb))
+
+it.layer(MidRun)("mid-run registration", (it) => {
+  it.effect("a tool handler can register a tool that the next step executes", () =>
+    Effect.gen(function* () {
+      const agent = yield* Agent
+      const events = yield* collect(agent.prompt({ prompt: "go", sessionId: "r1" }))
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
+      const results = events.filter((event: any) => event._tag === "ToolResult") as Array<any>
+      assert.deepStrictEqual(
+        results.map((result) => [result.name, result.result]),
+        [
+          ["probe", { ok: true }],
+          ["later", "late"],
+        ],
+      )
+
+      // The mid-run prompt section is journaled before the next request.
+      const session = yield* agent.history("r1")
+      assert.deepStrictEqual(
+        session.events
+          .filter((event) => event._tag === "system/message")
+          .map(
+            /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
+            (event: any) => event.content,
+          ),
+        ["mid-run section"],
+      )
+      const systems = deriveMessages(session.events).filter((message) => message.role === "system")
+      assert.strictEqual(systems.length, 1)
+    }),
+  )
+
+  it.effect("mid-run registrations bind to the agent scope and survive the tool call", () =>
+    Effect.gen(function* () {
+      const agent = yield* Agent
+      yield* collect(agent.prompt({ prompt: "go", sessionId: "r2" }))
+      const caps = yield* agent.capabilities
+      assert.ok(caps.tools.some((tool) => tool.name === "later"))
     }),
   )
 })

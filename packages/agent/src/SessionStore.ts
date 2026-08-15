@@ -48,7 +48,7 @@ export const SessionMeta = Schema.Struct({
 
 export type SessionMeta = typeof SessionMeta.Type
 
-export type SessionLoadError = SessionNotFound | SessionFormatError
+type SessionLoadError = SessionNotFound | SessionFormatError
 
 const title = (events: ReadonlyArray<SessionEvent>): string => {
   for (const event of events) {

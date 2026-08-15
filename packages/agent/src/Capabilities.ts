@@ -4,7 +4,7 @@ import { Tool } from "effect/unstable/ai"
 import { ModelAd } from "./ModelCatalog.ts"
 import { Skill } from "./Skills.ts"
 
-export const ToolAd = Schema.Struct({
+const ToolAd = Schema.Struct({
   name: Schema.String,
   description: Schema.String,
   parameters: Schema.Unknown,
@@ -18,7 +18,6 @@ export const Capabilities = Schema.Struct({
 })
 
 export type Capabilities = typeof Capabilities.Type
-export type ToolAd = typeof ToolAd.Type
 
 export const capabilitiesFrom = (options: {
   readonly tools: Record<string, Tool.Any>

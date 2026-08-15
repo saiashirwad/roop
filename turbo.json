@@ -6,8 +6,7 @@
     },
     "test": {
       "dependsOn": ["^typecheck"],
-      "inputs": ["$TURBO_DEFAULT$", "test/**"],
-      "env": ["DEEPSEEK_API_KEY"]
+      "env": ["DEEPSEEK_API_KEY", "CLAUDE_SMOKE", "CODEX_SMOKE"]
     }
   }
 }

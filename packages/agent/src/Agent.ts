@@ -2,13 +2,14 @@ import { Context, Crypto, Deferred, Effect, Layer, Option, Ref, Schema, Stream }
 import { Chat, Prompt, Toolkit } from "effect/unstable/ai"
 import type * as Tool from "effect/unstable/ai/Tool"
 
-import { AgentContext, AgentContextLive } from "./AgentContext.ts"
+import { AgentContext, AgentContextLive, registerStatics } from "./AgentContext.ts"
 import { AgentEvent } from "./AgentEvent.ts"
 import { AgentHooks } from "./AgentHooks.ts"
 import { runLoop } from "./agentLoop.ts"
 import { capabilitiesFrom, type Capabilities } from "./Capabilities.ts"
-import { ModelCatalog, ModelNotFound } from "./ModelCatalog.ts"
+import { ModelNotFound, type ModelSpec } from "./ModelCatalog.ts"
 import type { SessionEvent } from "./SessionEvent.ts"
+import type { Skill } from "./Skills.ts"
 
 const findLastSystemMessage = (events: ReadonlyArray<SessionEvent>): string | undefined => {
   for (let i = events.length - 1; i >= 0; i--) {
@@ -34,14 +35,12 @@ export class SessionBusy extends Schema.TaggedErrorClass<SessionBusy>()("Session
   sessionId: Schema.String,
 }) {}
 
-export type PromptOptions = {
+type PromptOptions = {
   readonly prompt: string
   readonly sessionId?: string | undefined
   readonly modelId?: string | undefined
   readonly maxTurns?: number | undefined
 }
-
-export type AgentService = Agent["Service"]
 
 export class Agent extends Context.Service<
   Agent,
@@ -146,6 +145,7 @@ export const AgentLive = <Tools extends Record<string, Tool.Any>>(
 
               const journaledSections = new Set<string>()
               if (systemPrompt !== "") journaledSections.add(systemPrompt)
+              for (const section of yield* context.promptSections) journaledSections.add(section)
 
               return runLoop({
                 sessionId,
@@ -185,16 +185,31 @@ export const AgentLive = <Tools extends Record<string, Tool.Any>>(
     }),
   )
 
+/**
+ * Single-toolkit convenience: an agent from one toolkit plus optional static
+ * contributions, registered through the same registry calls `AgentPlugins`
+ * uses. Unlike `AgentPlugins` this installs no hook waterfall, so the ambient
+ * `AgentHooks` (reference default, or a caller-provided layer) applies.
+ * Tool handlers stay caller-provided.
+ */
 export const AgentLiveToolkit = <Tools extends Record<string, Tool.Any>>(
   toolkit: Toolkit.Toolkit<Tools>,
-  options?: { readonly systemPrompt?: string | undefined },
-): Layer.Layer<
-  Agent,
-  never,
-  Crypto.Crypto | Tool.HandlersFor<Tools> | ModelCatalog | SessionStore
-> =>
-  Layer.unwrap(
-    Effect.map(toolkit, (withHandler) =>
-      AgentLive(withHandler).pipe(Layer.provide(AgentContextLive(options))),
-    ),
+  options?: {
+    readonly systemPrompt?: string | undefined
+    readonly models?: ReadonlyArray<ModelSpec<never, never>> | undefined
+    readonly skills?: ReadonlyArray<Skill> | undefined
+  },
+): Layer.Layer<Agent, never, Crypto.Crypto | Tool.HandlersFor<Tools> | SessionStore> => {
+  const registry = AgentContextLive(
+    options?.systemPrompt === undefined ? undefined : { systemPrompt: options.systemPrompt },
   )
+  return Layer.unwrap(Effect.map(toolkit, (withHandler) => AgentLive(withHandler))).pipe(
+    Layer.provide([
+      registry,
+      registerStatics({
+        models: options?.models ?? [],
+        skills: options?.skills ?? [],
+      }).pipe(Layer.provide(registry)),
+    ]),
+  )
+}

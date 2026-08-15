@@ -3,11 +3,11 @@ import { Toolkit } from "effect/unstable/ai"
 import type * as Tool from "effect/unstable/ai/Tool"
 
 import { AgentLive, type Agent } from "./Agent.ts"
-import { AgentContextLive } from "./AgentContext.ts"
+import { AgentContext, AgentContextLive, registerStatics } from "./AgentContext.ts"
 import { AgentHooks, layerNoop } from "./AgentHooks.ts"
-import { ModelCatalogLive, type ModelSpec } from "./ModelCatalog.ts"
+import type { ModelSpec } from "./ModelCatalog.ts"
 import type { SessionStore } from "./SessionStore.ts"
-import { Skills, type Skill } from "./Skills.ts"
+import { type Skill } from "./Skills.ts"
 
 export type Plugin<R = never, RH = never> = {
   readonly name: string
@@ -66,7 +66,9 @@ const asHandlerLayer = <R>(layer: PluginLayerValue): Layer.Layer<never, never, R
 }
 
 const asHookLayer = (layer: PluginLayerValue): Layer.Layer<AgentHooks, never, AgentHooks> => {
-  /* SAFETY: Plugin hooks are AgentHooks layers; the view erases extra R. */
+  /* SAFETY: Plugin hooks are AgentHooks layers; the view erases extra R.
+   * AgentPlugins provides AgentContext to the composed waterfall, so hook
+   * stages may require it even though it is erased here. */
   return layer as Layer.Layer<AgentHooks, never, AgentHooks>
 }
 
@@ -89,7 +91,7 @@ export type PluginRequirements<Plugins extends ReadonlyArray<Plugin<any, any>>> 
 export const AgentPlugins = <const Plugins extends ReadonlyArray<Plugin<any>>>(
   plugins: Plugins,
   options?: { readonly systemPrompt?: string | undefined },
-): Layer.Layer<Agent, never, SessionStore | PluginRequirements<Plugins>> => {
+): Layer.Layer<Agent, never, SessionStore | Exclude<PluginRequirements<Plugins>, AgentContext>> => {
   const views: ReadonlyArray<PluginView> = plugins
   const toolkit = Toolkit.merge(
     ...views.flatMap((plugin) => (plugin.toolkit === undefined ? [] : [plugin.toolkit])),
@@ -114,18 +116,29 @@ export const AgentPlugins = <const Plugins extends ReadonlyArray<Plugin<any>>>(
     layerNoop,
   )
 
+  // The registry is built first and provided INTO the handler, hook, and
+  // static-contribution layers: merged siblings cannot see each other's
+  // services, so plugin code that yields* AgentContext (to register
+  // capabilities at build time) would otherwise never resolve. Layer
+  // memoization keys on the layer reference, so the registry is shared.
+  const registry = AgentContextLive()
+
   /* SAFETY: Crypto stays caller-provided so platform packages can substitute it;
-   * the public type keeps SessionStore plus each plugin's R/RH. */
+   * the public type keeps SessionStore plus each plugin's R/RH. AgentContext
+   * requirements are satisfied by the provided registry, never the caller. */
   return (
     // oxlint-disable-next-line effecttsgo/unsafe-effect-type-assertion -- Crypto is supplied by the caller, not this layer
     Layer.unwrap(Effect.map(toolkit, (withHandler) => AgentLive(withHandler))).pipe(
       Layer.provide([
-        AgentContextLive({ systemPrompt }).pipe(
-          Layer.provide([ModelCatalogLive(models), Layer.succeed(Skills)({ list: skills })]),
-        ),
-        hooks,
-        ...handlers,
+        registry,
+        registerStatics({ systemPrompt, models, skills }).pipe(Layer.provide(registry)),
+        hooks.pipe(Layer.provide(registry)),
+        ...handlers.map((handler) => handler.pipe(Layer.provide(registry))),
       ]),
-    ) as Layer.Layer<Agent, never, SessionStore | PluginRequirements<Plugins>>
+    ) as Layer.Layer<
+      Agent,
+      never,
+      SessionStore | Exclude<PluginRequirements<Plugins>, AgentContext>
+    >
   )
 }

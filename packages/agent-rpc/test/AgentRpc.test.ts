@@ -2,12 +2,11 @@ import { NodeFileSystem } from "@effect/platform-node"
 import { assert, it } from "@effect/vitest"
 import { AgentLiveToolkit } from "@roop/agent/Agent.ts"
 import { cryptoWeb } from "@roop/agent/cryptoWeb.ts"
-import { ModelCatalogLive } from "@roop/agent/ModelCatalog.ts"
 import { deriveMessages } from "@roop/agent/SessionEvent.ts"
 import { SessionStoreFs, SessionStoreMemory } from "@roop/agent/SessionStore.ts"
-import { Skills } from "@roop/agent/Skills.ts"
-import { Effect, Exit, FileSystem, Layer, Option, Ref, Schema, Stream } from "effect"
-import { LanguageModel, Response, Tool, Toolkit } from "effect/unstable/ai"
+import { scripted } from "@roop/agent/Testing.ts"
+import { Effect, Exit, FileSystem, Layer, Option, Schema, Stream } from "effect"
+import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient"
 import * as HttpRouter from "effect/unstable/http/HttpRouter"
 import { RpcClient } from "effect/unstable/rpc"
@@ -25,47 +24,27 @@ const Echo = Tool.make("echo", {
 
 const EchoToolkit = Toolkit.make(Echo)
 
-const scripted = (turns: ReadonlyArray<ReadonlyArray<Response.StreamPartEncoded>>) =>
-  Effect.gen(function* () {
-    const index = yield* Ref.make(0)
-    return yield* LanguageModel.make({
-      generateText: () => Effect.succeed([]),
-      streamText: () =>
-        Stream.unwrap(
-          Effect.gen(function* () {
-            const i = yield* Ref.getAndUpdate(index, (n) => n + 1)
-            return Stream.fromIterable(turns[i] ?? [])
-          }),
-        ),
-    })
-  })
-
-const TestLayer = AgentLiveToolkit(EchoToolkit).pipe(
-  Layer.provide(
-    ModelCatalogLive([
-      {
-        id: "deepseek-chat",
-        provider: "deepseek",
-        layer: Layer.effect(
-          LanguageModel.LanguageModel,
-          scripted([
-            [{ type: "tool-call" as const, id: "c1", name: "echo", params: { note: "hi" } }],
-            [{ type: "text-delta" as const, id: "t1", delta: "done" }],
-          ]),
-        ),
-      },
-    ]),
-  ),
+const TestLayer = AgentLiveToolkit(EchoToolkit, {
+  models: [
+    {
+      id: "deepseek-chat",
+      provider: "deepseek",
+      layer: Layer.effect(
+        LanguageModel.LanguageModel,
+        scripted([
+          [{ type: "tool-call" as const, id: "c1", name: "echo", params: { note: "hi" } }],
+          [{ type: "text-delta" as const, id: "t1", delta: "done" }],
+        ]),
+      ),
+    },
+  ],
+  skills: [{ id: "summarize", description: "summarize text" }],
+}).pipe(
   Layer.provide(SessionStoreMemory),
   Layer.provide(cryptoWeb),
   Layer.provide(
     EchoToolkit.toLayer({
       echo: ({ note }) => Effect.succeed({ reply: note }),
-    }),
-  ),
-  Layer.provide(
-    Layer.succeed(Skills, {
-      list: [{ id: "summarize", description: "summarize text" }],
     }),
   ),
 )
@@ -161,19 +140,18 @@ const corruptSessionStore = Effect.gen(function* () {
   return SessionStoreFs(dir)
 }).pipe(Effect.orDie)
 
-const FsTestLayer = AgentLiveToolkit(EchoToolkit).pipe(
-  Layer.provide(
-    ModelCatalogLive([
-      {
-        id: "deepseek-chat",
-        provider: "deepseek",
-        layer: Layer.effect(
-          LanguageModel.LanguageModel,
-          scripted([[{ type: "text-delta" as const, id: "t1", delta: "done" }]]),
-        ),
-      },
-    ]),
-  ),
+const FsTestLayer = AgentLiveToolkit(EchoToolkit, {
+  models: [
+    {
+      id: "deepseek-chat",
+      provider: "deepseek",
+      layer: Layer.effect(
+        LanguageModel.LanguageModel,
+        scripted([[{ type: "text-delta" as const, id: "t1", delta: "done" }]]),
+      ),
+    },
+  ],
+}).pipe(
   Layer.provide(Layer.unwrap(corruptSessionStore)),
   Layer.provide(NodeFileSystem.layer),
   Layer.provide(cryptoWeb),

@@ -2,12 +2,12 @@ import { Plugin } from "@roop/agent/Plugin.ts"
 import { Effect, Ref, Schema } from "effect"
 import { Tool, Toolkit } from "effect/unstable/ai"
 
-export const Todo = Schema.Struct({
+const Todo = Schema.Struct({
   text: Schema.String,
   state: Schema.Literals(["pending", "active", "done"]),
 })
 
-export type Todo = typeof Todo.Type
+type Todo = typeof Todo.Type
 
 export const Todos = (): Plugin => {
   const toolkit = Toolkit.make(

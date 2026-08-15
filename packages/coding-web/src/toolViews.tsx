@@ -1,9 +1,16 @@
+import {
+  failureMessage,
+  isDelegation,
+  resultSummary,
+  summarizeTool,
+  WriteTodosParams,
+  type Item,
+} from "@roop/agent-rpc/Transcript.ts"
 import * as stylex from "@stylexjs/stylex"
 import { Option, Schema } from "effect"
 import { useState } from "react"
 
 import { Markdown } from "./Markdown.tsx"
-import type { Item } from "./state.ts"
 
 const styles = stylex.create({
   callout: {
@@ -115,115 +122,6 @@ const line = (text: string, max = 120) => {
   return flat.length > max ? `${flat.slice(0, max)}…` : flat
 }
 
-const bytes = (count: number) => (count < 1024 ? `${count}b` : `${(count / 1024).toFixed(1)}kb`)
-
-const ReadFileParams = Schema.Struct({ path: Schema.String })
-const ReadFileResult = Schema.Struct({ content: Schema.optionalKey(Schema.String) })
-const WriteFileParams = Schema.Struct({ path: Schema.String, content: Schema.String })
-const ListFilesParams = Schema.Struct({ path: Schema.optionalKey(Schema.String) })
-const ListFilesResult = Schema.Struct({ files: Schema.optionalKey(Schema.Array(Schema.String)) })
-const BashParams = Schema.Struct({ command: Schema.String })
-const BashResult = Schema.Struct({ exitCode: Schema.optionalKey(Schema.Finite) })
-const WebFetchParams = Schema.Struct({ url: Schema.String })
-const WebFetchResult = Schema.Struct({
-  status: Schema.optionalKey(Schema.Finite),
-  body: Schema.optionalKey(Schema.String),
-})
-const SkillParams = Schema.Struct({ id: Schema.String })
-const TaskParams = Schema.Struct({ task: Schema.String })
-const ResultMessage = Schema.Struct({ message: Schema.optionalKey(Schema.String) })
-const ResultSummary = Schema.Struct({ summary: Schema.optionalKey(Schema.String) })
-const TodoState = Schema.Literals(["pending", "active", "done"])
-const WriteTodosParams = Schema.Struct({
-  todos: Schema.Array(Schema.Struct({ text: Schema.String, state: TodoState })),
-})
-const FallbackParams = Schema.Record(Schema.String, Schema.Json)
-const jsonString = Schema.fromJsonString(Schema.Json)
-
-const formatParam = (value: Schema.Json): string =>
-  Schema.is(Schema.String)(value) ? line(value, 40) : line(Schema.encodeSync(jsonString)(value), 40)
-
-const fallback = (tool: Tool): [string, string] => {
-  const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(FallbackParams)(tool.params))
-  const summary =
-    decoded === undefined
-      ? ""
-      : Object.entries(decoded)
-          .map(([key, value]) => `${key}: ${formatParam(value)}`)
-          .join(" · ")
-  return [tool.name, summary]
-}
-
-const summaries = {
-  readFile: (tool: Tool): [string, string] => {
-    const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(ReadFileParams)(tool.params))
-    if (decoded === undefined) return fallback(tool)
-    const content =
-      tool.result === undefined
-        ? undefined
-        : Option.getOrUndefined(Schema.decodeUnknownOption(ReadFileResult)(tool.result))?.content
-    return ["read", `${decoded.path}${content === undefined ? "" : ` · ${bytes(content.length)}`}`]
-  },
-  writeFile: (tool: Tool): [string, string] => {
-    const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(WriteFileParams)(tool.params))
-    if (decoded === undefined) return fallback(tool)
-    return ["write", `${decoded.path} · ${bytes(decoded.content.length)}`]
-  },
-  listFiles: (tool: Tool): [string, string] => {
-    const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(ListFilesParams)(tool.params))
-    if (decoded === undefined) return fallback(tool)
-    const files =
-      tool.result === undefined
-        ? undefined
-        : Option.getOrUndefined(Schema.decodeUnknownOption(ListFilesResult)(tool.result))?.files
-    return [
-      "list",
-      `${decoded.path ?? "."}${files === undefined ? "" : ` · ${files.length} files`}`,
-    ]
-  },
-  bash: (tool: Tool): [string, string] => {
-    const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(BashParams)(tool.params))
-    if (decoded === undefined) return fallback(tool)
-    const exitCode =
-      tool.result === undefined
-        ? undefined
-        : Option.getOrUndefined(Schema.decodeUnknownOption(BashResult)(tool.result))?.exitCode
-    const exit = exitCode === undefined || exitCode === 0 ? "" : ` · exit ${exitCode}`
-    return ["$", `${line(decoded.command)}${exit}`]
-  },
-  webFetch: (tool: Tool): [string, string] => {
-    const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(WebFetchParams)(tool.params))
-    if (decoded === undefined) return fallback(tool)
-    const payload =
-      tool.result === undefined
-        ? undefined
-        : Option.getOrUndefined(Schema.decodeUnknownOption(WebFetchResult)(tool.result))
-    return [
-      "fetch",
-      `${line(decoded.url)}${payload?.status === undefined ? "" : ` · ${payload.status} · ${bytes(payload.body?.length ?? 0)}`}`,
-    ]
-  },
-  skill: (tool: Tool): [string, string] => {
-    const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(SkillParams)(tool.params))
-    if (decoded === undefined) return fallback(tool)
-    return ["skill", decoded.id]
-  },
-}
-
-const summarize = (tool: Tool): [string, string] => {
-  switch (tool.name) {
-    case "readFile":
-    case "writeFile":
-    case "listFiles":
-    case "bash":
-    case "webFetch":
-    case "skill":
-      return summaries[tool.name](tool)
-    default:
-      return fallback(tool)
-  }
-}
-
 const marks = { pending: "○", active: "◉", done: "✓" } as const
 
 const Todos = ({ tool }: { readonly tool: Tool }) => {
@@ -251,7 +149,7 @@ const activity = (items: ReadonlyArray<Item>): string => {
   switch (last.kind) {
     case "tool": {
       if (last.children !== undefined) return activity(last.children)
-      const [label, summary] = summarize(last)
+      const { label, summary } = summarizeTool(last)
       return `${label} ${summary}`
     }
     case "assistant":
@@ -265,16 +163,13 @@ const SubagentCard = ({ tool }: { readonly tool: Tool }) => {
   const [manual, setManual] = useState<boolean | undefined>(undefined)
   const running = tool.result === undefined
   const open = manual ?? running
-  const task =
-    Option.getOrUndefined(Schema.decodeUnknownOption(TaskParams)(tool.params))?.task ?? ""
+  const { summary: task } = summarizeTool(tool)
   const caption =
     tool.isFailure === true
-      ? (Option.getOrUndefined(Schema.decodeUnknownOption(ResultMessage)(tool.result))?.message ??
-        "failed")
+      ? (failureMessage(tool) ?? "failed")
       : running
         ? activity(tool.children ?? [])
-        : (Option.getOrUndefined(Schema.decodeUnknownOption(ResultSummary)(tool.result))?.summary ??
-          "")
+        : (resultSummary(tool) ?? "")
   return (
     <div {...stylex.props(styles.page)}>
       <button {...stylex.props(styles.pageHeader)} onClick={() => setManual(!open)}>
@@ -316,17 +211,12 @@ const SubagentCard = ({ tool }: { readonly tool: Tool }) => {
 }
 
 export const ToolCard = ({ tool }: { readonly tool: Tool }) => {
-  if (Schema.is(TaskParams)(tool.params)) {
+  if (isDelegation(tool.name)) {
     return <SubagentCard tool={tool} />
   }
-  const [label, summary] =
-    tool.isFailure === true
-      ? [
-          summarize({ ...tool, result: undefined })[0],
-          Option.getOrUndefined(Schema.decodeUnknownOption(ResultMessage)(tool.result))?.message ??
-            "failed",
-        ]
-      : summarize(tool)
+  const failed = tool.isFailure === true
+  const { label, summary } = summarizeTool(tool)
+  const shown = failed ? { label, summary: failureMessage(tool) ?? "failed" } : { label, summary }
   return (
     <div {...stylex.props(styles.callout)}>
       <span {...stylex.props(styles.dot, statusOf(tool))} />
@@ -334,10 +224,8 @@ export const ToolCard = ({ tool }: { readonly tool: Tool }) => {
         <Todos tool={tool} />
       ) : (
         <>
-          <span {...stylex.props(styles.name)}>{label}</span>
-          <span {...stylex.props(styles.summary, tool.isFailure === true && styles.failure)}>
-            {summary}
-          </span>
+          <span {...stylex.props(styles.name)}>{shown.label}</span>
+          <span {...stylex.props(styles.summary, failed && styles.failure)}>{shown.summary}</span>
         </>
       )}
     </div>

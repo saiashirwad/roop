@@ -47,12 +47,6 @@ pnpm install
 pnpm typecheck
 ```
 
-Run the simple Node client:
-
-```sh
-pnpm --filter=@roop/agent-node cli
-```
-
 Run the coding harness over RPC:
 
 ```sh

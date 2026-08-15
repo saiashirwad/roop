@@ -3,7 +3,7 @@ import type { Skill } from "@roop/agent/Skills.ts"
 import { Effect, FileSystem, Schema } from "effect"
 import { Tool, Toolkit } from "effect/unstable/ai"
 
-export class SkillNotFound extends Schema.TaggedErrorClass<SkillNotFound>()("SkillNotFound", {
+class SkillNotFound extends Schema.TaggedErrorClass<SkillNotFound>()("SkillNotFound", {
   message: Schema.String,
 }) {}
 

@@ -9,10 +9,13 @@ import {
   NodePath,
 } from "@effect/platform-node"
 import { AgentRpcServerHttp } from "@roop/agent-rpc/AgentRpcHttp.ts"
+import { delegationToolName } from "@roop/agent-rpc/Transcript.ts"
 import { AgentPlugins } from "@roop/agent/Plugin.ts"
 import { SessionStoreFs } from "@roop/agent/SessionStore.ts"
 import { subagent } from "@roop/agent/subagent.ts"
 import { CodingTools } from "@roop/coding-tools/CodingTools.ts"
+import { Claude } from "@roop/plugin-claude/Claude.ts"
+import { Codex } from "@roop/plugin-codex/Codex.ts"
 import { OpenAiCompatible } from "@roop/plugin-openai/OpenAiCompatible.ts"
 import { SkillsDir } from "@roop/plugin-skills/SkillsDir.ts"
 import { Todos } from "@roop/plugin-todo/Todos.ts"
@@ -31,22 +34,26 @@ export const server = (options: {
     apiKey: options.apiKey,
     models: [{ id: "deepseek-chat", description: "DeepSeek V3 via the OpenAI-compatible API" }],
   })
+  const codingTools = CodingTools(options.root)
+  const webTools = WebTools()
 
   const agent = Layer.unwrap(
     Effect.gen(function* () {
       const path = yield* Path.Path
       const skills = yield* SkillsDir(path.join(homedir(), ".agents", "skills"))
       return AgentPlugins([
-        CodingTools(options.root),
-        WebTools(),
+        codingTools,
+        webTools,
         Todos(),
         skills,
         deepseek,
+        Claude(),
+        Codex(),
         subagent({
-          name: "task",
+          name: delegationToolName,
           description:
             "Delegate a self-contained coding task to a subagent with its own coding tools. Give it one complete task and receive a summary.",
-          plugins: [CodingTools(options.root), WebTools(), deepseek],
+          plugins: [codingTools, webTools, deepseek],
           maxTurns: 25,
         }),
       ]).pipe(Layer.provide(SessionStoreFs(path.join(options.root, ".roop", "sessions"))))
