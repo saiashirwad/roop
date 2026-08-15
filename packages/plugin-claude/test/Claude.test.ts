@@ -2,6 +2,7 @@ import { NodeChildProcessSpawner, NodeFileSystem, NodePath } from "@effect/platf
 import { assert, it } from "@effect/vitest"
 import { Agent } from "@roop/agent/Agent.ts"
 import { AgentPlugins } from "@roop/agent/Plugin.ts"
+import { cryptoWeb } from "@roop/agent/cryptoWeb.ts"
 import { SessionStoreMemory } from "@roop/agent/SessionStore.ts"
 import { Effect, Layer, Stream } from "effect"
 
@@ -12,6 +13,7 @@ const live = process.env.CLAUDE_SMOKE !== undefined
 it.layer(
   AgentPlugins([Claude()]).pipe(
     Layer.provide(SessionStoreMemory),
+    Layer.provide(cryptoWeb),
     Layer.provide(NodeChildProcessSpawner.layer),
     Layer.provide(NodeFileSystem.layer),
     Layer.provide(NodePath.layer),

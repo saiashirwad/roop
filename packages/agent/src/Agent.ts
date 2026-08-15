@@ -1,4 +1,4 @@
-import { Context, Deferred, Effect, Layer, Ref, Schema, Stream } from "effect"
+import { Context, Crypto, Deferred, Effect, Layer, Option, Ref, Schema, Stream } from "effect"
 import { Chat, Toolkit } from "effect/unstable/ai"
 import type * as Tool from "effect/unstable/ai/Tool"
 
@@ -6,7 +6,23 @@ import { AgentEvent } from "./AgentEvent.ts"
 import { runLoop, type ErasedToolkit } from "./agentLoop.ts"
 import { capabilitiesFrom, type Capabilities } from "./Capabilities.ts"
 import { ModelCatalog, ModelNotFound } from "./ModelCatalog.ts"
-import { SessionNotFound, SessionStore, type Session, type SessionMeta } from "./SessionStore.ts"
+import type { SessionEvent } from "./SessionEvent.ts"
+
+const findLastSystemMessage = (events: ReadonlyArray<SessionEvent>): string | undefined => {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i]!
+    if (event._tag === "system/message") return event.content
+  }
+  return undefined
+}
+
+import {
+  SessionFormatError,
+  SessionNotFound,
+  SessionStore,
+  type Session,
+  type SessionMeta,
+} from "./SessionStore.ts"
 import { Skills } from "./Skills.ts"
 
 export class RunNotFound extends Schema.TaggedErrorClass<RunNotFound>()("RunNotFound", {
@@ -32,9 +48,11 @@ export class Agent extends Context.Service<
     readonly capabilities: () => Effect.Effect<Capabilities>
     readonly prompt: (
       options: PromptOptions,
-    ) => Stream.Stream<AgentEvent, ModelNotFound | SessionBusy>
+    ) => Stream.Stream<AgentEvent, ModelNotFound | SessionBusy | SessionFormatError>
     readonly interrupt: (sessionId: string) => Effect.Effect<void, RunNotFound>
-    readonly history: (sessionId: string) => Effect.Effect<Session, SessionNotFound>
+    readonly history: (
+      sessionId: string,
+    ) => Effect.Effect<Session, SessionNotFound | SessionFormatError>
     readonly sessions: () => Effect.Effect<ReadonlyArray<SessionMeta>>
   }
 >()("roop/Agent") {}
@@ -42,19 +60,19 @@ export class Agent extends Context.Service<
 export const AgentLive = <Tools extends Record<string, Tool.Any>>(
   toolkit: Toolkit.WithHandler<Tools>,
   options?: { readonly systemPrompt?: string | undefined },
-): Layer.Layer<Agent, never, ModelCatalog | SessionStore> =>
+): Layer.Layer<Agent, never, Crypto.Crypto | ModelCatalog | SessionStore> =>
   Layer.effect(
     Agent,
     Effect.gen(function* () {
       const catalog = yield* ModelCatalog
       const store = yield* SessionStore
+      const crypto = yield* Crypto.Crypto
       const skillsOption = yield* Effect.serviceOption(Skills)
       const skills = skillsOption._tag === "Some" ? skillsOption.value.list : []
       const active = yield* Ref.make(new Map<string, Deferred.Deferred<void>>())
       const loop = toolkit as unknown as ErasedToolkit
 
       const systemPrompt = options?.systemPrompt ?? ""
-      const seed = systemPrompt === "" ? [] : [{ role: "system" as const, content: systemPrompt }]
 
       const clearActive = (sessionId: string) =>
         Ref.update(active, (map) => {
@@ -74,17 +92,7 @@ export const AgentLive = <Tools extends Record<string, Tool.Any>>(
         prompt: (request) =>
           Stream.unwrap(
             Effect.gen(function* () {
-              const sessionId = request.sessionId ?? crypto.randomUUID()
-
-              const stored = yield* Effect.option(store.load(sessionId))
-              const messages = stored._tag === "Some" ? stored.value.messages : seed
-              const chat = yield* Chat.fromPrompt([
-                ...messages,
-                {
-                  role: "user" as const,
-                  content: [{ type: "text" as const, text: request.prompt }],
-                },
-              ])
+          const sessionId = request.sessionId ?? (yield* Effect.orDie(crypto.randomUUIDv4))
               const model = yield* catalog.resolve(request.modelId)
 
               const interrupt = yield* Deferred.make<void>()
@@ -97,14 +105,41 @@ export const AgentLive = <Tools extends Record<string, Tool.Any>>(
                 return yield* Effect.fail(new SessionBusy({ sessionId }))
               }
 
-              const persist = () =>
-                Effect.asVoid(
-                  Ref.get(chat.history).pipe(
-                    Effect.flatMap((history) => store.save(sessionId, history.content)),
-                  ),
-                )
+              const append = (event: SessionEvent) => store.append(sessionId, event)
 
-              yield* persist()
+              const stored = yield* store.load(sessionId).pipe(
+                Effect.map((session) => Option.some<Session>(session)),
+                Effect.catchIf(
+                  (error): error is SessionNotFound => error._tag === "SessionNotFound",
+                  () => Effect.succeed(Option.none<Session>()),
+                ),
+              )
+              // An empty requested systemPrompt leaves the log untouched; a
+              // non-empty one is appended whenever it diverges from the last
+              // system message already recorded (including when there is none).
+              if (systemPrompt !== "") {
+                const lastSystem = stored._tag === "Some"
+                  ? findLastSystemMessage(stored.value.events)
+                  : undefined
+                if (lastSystem !== systemPrompt) {
+                  yield* append({ _tag: "system/message", content: systemPrompt })
+                }
+              }
+              yield* append({ _tag: "user/message", content: request.prompt })
+
+              const chat = yield* Effect.orDie(
+                Chat.fromPrompt(
+                yield* store.deriveMessages(sessionId).pipe(
+                  // The log was just appended to, so a missing session here is
+                  // impossible; treat it as a defect rather than widening the
+                  // prompt error channel with SessionNotFound.
+                  Effect.catchIf(
+                    (error): error is SessionNotFound => error._tag === "SessionNotFound",
+                    () => Effect.die(new Error(`session ${sessionId} vanished after append`)),
+                  ),
+                ),
+              ),
+              )
 
               return runLoop({
                 chat,
@@ -112,7 +147,7 @@ export const AgentLive = <Tools extends Record<string, Tool.Any>>(
                 toolkit: loop,
                 maxTurns: request.maxTurns,
                 interrupt,
-                persist,
+                append,
               }).pipe(Stream.ensuring(clearActive(sessionId)))
             }),
           ),
@@ -134,5 +169,5 @@ export const AgentLive = <Tools extends Record<string, Tool.Any>>(
 export const AgentLiveToolkit = <Tools extends Record<string, Tool.Any>>(
   toolkit: Toolkit.Toolkit<Tools>,
   options?: { readonly systemPrompt?: string | undefined },
-): Layer.Layer<Agent, never, Tool.HandlersFor<Tools> | ModelCatalog | SessionStore> =>
+): Layer.Layer<Agent, never, Crypto.Crypto | Tool.HandlersFor<Tools> | ModelCatalog | SessionStore> =>
   Layer.unwrap(Effect.map(toolkit, (withHandler) => AgentLive(withHandler, options)))

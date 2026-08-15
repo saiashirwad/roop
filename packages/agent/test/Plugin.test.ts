@@ -4,7 +4,9 @@ import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
 
 import { Agent } from "../src/Agent.ts"
 import { AgentPlugins, Plugin } from "../src/Plugin.ts"
+import { deriveMessages } from "../src/SessionEvent.ts"
 import { SessionStoreMemory } from "../src/SessionStore.ts"
+import { cryptoWeb } from "../src/cryptoWeb.ts"
 import { subagent } from "../src/subagent.ts"
 
 const scripted = (turns: ReadonlyArray<ReadonlyArray<Record<string, unknown>>>) =>
@@ -74,7 +76,7 @@ const Composed = AgentPlugins([
     ],
     [{ type: "text-delta", id: "t1", delta: "done" }],
   ]),
-]).pipe(Layer.provide(SessionStoreMemory))
+]).pipe(Layer.provide(SessionStoreMemory), Layer.provide(cryptoWeb))
 
 it.layer(Composed)("AgentPlugins", (it) => {
   it.effect("merges tools, models, skills, and prompts from plugins", () =>
@@ -111,7 +113,7 @@ it.layer(Composed)("AgentPlugins", (it) => {
       )
 
       const session = yield* agent.history("p1")
-      const system = session.messages[0]!
+      const system = deriveMessages(session.events)[0]!
       assert.strictEqual(system.role, "system")
       assert.strictEqual(system.content, "echo things\n\nshout things")
     }),
@@ -136,7 +138,7 @@ const Parent = AgentPlugins([
     [{ type: "tool-call", id: "p1", name: "worker", params: { task: "do the thing" } }],
     [{ type: "text-delta", id: "p2", delta: "delegated" }],
   ]),
-]).pipe(Layer.provide(SessionStoreMemory))
+]).pipe(Layer.provide(SessionStoreMemory), Layer.provide(cryptoWeb))
 
 it.layer(Parent)("subagent", (it) => {
   it.effect("delegates a task to a composed child agent", () =>

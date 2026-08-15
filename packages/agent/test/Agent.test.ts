@@ -1,11 +1,17 @@
 import { assert, it } from "@effect/vitest"
+import { NodeFileSystem } from "@effect/platform-node"
 import { Effect, Exit, Fiber, Layer, Option, Queue, Ref, Schema, Stream } from "effect"
 import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
+import { mkdtempSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 
 import { Agent, AgentLiveToolkit } from "../src/Agent.ts"
 import { delegation } from "../src/agentTool.ts"
 import { ModelCatalogLive } from "../src/ModelCatalog.ts"
-import { SessionStoreMemory } from "../src/SessionStore.ts"
+import { deriveMessages } from "../src/SessionEvent.ts"
+import { SessionStoreFs, SessionStoreMemory } from "../src/SessionStore.ts"
+import { cryptoWeb } from "../src/cryptoWeb.ts"
 import { Skills } from "../src/Skills.ts"
 
 const Echo = Tool.make("echo", {
@@ -48,6 +54,7 @@ const Main = (model: Effect.Effect<LanguageModel.Service>) =>
   AgentLiveToolkit(EchoToolkit).pipe(
     Layer.provide(ModelCatalogLive([{ id: "fake", provider: "test", layer: modelLayer(model) }])),
     Layer.provide(SessionStoreMemory),
+    Layer.provide(cryptoWeb),
     Layer.provide(
       EchoToolkit.toLayer({
         echo: ({ note }) => Effect.succeed({ reply: note }),
@@ -79,8 +86,9 @@ it.layer(
       assert.strictEqual(finish.reason, "completed")
 
       const session = yield* agent.history("s1")
+      const messages = deriveMessages(session.events)
       assert.deepStrictEqual(
-        session.messages.map((message) => message.role),
+        messages.map((message) => message.role),
         ["user", "assistant", "tool"],
       )
     }),
@@ -182,7 +190,7 @@ it.layer(Main(hanging))("Agent kernel concurrency", (it) => {
 
       const session = yield* agent.history("s5")
       assert.deepStrictEqual(
-        session.messages.map((message) => message.role),
+        deriveMessages(session.events).map((message) => message.role),
         ["user"],
       )
     }),
@@ -218,6 +226,100 @@ it.layer(
     }),
   )
 })
+const sysPromptDir = mkdtempSync(join(tmpdir(), "agent-sysprompt-"))
+
+const withSystemPrompt = (systemPrompt: string, prompt: string, sessionId: string) =>
+  Effect.gen(function* () {
+    const agent = yield* Agent
+    yield* Stream.runDrain(agent.prompt({ prompt, sessionId }))
+    return yield* agent.history(sessionId)
+  }).pipe(
+    Effect.provide(
+      AgentLiveToolkit(EchoToolkit, { systemPrompt }).pipe(
+        Layer.provide(
+          ModelCatalogLive([
+            {
+              id: "fake",
+              provider: "test",
+              layer: modelLayer(scripted([[{ type: "text-delta" as const, id: "t1", delta: "done" }]])),
+            },
+          ]),
+        ),
+        Layer.provide(SessionStoreFs(sysPromptDir)),
+        Layer.provide(NodeFileSystem.layer),
+        Layer.provide(cryptoWeb),
+        Layer.provide(
+          EchoToolkit.toLayer({
+            echo: ({ note }) => Effect.succeed({ reply: note }),
+          }),
+        ),
+      ),
+    ),
+  )
+
+it.effect("records a new system/message when resuming with a diverging prompt", () =>
+  Effect.gen(function* () {
+    yield* withSystemPrompt("you are v1", "hello", "sys")
+    const session = yield* withSystemPrompt("you are v2", "again", "sys")
+
+    const systemEvents = session.events.filter((event) => event._tag === "system/message")
+    assert.deepStrictEqual(systemEvents.map((event: any) => event.content), [
+      "you are v1",
+      "you are v2",
+    ])
+
+    const systems = deriveMessages(session.events).filter((message) => message.role === "system")
+    assert.deepStrictEqual(
+      systems.map((message: any) => message.content),
+      ["you are v1", "you are v2"],
+    )
+  }),
+)
+
+it.effect("does not duplicate the system message when resuming with the same prompt", () =>
+  Effect.gen(function* () {
+    yield* withSystemPrompt("you are stable", "hello", "stable")
+    const session = yield* withSystemPrompt("you are stable", "again", "stable")
+
+    const systemEvents = session.events.filter((event) => event._tag === "system/message")
+    assert.deepStrictEqual(systemEvents.map((event: any) => event.content), ["you are stable"])
+  }),
+)
+
+const corruptDir = mkdtempSync(join(tmpdir(), "agent-corrupt-"))
+writeFileSync(join(corruptDir, "corrupt.json"), "{ not json")
+const FsLayer = AgentLiveToolkit(EchoToolkit).pipe(
+  Layer.provide(
+    ModelCatalogLive([
+      { id: "fake", provider: "test", layer: modelLayer(scripted([[{ type: "text-delta" as const, id: "t1", delta: "done" }]])) },
+    ]),
+  ),
+  Layer.provide(SessionStoreFs(corruptDir)),
+  Layer.provide(NodeFileSystem.layer),
+  Layer.provide(cryptoWeb),
+  Layer.provide(
+    EchoToolkit.toLayer({
+      echo: ({ note }) => Effect.succeed({ reply: note }),
+    }),
+  ),
+)
+
+it.layer(FsLayer)("Agent kernel corrupt session", (it) => {
+  it.effect("fails the prompt stream with SessionFormatError on a corrupt log", () =>
+    Effect.gen(function* () {
+      const agent = yield* Agent
+
+      const exit = yield* Effect.exit(
+        Stream.runDrain(agent.prompt({ prompt: "hi", sessionId: "corrupt" })),
+      )
+      assert.ok(Exit.isFailure(exit))
+      const failure = Option.getOrThrow(Exit.findErrorOption(exit)) as any
+      assert.strictEqual(failure._tag, "SessionFormatError")
+      assert.strictEqual(failure.sessionId, "corrupt")
+    }),
+  )
+})
+
 it.layer(
   Main(
     scripted([

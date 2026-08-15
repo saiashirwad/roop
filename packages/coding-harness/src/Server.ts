@@ -4,6 +4,7 @@ import { join } from "node:path"
 
 import {
   NodeChildProcessSpawner,
+  NodeCrypto,
   NodeFileSystem,
   NodeHttpClient,
   NodeHttpServer,
@@ -54,6 +55,7 @@ export const server = (options: {
   ).pipe(
     Layer.provide(SessionStoreFs(join(options.root, ".roop", "sessions"))),
     Layer.provide(NodeChildProcessSpawner.layer),
+    Layer.provide(NodeCrypto.layer),
     Layer.provide(NodeFileSystem.layer),
     Layer.provide(NodeHttpClient.layerUndici),
     Layer.provide(NodePath.layer),

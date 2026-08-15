@@ -6,6 +6,8 @@ import { NodeFileSystem } from "@effect/platform-node"
 import { assert, it } from "@effect/vitest"
 import { Agent } from "@roop/agent/Agent.ts"
 import { AgentPlugins, Plugin } from "@roop/agent/Plugin.ts"
+import { deriveMessages } from "@roop/agent/SessionEvent.ts"
+import { cryptoWeb } from "@roop/agent/cryptoWeb.ts"
 import { SessionStoreMemory } from "@roop/agent/SessionStore.ts"
 import { Effect, Layer, Ref, Stream } from "effect"
 import { LanguageModel } from "effect/unstable/ai"
@@ -57,7 +59,7 @@ const Main = Layer.unwrap(
       }),
     ])
   }).pipe(Effect.provide(NodeFileSystem.layer)),
-).pipe(Layer.provide(SessionStoreMemory))
+).pipe(Layer.provide(SessionStoreMemory), Layer.provide(cryptoWeb))
 
 it.layer(Main)("SkillsDir", (it) => {
   it.effect("advertises skills and serves their content", () =>
@@ -75,7 +77,7 @@ it.layer(Main)("SkillsDir", (it) => {
       assert.ok(result.result.content.includes("Always greet with enthusiasm."))
 
       const session = yield* agent.history("s1")
-      assert.ok(String(session.messages[0]!.content).includes("greet:"))
+      assert.ok(String(deriveMessages(session.events)[0]!.content).includes("greet:"))
     }),
   )
 })

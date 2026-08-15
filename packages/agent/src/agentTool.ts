@@ -69,6 +69,8 @@ export const delegation = (options: DelegationOptions) => {
             new DelegationFailed({ message: `model not found: ${error.modelId}` }),
           SessionBusy: (error) =>
             new DelegationFailed({ message: `session busy: ${error.sessionId}` }),
+          SessionFormatError: (error) =>
+            new DelegationFailed({ message: `corrupt session log: ${error.message}` }),
         }),
       )
 

@@ -1,6 +1,8 @@
 import { assert, it } from "@effect/vitest"
 import { Agent } from "@roop/agent/Agent.ts"
 import { AgentPlugins, Plugin } from "@roop/agent/Plugin.ts"
+import { deriveMessages } from "@roop/agent/SessionEvent.ts"
+import { cryptoWeb } from "@roop/agent/cryptoWeb.ts"
 import { SessionStoreMemory } from "@roop/agent/SessionStore.ts"
 import { Effect, Layer, Ref, Stream } from "effect"
 import { LanguageModel } from "effect/unstable/ai"
@@ -45,7 +47,7 @@ const Main = AgentPlugins([
       },
     ],
   }),
-]).pipe(Layer.provide(SessionStoreMemory))
+]).pipe(Layer.provide(SessionStoreMemory), Layer.provide(cryptoWeb))
 
 it.layer(Main)("Todos", (it) => {
   it.effect("stores the plan and instructs the model", () =>
@@ -66,7 +68,7 @@ it.layer(Main)("Todos", (it) => {
       assert.deepStrictEqual(result.result, { todos: plan })
 
       const session = yield* agent.history("t1")
-      assert.strictEqual(session.messages[0]!.role, "system")
+      assert.strictEqual(deriveMessages(session.events)[0]!.role, "system")
     }),
   )
 })

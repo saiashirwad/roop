@@ -1,6 +1,7 @@
 import { AgentRpc } from "@roop/agent-rpc/AgentRpc.ts"
 import { AgentRpcClientHttp } from "@roop/agent-rpc/AgentRpcHttp.ts"
 import type { AgentEvent } from "@roop/agent/AgentEvent.ts"
+import { deriveMessages } from "@roop/agent/SessionEvent.ts"
 import { Effect, Stream } from "effect"
 import { Atom } from "effect/unstable/reactivity"
 import { RpcClient } from "effect/unstable/rpc"
@@ -162,7 +163,7 @@ export const selectSessionAtom = runtime.fn((sessionId: string, ctx: Atom.FnCont
     const client = yield* RpcClient.make(AgentRpc)
     const session = yield* client.GetHistory({ sessionId })
     ctx.set(sessionAtom, sessionId)
-    ctx.set(transcriptAtom, fromMessages(session.messages))
+    ctx.set(transcriptAtom, fromMessages(deriveMessages(session.events)))
   }),
 )
 

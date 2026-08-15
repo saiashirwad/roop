@@ -1,9 +1,15 @@
 import { assert, it } from "@effect/vitest"
+import { NodeFileSystem } from "@effect/platform-node"
 import { AgentLiveToolkit } from "@roop/agent/Agent.ts"
 import { ModelCatalogLive } from "@roop/agent/ModelCatalog.ts"
-import { SessionStoreMemory } from "@roop/agent/SessionStore.ts"
+import { deriveMessages } from "@roop/agent/SessionEvent.ts"
+import { SessionStoreFs, SessionStoreMemory } from "@roop/agent/SessionStore.ts"
+import { cryptoWeb } from "@roop/agent/cryptoWeb.ts"
 import { Skills } from "@roop/agent/Skills.ts"
 import { Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect"
+import { mkdtempSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient"
 import * as HttpRouter from "effect/unstable/http/HttpRouter"
@@ -54,6 +60,7 @@ const TestLayer = AgentLiveToolkit(EchoToolkit).pipe(
     ]),
   ),
   Layer.provide(SessionStoreMemory),
+  Layer.provide(cryptoWeb),
   Layer.provide(
     EchoToolkit.toLayer({
       echo: ({ note }) => Effect.succeed({ reply: note }),
@@ -101,7 +108,7 @@ it.layer(AgentRpcServer.pipe(Layer.provide(TestLayer)))("AgentRpc", (it) => {
       )
       const history = yield* client.GetHistory({ sessionId: "s1" })
       assert.deepStrictEqual(
-        history.messages.map((message) => message.role),
+        deriveMessages(history.events).map((message) => message.role),
         ["user", "assistant", "tool"],
       )
 
@@ -142,6 +149,48 @@ it.layer(AgentRpcServer.pipe(Layer.provide(TestLayer)))("AgentRpc", (it) => {
         (Option.getOrThrow(Exit.findErrorOption(historyExit)) as any)._tag,
         "SessionNotFound",
       )
+    }),
+  )
+})
+
+const corruptDir = mkdtempSync(join(tmpdir(), "agentrpc-corrupt-"))
+writeFileSync(join(corruptDir, "corrupt.json"), "{ not json")
+
+const FsTestLayer = AgentLiveToolkit(EchoToolkit).pipe(
+  Layer.provide(
+    ModelCatalogLive([
+      {
+        id: "deepseek-chat",
+        provider: "deepseek",
+        layer: Layer.effect(
+          LanguageModel.LanguageModel,
+          scripted([[{ type: "text-delta" as const, id: "t1", delta: "done" }]]),
+        ),
+      },
+    ]),
+  ),
+  Layer.provide(SessionStoreFs(corruptDir)),
+  Layer.provide(NodeFileSystem.layer),
+  Layer.provide(cryptoWeb),
+  Layer.provide(
+    EchoToolkit.toLayer({
+      echo: ({ note }) => Effect.succeed({ reply: note }),
+    }),
+  ),
+)
+
+it.layer(AgentRpcServer.pipe(Layer.provide(FsTestLayer)))("AgentRpc corrupt session", (it) => {
+  it.effect("surfaces SessionFormatError from the prompt stream as an RPC error", () =>
+    Effect.gen(function* () {
+      const client = yield* RpcTest.makeClient(AgentRpc)
+
+      const exit = yield* Effect.exit(
+        Stream.runDrain(client.Prompt({ prompt: "hi", sessionId: "corrupt" })),
+      )
+      assert.ok(Exit.isFailure(exit))
+      const failure = Option.getOrThrow(Exit.findErrorOption(exit)) as any
+      assert.strictEqual(failure._tag, "SessionFormatError")
+      assert.strictEqual(failure.sessionId, "corrupt")
     }),
   )
 })

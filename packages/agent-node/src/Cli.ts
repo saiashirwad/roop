@@ -5,6 +5,7 @@ import { NodeHttpClient } from "@effect/platform-node"
 import { Agent } from "@roop/agent/Agent.ts"
 import type { AgentEvent } from "@roop/agent/AgentEvent.ts"
 import { AgentPlugins, Plugin } from "@roop/agent/Plugin.ts"
+import { cryptoWeb } from "@roop/agent/cryptoWeb.ts"
 import { SessionStoreMemory } from "@roop/agent/SessionStore.ts"
 import { OpenAiCompatible } from "@roop/plugin-openai/OpenAiCompatible.ts"
 import { Effect, Layer, Schema, Stream } from "effect"
@@ -82,6 +83,7 @@ const deepseek = OpenAiCompatible({
 
 const Live = AgentPlugins([deepseek, now]).pipe(
   Layer.provide(SessionStoreMemory),
+    Layer.provide(cryptoWeb),
   Layer.provide(NodeHttpClient.layerUndici),
 )
 

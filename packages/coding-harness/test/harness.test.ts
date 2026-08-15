@@ -8,6 +8,7 @@ import { AgentRpc } from "@roop/agent-rpc/AgentRpc.ts"
 import { AgentRpcClientHttp, AgentRpcServerHttp } from "@roop/agent-rpc/AgentRpcHttp.ts"
 import { Agent } from "@roop/agent/Agent.ts"
 import { AgentPlugins, Plugin } from "@roop/agent/Plugin.ts"
+import { cryptoWeb } from "@roop/agent/cryptoWeb.ts"
 import { SessionStoreMemory } from "@roop/agent/SessionStore.ts"
 import { CodingTools } from "@roop/coding-tools/CodingTools.ts"
 import { Effect, Layer, Ref, Stream } from "effect"
@@ -46,6 +47,7 @@ const agentLayer = (model: Effect.Effect<LanguageModel.Service>) =>
     }),
   ]).pipe(
     Layer.provide(SessionStoreMemory),
+    Layer.provide(cryptoWeb),
     Layer.provide(NodeChildProcessSpawner.layer),
     Layer.provide(NodeFileSystem.layer),
     Layer.provide(NodePath.layer),

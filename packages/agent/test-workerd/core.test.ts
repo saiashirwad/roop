@@ -5,6 +5,7 @@ import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
 import { Agent, AgentLiveToolkit } from "../src/Agent.ts"
 import { ModelCatalogLive } from "../src/ModelCatalog.ts"
 import { SessionStoreMemory } from "../src/SessionStore.ts"
+import { cryptoWeb } from "../src/cryptoWeb.ts"
 
 const Ping = Tool.make("ping", {
   description: "reply with ok",
@@ -46,6 +47,7 @@ const Live = AgentLiveToolkit(PingToolkit).pipe(
     ]),
   ),
   Layer.provide(SessionStoreMemory),
+  Layer.provide(cryptoWeb),
   Layer.provide(
     PingToolkit.toLayer({
       ping: () => Effect.succeed({ ok: true }),
