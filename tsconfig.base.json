@@ -25,12 +25,10 @@
       {
         "name": "@effect/language-service",
         "transform": "@effect/language-service/transform",
-        "diagnosticSeverity": {
-          "returnEffectInGen": "off",
-          "layerMergeAllWithDependencies": "off",
-          "preferSchemaOverJson": "off",
-          "effectSucceedWithVoid": "off"
-        }
+        "includeSuggestionsInTsc": true,
+        "ignoreEffectSuggestionsInTscExitCode": true,
+        "ignoreEffectWarningsInTscExitCode": false,
+        "ignoreEffectErrorsInTscExitCode": false
       }
     ],
     "resolveJsonModule": true,

@@ -1,0 +1,24 @@
+{
+  "name": "@roop/agent",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./*": "./src/*"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run && vitest run --config vitest.workerd.config.ts"
+  },
+  "dependencies": {
+    "effect": "4.0.0-beta.97"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.21.2",
+    "@effect/platform-node": "4.0.0-beta.97",
+    "@effect/vitest": "4.0.0-beta.97",
+    "@types/node": "^26.1.1",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  }
+}

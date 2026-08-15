@@ -1,0 +1,36 @@
+import { Plugin } from "@roop/agent/Plugin.ts"
+import { Effect, Ref, Schema } from "effect"
+import { Tool, Toolkit } from "effect/unstable/ai"
+
+export const Todo = Schema.Struct({
+  text: Schema.String,
+  state: Schema.Literals(["pending", "active", "done"]),
+})
+
+export type Todo = typeof Todo.Type
+
+export const Todos = (): Plugin => {
+  const toolkit = Toolkit.make(
+    Tool.make("writeTodos", {
+      description:
+        "Replace the todo list with the given items. Send the full list every time; use it to plan multi-step work and keep exactly one item active.",
+      parameters: Schema.Struct({ todos: Schema.Array(Todo) }),
+      success: Schema.Struct({ todos: Schema.Array(Todo) }),
+    }),
+  )
+
+  return Plugin({
+    name: "todos",
+    toolkit,
+    handlers: toolkit.toLayer(
+      Effect.gen(function* () {
+        const store = yield* Ref.make<ReadonlyArray<Todo>>([])
+        return {
+          writeTodos: ({ todos }) => Effect.as(Ref.set(store, todos), { todos }),
+        }
+      }),
+    ),
+    systemPrompt:
+      "For any task with more than one step, first write a todo list with the writeTodos tool, then keep it current as you work: mark the item you are working on active and finished items done.",
+  })
+}
