@@ -6,10 +6,8 @@ import { LanguageModel, Response, Tool, Toolkit } from "effect/unstable/ai"
 import { Agent, AgentLiveToolkit } from "../src/Agent.ts"
 import { delegation } from "../src/agentTool.ts"
 import { cryptoWeb } from "../src/cryptoWeb.ts"
-import { ModelCatalogLive } from "../src/ModelCatalog.ts"
 import { deriveMessages } from "../src/SessionEvent.ts"
 import { SessionStoreFs, SessionStoreMemory } from "../src/SessionStore.ts"
-import { Skills } from "../src/Skills.ts"
 
 const Echo = Tool.make("echo", {
   description: "echo a note back",
@@ -46,8 +44,9 @@ const modelLayer = (model: Effect.Effect<LanguageModel.Service>) =>
   Layer.effect(LanguageModel.LanguageModel, model)
 
 const Main = (model: Effect.Effect<LanguageModel.Service>) =>
-  AgentLiveToolkit(EchoToolkit).pipe(
-    Layer.provide(ModelCatalogLive([{ id: "fake", provider: "test", layer: modelLayer(model) }])),
+  AgentLiveToolkit(EchoToolkit, {
+    models: [{ id: "fake", provider: "test", layer: modelLayer(model) }],
+  }).pipe(
     Layer.provide(SessionStoreMemory),
     Layer.provide(cryptoWeb),
     Layer.provide(
@@ -218,10 +217,15 @@ it.layer(Main(hanging))("Agent kernel concurrency", (it) => {
 })
 
 it.layer(
-  Main(scripted([[]])).pipe(
+  AgentLiveToolkit(EchoToolkit, {
+    models: [{ id: "fake", provider: "test", layer: modelLayer(scripted([[]])) }],
+    skills: [{ id: "summarize", description: "summarize text" }],
+  }).pipe(
+    Layer.provide(SessionStoreMemory),
+    Layer.provide(cryptoWeb),
     Layer.provide(
-      Layer.succeed(Skills, {
-        list: [{ id: "summarize", description: "summarize text" }],
+      EchoToolkit.toLayer({
+        echo: ({ note }) => Effect.succeed({ reply: note }),
       }),
     ),
   ),
@@ -249,18 +253,18 @@ const withSystemPrompt = (systemPrompt: string, prompt: string, sessionId: strin
     return yield* agent.history(sessionId)
   }).pipe(
     Effect.provide(
-      AgentLiveToolkit(EchoToolkit, { systemPrompt }).pipe(
-        Layer.provide(
-          ModelCatalogLive([
-            {
-              id: "fake",
-              provider: "test",
-              layer: modelLayer(
-                scripted([[{ type: "text-delta" as const, id: "t1", delta: "done" }]]),
-              ),
-            },
-          ]),
-        ),
+      AgentLiveToolkit(EchoToolkit, {
+        systemPrompt,
+        models: [
+          {
+            id: "fake",
+            provider: "test",
+            layer: modelLayer(
+              scripted([[{ type: "text-delta" as const, id: "t1", delta: "done" }]]),
+            ),
+          },
+        ],
+      }).pipe(
         Layer.provide(SessionStoreFs(sysPromptDir)),
         Layer.provide(NodeFileSystem.layer),
         Layer.provide(cryptoWeb),
@@ -313,16 +317,15 @@ const corruptDir = await Effect.runPromise(
     return dir
   }).pipe(Effect.orDie, Effect.provide(NodeFileSystem.layer)),
 )
-const FsLayer = AgentLiveToolkit(EchoToolkit).pipe(
-  Layer.provide(
-    ModelCatalogLive([
-      {
-        id: "fake",
-        provider: "test",
-        layer: modelLayer(scripted([[{ type: "text-delta" as const, id: "t1", delta: "done" }]])),
-      },
-    ]),
-  ),
+const FsLayer = AgentLiveToolkit(EchoToolkit, {
+  models: [
+    {
+      id: "fake",
+      provider: "test",
+      layer: modelLayer(scripted([[{ type: "text-delta" as const, id: "t1", delta: "done" }]])),
+    },
+  ],
+}).pipe(
   Layer.provide(SessionStoreFs(corruptDir)),
   Layer.provide(NodeFileSystem.layer),
   Layer.provide(cryptoWeb),

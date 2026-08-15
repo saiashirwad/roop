@@ -1,9 +1,8 @@
 import { assert, it } from "@effect/vitest"
-import { Effect, Layer, Schema, Stream } from "effect"
-import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
+import { Effect, Exit, Schema, Scope } from "effect"
+import { Tool, Toolkit } from "effect/unstable/ai"
 
 import { AgentContext, AgentContextLive } from "../src/AgentContext.ts"
-import { ModelCatalogLive } from "../src/ModelCatalog.ts"
 
 const Global = Tool.make("echo", {
   description: "global echo",
@@ -27,23 +26,7 @@ const GlobalToolkit = Toolkit.make(Global)
 const ScopedToolkit = Toolkit.make(Scoped)
 const ExtraToolkit = Toolkit.make(Extra)
 
-const contextLayer = AgentContextLive().pipe(
-  Layer.provide(
-    ModelCatalogLive([
-      {
-        id: "test",
-        provider: "test",
-        layer: Layer.effect(
-          LanguageModel.LanguageModel,
-          LanguageModel.make({
-            generateText: () => Effect.succeed([]),
-            streamText: () => Stream.empty,
-          }),
-        ),
-      },
-    ]),
-  ),
-)
+const contextLayer = AgentContextLive()
 
 it.layer(contextLayer)("AgentContext", (it) => {
   it.effect("updates the resolved tool view immediately and restores a shadowed tool", () =>
@@ -66,14 +49,12 @@ it.layer(contextLayer)("AgentContext", (it) => {
       yield* context.registerTool(Global, global as any).pipe(Effect.asVoid)
       assert.strictEqual((yield* context.tools).echo!.description, "global echo")
 
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
-          yield* context.registerTool(Scoped, scoped as any).pipe(Effect.asVoid)
-          assert.strictEqual((yield* context.tools).echo!.description, "scoped echo")
-        }),
-      )
+      const target = yield* Scope.make()
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
+      yield* Effect.asVoid(context.registerTool(Scoped, scoped as any, { scope: target }))
+      assert.strictEqual((yield* context.tools).echo!.description, "scoped echo")
 
+      yield* Scope.close(target, Exit.succeed(undefined))
       assert.strictEqual((yield* context.tools).echo!.description, "global echo")
     }),
   )
@@ -85,14 +66,12 @@ it.layer(contextLayer)("AgentContext", (it) => {
         Effect.provide(ExtraToolkit.toLayer({ extra: () => Effect.succeed("ok") })),
       )
 
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
-          yield* context.registerTool(Extra, extra as any).pipe(Effect.asVoid)
-          assert.ok("extra" in (yield* context.tools))
-        }),
-      )
+      const target = yield* Scope.make()
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
+      yield* Effect.asVoid(context.registerTool(Extra, extra as any, { scope: target }))
+      assert.ok("extra" in (yield* context.tools))
 
+      yield* Scope.close(target, Exit.succeed(undefined))
       assert.ok(!("extra" in (yield* context.tools)))
     }),
   )

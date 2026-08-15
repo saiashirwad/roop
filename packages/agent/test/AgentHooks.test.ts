@@ -15,7 +15,6 @@ import {
 } from "../src/AgentHooks.ts"
 import { AgentHooks } from "../src/AgentHooks.ts"
 import { cryptoWeb } from "../src/cryptoWeb.ts"
-import { ModelCatalogLive } from "../src/ModelCatalog.ts"
 import { SessionStoreMemory } from "../src/SessionStore.ts"
 
 const Echo = Tool.make("echo", {
@@ -57,8 +56,9 @@ const Main = (
   model: Effect.Effect<LanguageModel.Service>,
   hooks?: Layer.Layer<AgentHooks, never, never>,
 ) => {
-  const base = AgentLiveToolkit(EchoToolkit).pipe(
-    Layer.provide(ModelCatalogLive([{ id: "fake", provider: "test", layer: modelLayer(model) }])),
+  const base = AgentLiveToolkit(EchoToolkit, {
+    models: [{ id: "fake", provider: "test", layer: modelLayer(model) }],
+  }).pipe(
     Layer.provide(SessionStoreMemory),
     Layer.provide(cryptoWeb),
     Layer.provide(
