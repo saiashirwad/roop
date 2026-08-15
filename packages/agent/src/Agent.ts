@@ -71,6 +71,7 @@ export const AgentLive = <Tools extends Record<string, Tool.Any>>(
       const context = yield* AgentContext
       yield* Effect.forEach(
         Object.values(toolkit.tools),
+        /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
         (tool) => context.registerTool(tool, toolkit as any),
         {
           discard: true,

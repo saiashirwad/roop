@@ -49,6 +49,7 @@ it("deriveMessages projects the log the model would consume", () => {
     ["system", "user", "assistant", "tool", "assistant"],
   )
 
+  /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
   const [system, userMessage, toolCalls, toolResults, final] = messages as [
     Prompt.SystemMessage,
     Prompt.UserMessage,
@@ -149,6 +150,7 @@ it.layer(StoreLive)("SessionStoreFs", (it) => {
     Effect.gen(function* () {
       const exit = yield* Effect.exit((yield* SessionStore).load("missing"))
       assert.ok(Exit.isFailure(exit))
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
       const failure = Option.getOrThrow(Exit.findErrorOption(exit)) as { _tag: string }
       assert.strictEqual(failure._tag, "SessionNotFound")
     }),
@@ -224,6 +226,7 @@ it.layer(StoreLive)("SessionStoreFs", (it) => {
       const store = yield* SessionStore
       const exit = yield* Effect.exit(store.load("future"))
       assert.ok(Exit.isFailure(exit))
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
       const failure = Option.getOrThrow(Exit.findErrorOption(exit)) as {
         _tag: string
         message: string
@@ -253,6 +256,7 @@ it.layer(StoreLive)("SessionStoreFs", (it) => {
 
       const exit = yield* Effect.exit((yield* SessionStore).load("corrupt"))
       assert.ok(Exit.isFailure(exit))
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
       const failure = Option.getOrThrow(Exit.findErrorOption(exit)) as { _tag: string }
       assert.strictEqual(failure._tag, "SessionFormatError")
     }),

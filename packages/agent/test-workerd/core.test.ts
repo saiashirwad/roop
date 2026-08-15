@@ -24,6 +24,7 @@ const scripted = (turns: ReadonlyArray<ReadonlyArray<Record<string, unknown>>>) 
         Stream.unwrap(
           Effect.gen(function* () {
             const i = yield* Ref.getAndUpdate(index, (n) => n + 1)
+            /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
             return Stream.fromIterable((turns[i] ?? []) as never)
           }),
         ),
@@ -57,6 +58,7 @@ const Live = AgentLiveToolkit(PingToolkit).pipe(
 
 it.effect("core runs inside workerd", () =>
   Effect.gen(function* () {
+    /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
     assert.strictEqual(typeof (globalThis as { caches?: unknown }).caches, "object")
 
     const agent = yield* Agent

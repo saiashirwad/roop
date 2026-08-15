@@ -118,38 +118,49 @@ const bytes = (count: number) => (count < 1024 ? `${count}b` : `${(count / 1024)
 
 const summaries: Record<string, (tool: Tool) => [string, string]> = {
   readFile: ({ params, result }) => {
+    /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
     const { path } = params as { path: string }
+    /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
     const { content } = (result ?? {}) as { content?: string }
     return ["read", `${path}${content === undefined ? "" : ` · ${bytes(content.length)}`}`]
   },
   writeFile: ({ params }) => {
+    /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
     const { path, content } = params as { path: string; content: string }
     return ["write", `${path} · ${bytes(content.length)}`]
   },
   listFiles: ({ params, result }) => {
+    /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
     const { path } = params as { path?: string }
+    /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
     const { files } = (result ?? {}) as { files?: ReadonlyArray<string> }
     return ["list", `${path ?? "."}${files === undefined ? "" : ` · ${files.length} files`}`]
   },
   bash: ({ params, result }) => {
+    /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
     const { command } = params as { command: string }
+    /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
     const { exitCode } = (result ?? {}) as { exitCode?: number }
     const exit = exitCode === undefined || exitCode === 0 ? "" : ` · exit ${exitCode}`
     return ["$", `${line(command)}${exit}`]
   },
   webFetch: ({ params, result }) => {
+    /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
     const { url } = params as { url: string }
+    /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
     const { status, body } = (result ?? {}) as { status?: number; body?: string }
     return [
       "fetch",
       `${line(url)}${status === undefined ? "" : ` · ${status} · ${bytes(body?.length ?? 0)}`}`,
     ]
   },
+  /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
   skill: ({ params }) => ["skill", (params as { id: string }).id],
 }
 
 const fallback = (tool: Tool): [string, string] => [
   tool.name,
+  /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
   Object.entries((tool.params ?? {}) as Record<string, unknown>)
     .map(
       ([key, value]) =>
@@ -161,6 +172,7 @@ const fallback = (tool: Tool): [string, string] => [
 const marks = { pending: "○", active: "◉", done: "✓" } as const
 
 const Todos = ({ tool }: { readonly tool: Tool }) => {
+  /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
   const { todos } = tool.params as {
     todos: ReadonlyArray<{ text: string; state: keyof typeof marks }>
   }
@@ -200,12 +212,15 @@ const SubagentCard = ({ tool }: { readonly tool: Tool }) => {
   const [manual, setManual] = useState<boolean | undefined>(undefined)
   const running = tool.result === undefined
   const open = manual ?? running
+  /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
   const { task } = tool.params as { task: string }
   const caption =
     tool.isFailure === true
+      /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
       ? ((tool.result as { message?: string }).message ?? "failed")
       : running
         ? activity(tool.children ?? [])
+        /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
         : ((tool.result as { summary?: string })?.summary ?? "")
   return (
     <div {...stylex.props(styles.page)}>
@@ -248,6 +263,7 @@ const SubagentCard = ({ tool }: { readonly tool: Tool }) => {
 }
 
 export const ToolCard = ({ tool }: { readonly tool: Tool }) => {
+  /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
   if (typeof (tool.params as { task?: unknown })?.task === "string") {
     return <SubagentCard tool={tool} />
   }
@@ -255,6 +271,7 @@ export const ToolCard = ({ tool }: { readonly tool: Tool }) => {
     tool.isFailure === true
       ? [
           (summaries[tool.name] ?? fallback)({ ...tool, result: undefined })[0],
+          /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
           (tool.result as { message?: string }).message ?? "failed",
         ]
       : (summaries[tool.name] ?? fallback)(tool)

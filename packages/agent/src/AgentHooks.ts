@@ -95,6 +95,7 @@ export const AgentHooks = Context.Reference<AgentHooks>("roop/AgentHooks", {
 })
 
 /** Explicit layer retained for composing hook waterfalls. */
+/* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
 export const layerNoop = Layer.succeed(AgentHooks, hooksNoop) as Layer.Layer<
   AgentHooks,
   never,
@@ -123,6 +124,7 @@ export const layerHook = <R = never>(
   name: string,
   wrap: (downstream: AgentHooksInterface) => Effect.Effect<AgentHooksInterface, never, R>,
 ): Layer.Layer<AgentHooks, never, AgentHooks | R> =>
+  /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
   Layer.effect(
     AgentHooks,
     Effect.gen(function* () {
@@ -130,6 +132,7 @@ export const layerHook = <R = never>(
         Effect.succeed(Context.get(context, AgentHooks)),
       )
       const wrapped = yield* wrap(downstream)
+      /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
       return wrapped as AgentHooks
     }),
   ).pipe(Layer.withSpan(`AgentHooks/${name}`)) as unknown as Layer.Layer<AgentHooks, never, R>

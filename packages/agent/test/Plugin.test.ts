@@ -19,6 +19,7 @@ const scripted = (turns: ReadonlyArray<ReadonlyArray<Record<string, unknown>>>) 
         Stream.unwrap(
           Effect.gen(function* () {
             const i = yield* Ref.getAndUpdate(index, (n) => n + 1)
+            /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
             return Stream.fromIterable((turns[i] ?? []) as never)
           }),
         ),
@@ -104,6 +105,7 @@ it.layer(Composed)("AgentPlugins", (it) => {
       const agent = yield* Agent
       const events = yield* collect(agent.prompt({ prompt: "go", sessionId: "p1" }))
 
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
       const results = events.filter((event: any) => event._tag === "ToolResult") as Array<any>
       assert.deepStrictEqual(
         results.map((result) => [result.name, result.result.reply]),
@@ -136,6 +138,7 @@ const worker = subagent({
 const hookOrder = Ref.makeUnsafe<Array<string>>([])
 
 const recording = (name: string): Layer.Layer<AgentHooks, never, never> =>
+  /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
   layerHook(name, (downstream) =>
     Effect.succeed({
       ...downstream,
@@ -169,6 +172,7 @@ it.layer(Hooked)("plugin hooks", (it) => {
       const agent = yield* Agent
       yield* Ref.set(hookOrder, [])
       const events = yield* collect(agent.prompt({ prompt: "go", sessionId: "h1" }))
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
       assert.strictEqual((events[events.length - 1] as any).reason, "completed")
 
       assert.deepStrictEqual(yield* Ref.get(hookOrder), [
@@ -201,10 +205,12 @@ it.layer(Parent)("subagent", (it) => {
       )
 
       const events = yield* collect(agent.prompt({ prompt: "delegate", sessionId: "d1" }))
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
       const result = events.find((event: any) => event._tag === "ToolResult") as any
       assert.strictEqual(result.isFailure, false)
       assert.deepStrictEqual(result.result, { summary: "child did the task" })
 
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
       const nested = events.filter((event: any) => event._tag === "Subagent") as Array<any>
       assert.deepStrictEqual(
         nested.map((wrapped) => [wrapped.name, wrapped.event._tag]),

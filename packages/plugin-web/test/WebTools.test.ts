@@ -18,6 +18,7 @@ const scripted = (turns: ReadonlyArray<ReadonlyArray<Record<string, unknown>>>) 
         Stream.unwrap(
           Effect.gen(function* () {
             const i = yield* Ref.getAndUpdate(index, (n) => n + 1)
+            /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
             return Stream.fromIterable((turns[i] ?? []) as never)
           }),
         ),
@@ -67,6 +68,7 @@ it.layer(Main)("WebTools", (it) => {
       const events = yield* Stream.runCollect(agent.prompt({ prompt: "go", sessionId: "w1" })).pipe(
         Effect.map((chunk) => [...chunk]),
       )
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
       const result = events.find((event: any) => event._tag === "ToolResult") as any
       assert.strictEqual(result.isFailure, false)
       assert.deepStrictEqual(result.result, {

@@ -10,4 +10,4 @@ if [ ! -d "$repo_dir/.git" ]; then
   git clone "$repo_url" "$repo_dir"
 fi
 
-pnpm exec effect-tsgo patch
+pnpm exec effect-tsgo patch --oxlint

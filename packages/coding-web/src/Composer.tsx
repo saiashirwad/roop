@@ -190,7 +190,7 @@ const InlineMenu = ({
   return (
     <LexicalTypeaheadMenuPlugin<Option>
       commandPriority={COMMAND_PRIORITY_HIGH}
-      options={options as Array<Option>}
+      options={options}
       triggerFn={triggerFn}
       onQueryChange={(matching) => {
         setQuery(matching ?? "")

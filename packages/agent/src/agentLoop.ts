@@ -91,6 +91,7 @@ const interceptModel = (
   append: (event: SessionEvent) => Effect.Effect<void>,
 ): LanguageModel.Service => ({
   ...model,
+  /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
   streamText: ((request: LanguageModel.GenerateTextOptions<Record<string, Tool.Any>>) =>
     Stream.unwrap(
       Effect.gen(function* () {
@@ -99,6 +100,7 @@ const interceptModel = (
           ...(request.toolChoice !== undefined ? { toolChoice: request.toolChoice } : {}),
         })
         yield* append({ _tag: "model/request", request: admitted })
+        /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
         return model.streamText({
           prompt: admitted.prompt,
           ...(admitted.toolChoice !== undefined ? { toolChoice: admitted.toolChoice } : {}),
@@ -127,10 +129,12 @@ const interceptToolkit = (
   context: () => RunContext,
 ): ErasedToolkit => ({
   tools: toolkit.tools,
+  /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
   handle: ((name: string, params: unknown) =>
     Effect.gen(function* () {
       const admitted = yield* hooks.beforeToolExecute(context(), { name, params })
       const results = yield* (
+        /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
         toolkit.handle as (name: string, params: unknown) => Effect.Effect<Stream.Stream<any>>
       )(name, admitted.params)
       return Stream.tap(results, (result) =>

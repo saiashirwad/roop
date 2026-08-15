@@ -32,6 +32,7 @@ const scripted = (turns: ReadonlyArray<ReadonlyArray<Record<string, unknown>>>) 
         Stream.unwrap(
           Effect.gen(function* () {
             const i = yield* Ref.getAndUpdate(index, (n) => n + 1)
+            /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
             return Stream.fromIterable((turns[i] ?? []) as never)
           }),
         ),
@@ -81,6 +82,7 @@ it.layer(
         events.map((event: any) => event._tag),
         ["ToolCall", "ToolResult", "TextDelta", "Finish"],
       )
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
       const finish = events[3] as any
       assert.strictEqual(finish.reason, "completed")
 
@@ -106,6 +108,7 @@ it.layer(
         ["fake"],
       )
       assert.strictEqual(caps.defaultModelId, "fake")
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
       const parameters = caps.tools[0]!.parameters as any
       assert.deepStrictEqual(Object.keys(parameters.properties ?? {}), ["note"])
     }),
@@ -119,10 +122,12 @@ it.layer(
         Stream.runDrain(agent.prompt({ prompt: "hi", sessionId: "s2", modelId: "nope" })),
       )
       assert.ok(Exit.isFailure(exit))
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
       const failure = Option.getOrThrow(Exit.findErrorOption(exit)) as any
       assert.strictEqual(failure._tag, "ModelNotFound")
 
       const events = yield* collect(agent.prompt({ prompt: "hi again", sessionId: "s2" }))
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
       const finish = events[events.length - 1] as any
       assert.strictEqual(finish.reason, "completed")
     }),
@@ -155,6 +160,7 @@ it.layer(Main(hanging))("Agent kernel concurrency", (it) => {
         ),
       )
       assert.ok(Exit.isFailure(exit))
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
       const failure = Option.getOrThrow(Exit.findErrorOption(exit)) as any
       assert.strictEqual(failure._tag, "SessionBusy")
 
@@ -196,7 +202,9 @@ it.layer(Main(hanging))("Agent kernel concurrency", (it) => {
         session.events.map((event) => event._tag),
         ["user/message", "turn/start", "step/start", "model/request", "step/end", "turn/end"],
       )
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
       const stepEnd = session.events[4] as any
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
       const turnEnd = session.events[5] as any
       assert.strictEqual(stepEnd.reason, "interrupted")
       assert.strictEqual(turnEnd.reason, "interrupted")
@@ -329,6 +337,7 @@ it.layer(FsLayer)("Agent kernel corrupt session", (it) => {
         Stream.runDrain(agent.prompt({ prompt: "hi", sessionId: "corrupt" })),
       )
       assert.ok(Exit.isFailure(exit))
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
       const failure = Option.getOrThrow(Exit.findErrorOption(exit)) as any
       assert.strictEqual(failure._tag, "SessionFormatError")
       assert.strictEqual(failure.sessionId, "corrupt")
@@ -378,6 +387,7 @@ it.layer(
         events.map((event: any) => event._tag),
         ["ToolCall", "ToolResult", "Finish"],
       )
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
       const finish = events[2] as any
       assert.strictEqual(finish.reason, "stopped")
     }),

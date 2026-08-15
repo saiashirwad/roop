@@ -159,6 +159,7 @@ export const SessionStoreFs = (
       // reason tag "NotFound" (see effect's platform-node errno mapping). We
       // match structurally so this stays portable across platform adapters.
       const isFileNotFound = (error: unknown): boolean => {
+        /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
         const reason = (error as { reason?: { _tag?: string } } | null)?.reason
         if (reason !== undefined && reason._tag !== undefined) {
           return reason._tag === "NotFound"

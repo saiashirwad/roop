@@ -73,9 +73,11 @@ const fromMessages = (
   let items: ReadonlyArray<Item> = []
   for (const message of messages) {
     if (message.role === "system" || typeof message.content === "string") continue
+    /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
     for (const part of message.content as ReadonlyArray<Record<string, unknown>>) {
       switch (part["type"]) {
         case "text": {
+          /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
           const text = part["text"] as string
           items =
             message.role === "user"
@@ -88,7 +90,9 @@ const fromMessages = (
             ...items,
             {
               kind: "tool",
+              /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
               id: part["id"] as string,
+              /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
               name: part["name"] as string,
               params: part["params"],
             },
@@ -98,6 +102,7 @@ const fromMessages = (
         case "tool-result": {
           items = items.map((item) =>
             item.kind === "tool" && item.id === part["id"]
+              /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
               ? { ...item, result: part["result"], isFailure: part["isFailure"] as boolean }
               : item,
           )

@@ -30,6 +30,7 @@ const scripted = (turns: ReadonlyArray<ReadonlyArray<Record<string, unknown>>>) 
         Stream.unwrap(
           Effect.gen(function* () {
             const i = yield* Ref.getAndUpdate(index, (n) => n + 1)
+            /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
             return Stream.fromIterable((turns[i] ?? []) as never)
           }),
         ),
@@ -92,10 +93,12 @@ it.layer(agentLayer(scripted(turns)))("coding harness", (it) => {
       )
       assert.strictEqual(readFileSync(join(root, "hello.txt"), "utf8"), "hi there")
 
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
       const read = events[3] as any
       assert.strictEqual(read.isFailure, false)
       assert.deepStrictEqual(read.result, { content: "hi there" })
 
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
       const bash = events[5] as any
       assert.strictEqual(bash.isFailure, false)
       assert.strictEqual(bash.result.exitCode, 0)

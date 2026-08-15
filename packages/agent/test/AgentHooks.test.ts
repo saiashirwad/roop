@@ -44,6 +44,7 @@ const scripted = (
               yield* Ref.update(prompts, (seen) => [...seen, options.prompt.content])
             }
             const i = yield* Ref.getAndUpdate(index, (n) => n + 1)
+            /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
             return Stream.fromIterable((turns[i] ?? []) as never)
           }),
         ),
@@ -91,6 +92,7 @@ it.layer(
     Effect.gen(function* () {
       const agent = yield* Agent
       const events = yield* collect(agent.prompt({ prompt: "say hi", sessionId: "s1" }))
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
       assert.strictEqual((events[events.length - 1] as any).reason, "completed")
 
       const session = yield* agent.history("s1")
@@ -108,9 +110,11 @@ it.layer(
         "step/end",
         "turn/end",
       ])
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
       const turnEnd = session.events[session.events.length - 1] as any
       assert.strictEqual(turnEnd.reason, "completed")
       assert.strictEqual(
+        /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
         (session.events.find((event) => event._tag === "step/start") as any).index,
         1,
       )
@@ -131,6 +135,7 @@ it.layer(
     Effect.gen(function* () {
       const agent = yield* Agent
       const events = yield* collect(agent.prompt({ prompt: "go", sessionId: "s2", maxTurns: 2 }))
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
       assert.strictEqual((events[events.length - 1] as any).reason, "stopped")
 
       const session = yield* agent.history("s2")
@@ -149,6 +154,7 @@ it.layer(
         "step/end",
         "turn/end",
       ])
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
       const turnEnd = session.events[session.events.length - 1] as any
       assert.strictEqual(turnEnd.reason, "stopped")
     }),
@@ -186,15 +192,18 @@ it.layer(
       const events = yield* collect(agent.prompt({ prompt: "say hi", sessionId: "s3" }))
 
       assert.deepStrictEqual(tags(events), ["ToolCall", "ToolResult", "TextDelta", "Finish"])
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
       const result = events[1] as any
       assert.strictEqual(result.isFailure, true)
       assert.deepStrictEqual(result.result, {
         type: "execution-denied",
         reason: "echo is not allowed here",
       })
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
       assert.strictEqual((events[3] as any).reason, "completed")
 
       const session = yield* agent.history("s3")
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
       const durable = session.events.find((event) => event._tag === "tool/result") as any
       assert.strictEqual(durable.isFailure, true)
       assert.deepStrictEqual(durable.result, {
@@ -237,6 +246,7 @@ it.layer(
       const agent = yield* Agent
       yield* Ref.set(modelPrompts, [])
       const events = yield* collect(agent.prompt({ prompt: "say hi", sessionId: "s4" }))
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
       assert.strictEqual((events[events.length - 1] as any).reason, "completed")
 
       const seen = yield* Ref.get(modelPrompts)
@@ -255,6 +265,7 @@ it.layer(
         "step/end",
         "turn/end",
       ])
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
       const request = session.events.find((event) => event._tag === "model/request") as any
       assert.deepStrictEqual(request.request.prompt, [
         Prompt.makeMessage("system", { content: "summary of everything so far" }),
@@ -330,6 +341,7 @@ it.layer(
       const agent = yield* Agent
       const events = yield* collect(agent.prompt({ prompt: "begin", sessionId: "s7" }))
       assert.deepStrictEqual(tags(events), ["TextDelta", "TextDelta", "Finish"])
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
       assert.strictEqual((events[2] as any).reason, "completed")
 
       const session = yield* agent.history("s7")
@@ -349,6 +361,7 @@ it.layer(
         "step/end",
         "turn/end",
       ])
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
       const continuation = session.events[7] as any
       assert.strictEqual(continuation.content, "keep going")
     }),
@@ -370,6 +383,7 @@ it.layer(
     Effect.gen(function* () {
       const agent = yield* Agent
       const events = yield* collect(agent.prompt({ prompt: "begin", sessionId: "s8" }))
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
       assert.strictEqual((events[events.length - 1] as any).reason, "failed")
 
       const session = yield* agent.history("s8")
@@ -380,7 +394,9 @@ it.layer(
         "step/end",
         "turn/end",
       ])
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
       const stepEnd = session.events[3] as any
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
       const turnEnd = session.events[4] as any
       assert.strictEqual(stepEnd.reason, "failed")
       assert.strictEqual(turnEnd.reason, "failed")

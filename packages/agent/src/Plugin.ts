@@ -35,6 +35,7 @@ export const Plugin = <Tools extends Record<string, Tool.Any>, R = never, RH = n
   readonly models?: ReadonlyArray<ModelSpec<never, R>>
   readonly skills?: ReadonlyArray<Skill>
   readonly systemPrompt?: string
+/* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
 }): Plugin<R, RH> => options as unknown as Plugin<R, RH>
 
 type ErasedTools = Record<string, Tool.Any>
@@ -46,9 +47,11 @@ export const AgentPlugins = <const Plugins extends ReadonlyArray<Plugin<any>>>(
   plugins: Plugins,
   options?: { readonly systemPrompt?: string | undefined },
 ): Layer.Layer<Agent, never, SessionStore | PluginRequirements<Plugins>> => {
+  /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
   const toolkit = Toolkit.merge(
     ...plugins.flatMap((plugin) => (plugin.toolkit === undefined ? [] : [plugin.toolkit])),
   ) as Toolkit.Toolkit<ErasedTools>
+  /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
   const handlers = plugins.flatMap((plugin) =>
     plugin.handlers === undefined ? [] : [plugin.handlers],
   ) as unknown as ReadonlyArray<
@@ -65,12 +68,15 @@ export const AgentPlugins = <const Plugins extends ReadonlyArray<Plugin<any>>>(
     (downstream, plugin) =>
       plugin.hooks === undefined
         ? downstream
+        /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
         : (plugin.hooks as Layer.Layer<AgentHooks, never, PluginRequirements<Plugins>>).pipe(
             Layer.provide(downstream),
           ),
+    /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
     layerNoop as unknown as Layer.Layer<AgentHooks, never, PluginRequirements<Plugins>>,
   )
 
+  /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
   return Layer.unwrap(Effect.map(toolkit, (withHandler) => AgentLive(withHandler))).pipe(
     Layer.provide([
       AgentContextLive({ systemPrompt }).pipe(

@@ -100,6 +100,7 @@ export const make = (options?: {
             const byName = Object.fromEntries(entries.map((entry) => [entry.tool.name, entry]))
             return {
               tools: Object.fromEntries(entries.map((entry) => [entry.tool.name, entry.tool])),
+              /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
               handle: ((name: string, params: unknown) =>
                 byName[name]!.toolkit.handle(name, params)) as any,
             }

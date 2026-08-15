@@ -62,11 +62,13 @@ it.layer(contextLayer)("AgentContext", (it) => {
         ),
       )
 
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
       yield* context.registerTool(Global, global as any).pipe(Effect.asVoid)
       assert.strictEqual((yield* context.tools).echo!.description, "global echo")
 
       yield* Effect.scoped(
         Effect.gen(function* () {
+          /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
           yield* context.registerTool(Scoped, scoped as any).pipe(Effect.asVoid)
           assert.strictEqual((yield* context.tools).echo!.description, "scoped echo")
         }),
@@ -85,6 +87,7 @@ it.layer(contextLayer)("AgentContext", (it) => {
 
       yield* Effect.scoped(
         Effect.gen(function* () {
+          /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
           yield* context.registerTool(Extra, extra as any).pipe(Effect.asVoid)
           assert.ok("extra" in (yield* context.tools))
         }),

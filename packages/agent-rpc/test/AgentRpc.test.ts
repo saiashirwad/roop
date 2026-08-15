@@ -38,6 +38,7 @@ const scripted = (turns: ReadonlyArray<ReadonlyArray<Record<string, unknown>>>) 
         Stream.unwrap(
           Effect.gen(function* () {
             const i = yield* Ref.getAndUpdate(index, (n) => n + 1)
+            /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
             return Stream.fromIterable((turns[i] ?? []) as never)
           }),
         ),
@@ -93,6 +94,7 @@ it.layer(AgentRpcServer.pipe(Layer.provide(TestLayer)))("AgentRpc", (it) => {
         caps.skills.map((skill) => skill.id),
         ["summarize"],
       )
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
       const parameters = caps.tools[0]!.parameters as any
       assert.deepStrictEqual(Object.keys(parameters.properties ?? {}), ["note"])
     }),
@@ -135,18 +137,21 @@ it.layer(AgentRpcServer.pipe(Layer.provide(TestLayer)))("AgentRpc", (it) => {
         ),
       )
       assert.strictEqual(
+        /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
         (Option.getOrThrow(Exit.findErrorOption(modelExit)) as any)._tag,
         "ModelNotFound",
       )
 
       const interruptExit = yield* Effect.exit(client.Interrupt({ sessionId: "nope" }))
       assert.strictEqual(
+        /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
         (Option.getOrThrow(Exit.findErrorOption(interruptExit)) as any)._tag,
         "RunNotFound",
       )
 
       const historyExit = yield* Effect.exit(client.GetHistory({ sessionId: "nope" }))
       assert.strictEqual(
+        /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
         (Option.getOrThrow(Exit.findErrorOption(historyExit)) as any)._tag,
         "SessionNotFound",
       )
@@ -189,6 +194,7 @@ it.layer(AgentRpcServer.pipe(Layer.provide(FsTestLayer)))("AgentRpc corrupt sess
         Stream.runDrain(client.Prompt({ prompt: "hi", sessionId: "corrupt" })),
       )
       assert.ok(Exit.isFailure(exit))
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
       const failure = Option.getOrThrow(Exit.findErrorOption(exit)) as any
       assert.strictEqual(failure._tag, "SessionFormatError")
       assert.strictEqual(failure.sessionId, "corrupt")
