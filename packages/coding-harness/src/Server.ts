@@ -1,6 +1,4 @@
-import { createServer } from "node:http"
 import { homedir } from "node:os"
-import { join } from "node:path"
 
 import {
   NodeChildProcessSpawner,
@@ -19,7 +17,7 @@ import { OpenAiCompatible } from "@roop/plugin-openai/OpenAiCompatible.ts"
 import { SkillsDir } from "@roop/plugin-skills/SkillsDir.ts"
 import { Todos } from "@roop/plugin-todo/Todos.ts"
 import { WebTools } from "@roop/plugin-web/WebTools.ts"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Path } from "effect"
 import { HttpRouter } from "effect/unstable/http"
 
 export const server = (options: {
@@ -36,7 +34,8 @@ export const server = (options: {
 
   const agent = Layer.unwrap(
     Effect.gen(function* () {
-      const skills = yield* SkillsDir(join(homedir(), ".agents", "skills"))
+      const path = yield* Path.Path
+      const skills = yield* SkillsDir(path.join(homedir(), ".agents", "skills"))
       return AgentPlugins([
         CodingTools(options.root),
         WebTools(),
@@ -50,10 +49,9 @@ export const server = (options: {
           plugins: [CodingTools(options.root), WebTools(), deepseek],
           maxTurns: 25,
         }),
-      ])
+      ]).pipe(Layer.provide(SessionStoreFs(path.join(options.root, ".roop", "sessions"))))
     }),
   ).pipe(
-    Layer.provide(SessionStoreFs(join(options.root, ".roop", "sessions"))),
     Layer.provide(NodeChildProcessSpawner.layer),
     Layer.provide(NodeCrypto.layer),
     Layer.provide(NodeFileSystem.layer),
@@ -62,6 +60,10 @@ export const server = (options: {
   )
 
   return HttpRouter.serve(AgentRpcServerHttp("/rpc").pipe(Layer.provide(agent))).pipe(
-    Layer.provide(NodeHttpServer.layer(() => createServer(), { port: options.port })),
+    Layer.provide(
+      NodeHttpServer.layer(process.getBuiltinModule("node:http").createServer, {
+        port: options.port,
+      }),
+    ),
   )
 }

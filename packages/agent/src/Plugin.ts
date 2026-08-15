@@ -11,7 +11,7 @@ import { Skills, type Skill } from "./Skills.ts"
 
 export type Plugin<R = never, RH = never> = {
   readonly name: string
-  readonly toolkit?: Toolkit.Toolkit<Record<string, Tool.Any>> | undefined
+  readonly toolkit?: Toolkit.Any | undefined
   readonly handlers?: Layer.Layer<never, never, R> | undefined
   /**
    * A hook waterfall stage (see `layerHook`) — by construction it requires the
@@ -19,7 +19,7 @@ export type Plugin<R = never, RH = never> = {
    * chain. Plugins compose outermost-first: an earlier plugin's hooks see
    * requests before, and results after, a later plugin's.
    */
-  readonly hooks?: Layer.Layer<AgentHooks, never, AgentHooks | NoInfer<R>> | undefined
+  readonly hooks?: Layer.Layer<AgentHooks, never, AgentHooks | NoInfer<R> | RH> | undefined
   readonly models?: ReadonlyArray<ModelSpec<never, R>> | undefined
   readonly skills?: ReadonlyArray<Skill> | undefined
   readonly systemPrompt?: string | undefined
@@ -35,10 +35,53 @@ export const Plugin = <Tools extends Record<string, Tool.Any>, R = never, RH = n
   readonly models?: ReadonlyArray<ModelSpec<never, R>>
   readonly skills?: ReadonlyArray<Skill>
   readonly systemPrompt?: string
-/* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
-}): Plugin<R, RH> => options as unknown as Plugin<R, RH>
+}): Plugin<R, RH> => {
+  /* SAFETY: The constructor erases the concrete toolkit Tools parameter; R and RH
+   * stay on handlers, hooks, and models. */
+  return options as Plugin<R, RH>
+}
 
-type ErasedTools = Record<string, Tool.Any>
+/** Structural view that drops `any` from plugin Layer/ModelSpec channels. */
+type PluginView = {
+  readonly toolkit?: Toolkit.Any | undefined
+  readonly handlers?: object | undefined
+  readonly hooks?: object | undefined
+  readonly models?:
+    | ReadonlyArray<{
+        readonly id: string
+        readonly provider: string
+        readonly description?: string | undefined
+        readonly layer: object
+      }>
+    | undefined
+  readonly skills?: ReadonlyArray<Skill> | undefined
+  readonly systemPrompt?: string | undefined
+}
+
+interface PluginLayerValue {}
+
+const asHandlerLayer = <R>(layer: PluginLayerValue): Layer.Layer<never, never, R> => {
+  /* SAFETY: Plugin handlers are Layer values; R is recovered from the plugin list. */
+  return layer as Layer.Layer<never, never, R>
+}
+
+const asHookLayer = (layer: PluginLayerValue): Layer.Layer<AgentHooks, never, AgentHooks> => {
+  /* SAFETY: Plugin hooks are AgentHooks layers; the view erases extra R. */
+  return layer as Layer.Layer<AgentHooks, never, AgentHooks>
+}
+
+const asModelSpec = (spec: {
+  readonly id: string
+  readonly provider: string
+  readonly description?: string | undefined
+  readonly layer: object
+}): ModelSpec<never, never> => ({
+  id: spec.id,
+  provider: spec.provider,
+  ...(spec.description === undefined ? undefined : { description: spec.description }),
+  /* SAFETY: Model layers are already built; the view erases their R. */
+  layer: spec.layer as ModelSpec<never, never>["layer"],
+})
 
 export type PluginRequirements<Plugins extends ReadonlyArray<Plugin<any, any>>> =
   Plugins[number] extends Plugin<infer R, infer RH> ? R | RH : never
@@ -47,43 +90,42 @@ export const AgentPlugins = <const Plugins extends ReadonlyArray<Plugin<any>>>(
   plugins: Plugins,
   options?: { readonly systemPrompt?: string | undefined },
 ): Layer.Layer<Agent, never, SessionStore | PluginRequirements<Plugins>> => {
-  /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
+  const views: ReadonlyArray<PluginView> = plugins
   const toolkit = Toolkit.merge(
-    ...plugins.flatMap((plugin) => (plugin.toolkit === undefined ? [] : [plugin.toolkit])),
-  ) as Toolkit.Toolkit<ErasedTools>
-  /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
-  const handlers = plugins.flatMap((plugin) =>
-    plugin.handlers === undefined ? [] : [plugin.handlers],
-  ) as unknown as ReadonlyArray<
-    Layer.Layer<Tool.HandlersFor<ErasedTools>, never, PluginRequirements<Plugins>>
-  >
-  const models = plugins.flatMap((plugin) => plugin.models ?? [])
-  const skills = plugins.flatMap((plugin) => plugin.skills ?? [])
-  const systemPrompt = [options?.systemPrompt, ...plugins.map((plugin) => plugin.systemPrompt)]
+    ...views.flatMap((plugin) => (plugin.toolkit === undefined ? [] : [plugin.toolkit])),
+  )
+  const handlers = views.flatMap((plugin) =>
+    plugin.handlers === undefined
+      ? []
+      : [asHandlerLayer<PluginRequirements<Plugins>>(plugin.handlers)],
+  )
+  const models = views.flatMap((plugin) => (plugin.models ?? []).map(asModelSpec))
+  const skills = views.flatMap((plugin) => plugin.skills ?? [])
+  const systemPrompt = [options?.systemPrompt, ...views.map((plugin) => plugin.systemPrompt)]
     .filter((text): text is string => text !== undefined && text !== "")
     .join("\n\n")
 
   // Waterfall the hook layers outermost-first over the no-op base.
-  const hooks: Layer.Layer<AgentHooks, never, PluginRequirements<Plugins>> = plugins.reduceRight(
-    (downstream, plugin) =>
+  const hooks = views.reduceRight(
+    (downstream: Layer.Layer<AgentHooks>, plugin) =>
       plugin.hooks === undefined
         ? downstream
-        /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
-        : (plugin.hooks as Layer.Layer<AgentHooks, never, PluginRequirements<Plugins>>).pipe(
-            Layer.provide(downstream),
-          ),
-    /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
-    layerNoop as unknown as Layer.Layer<AgentHooks, never, PluginRequirements<Plugins>>,
+        : asHookLayer(plugin.hooks).pipe(Layer.provide(downstream)),
+    layerNoop,
   )
 
-  /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
-  return Layer.unwrap(Effect.map(toolkit, (withHandler) => AgentLive(withHandler))).pipe(
-    Layer.provide([
-      AgentContextLive({ systemPrompt }).pipe(
-        Layer.provide([ModelCatalogLive(models), Layer.succeed(Skills)({ list: skills })]),
-      ),
-      hooks,
-      ...handlers,
-    ]),
-  ) as Layer.Layer<Agent, never, SessionStore | PluginRequirements<Plugins>>
+  /* SAFETY: Crypto stays caller-provided so platform packages can substitute it;
+   * the public type keeps SessionStore plus each plugin's R/RH. */
+  return (
+    // oxlint-disable-next-line effecttsgo/unsafe-effect-type-assertion -- Crypto is supplied by the caller, not this layer
+    Layer.unwrap(Effect.map(toolkit, (withHandler) => AgentLive(withHandler))).pipe(
+      Layer.provide([
+        AgentContextLive({ systemPrompt }).pipe(
+          Layer.provide([ModelCatalogLive(models), Layer.succeed(Skills)({ list: skills })]),
+        ),
+        hooks,
+        ...handlers,
+      ]),
+    ) as Layer.Layer<Agent, never, SessionStore | PluginRequirements<Plugins>>
+  )
 }

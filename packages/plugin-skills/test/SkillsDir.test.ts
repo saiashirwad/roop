@@ -1,7 +1,3 @@
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
-
 import { NodeFileSystem } from "@effect/platform-node"
 import { assert, it } from "@effect/vitest"
 import { Agent } from "@roop/agent/Agent.ts"
@@ -9,12 +5,12 @@ import { cryptoWeb } from "@roop/agent/cryptoWeb.ts"
 import { AgentPlugins, Plugin } from "@roop/agent/Plugin.ts"
 import { deriveMessages } from "@roop/agent/SessionEvent.ts"
 import { SessionStoreMemory } from "@roop/agent/SessionStore.ts"
-import { Effect, Layer, Ref, Stream } from "effect"
-import { LanguageModel } from "effect/unstable/ai"
+import { Effect, FileSystem, Layer, Path, Ref, Stream } from "effect"
+import { LanguageModel, Response } from "effect/unstable/ai"
 
 import { SkillsDir } from "../src/SkillsDir.ts"
 
-const scripted = (turns: ReadonlyArray<ReadonlyArray<Record<string, unknown>>>) =>
+const scripted = (turns: ReadonlyArray<ReadonlyArray<Response.StreamPartEncoded>>) =>
   Effect.gen(function* () {
     const index = yield* Ref.make(0)
     return yield* LanguageModel.make({
@@ -23,22 +19,22 @@ const scripted = (turns: ReadonlyArray<ReadonlyArray<Record<string, unknown>>>) 
         Stream.unwrap(
           Effect.gen(function* () {
             const i = yield* Ref.getAndUpdate(index, (n) => n + 1)
-            /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
-            return Stream.fromIterable((turns[i] ?? []) as never)
+            return Stream.fromIterable(turns[i] ?? [])
           }),
         ),
     })
   })
 
-const dir = mkdtempSync(join(tmpdir(), "skills-"))
-mkdirSync(join(dir, "greet"))
-writeFileSync(
-  join(dir, "greet", "SKILL.md"),
-  "---\nname: greet\ndescription: Greet the user warmly.\n---\n\nAlways greet with enthusiasm.",
-)
-
 const Main = Layer.unwrap(
   Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    const dir = yield* fs.makeTempDirectory({ prefix: "skills-" })
+    yield* fs.makeDirectory(path.join(dir, "greet"))
+    yield* fs.writeFileString(
+      path.join(dir, "greet", "SKILL.md"),
+      "---\nname: greet\ndescription: Greet the user warmly.\n---\n\nAlways greet with enthusiasm.",
+    )
     const skills = yield* SkillsDir(dir)
     return AgentPlugins([
       skills,
@@ -59,7 +55,7 @@ const Main = Layer.unwrap(
         ],
       }),
     ])
-  }).pipe(Effect.provide(NodeFileSystem.layer)),
+  }).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, Path.layer))),
 ).pipe(Layer.provide(SessionStoreMemory), Layer.provide(cryptoWeb))
 
 it.layer(Main)("SkillsDir", (it) => {
@@ -79,7 +75,8 @@ it.layer(Main)("SkillsDir", (it) => {
       assert.ok(result.result.content.includes("Always greet with enthusiasm."))
 
       const session = yield* agent.history("s1")
-      assert.ok(String(deriveMessages(session.events)[0]!.content).includes("greet:"))
+      const first = deriveMessages(session.events)[0]
+      assert.ok(first !== undefined && first.role === "system" && first.content.includes("greet:"))
     }),
   )
 })

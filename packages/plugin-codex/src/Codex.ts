@@ -19,7 +19,7 @@ export const Codex = (options?: {
     models: models.map((model) => ({
       id: model.id,
       provider: "codex",
-      ...(model.description !== undefined ? { description: model.description } : {}),
+      description: model.description,
       layer: CodexLanguageModel.layer({ ...options?.config, model: model.id }),
     })),
   })

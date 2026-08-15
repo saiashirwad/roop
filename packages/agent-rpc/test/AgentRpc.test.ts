@@ -1,7 +1,3 @@
-import { mkdtempSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
-
 import { NodeFileSystem } from "@effect/platform-node"
 import { assert, it } from "@effect/vitest"
 import { AgentLiveToolkit } from "@roop/agent/Agent.ts"
@@ -10,8 +6,8 @@ import { ModelCatalogLive } from "@roop/agent/ModelCatalog.ts"
 import { deriveMessages } from "@roop/agent/SessionEvent.ts"
 import { SessionStoreFs, SessionStoreMemory } from "@roop/agent/SessionStore.ts"
 import { Skills } from "@roop/agent/Skills.ts"
-import { Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect"
-import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
+import { Effect, Exit, FileSystem, Layer, Option, Ref, Schema, Stream } from "effect"
+import { LanguageModel, Response, Tool, Toolkit } from "effect/unstable/ai"
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient"
 import * as HttpRouter from "effect/unstable/http/HttpRouter"
 import { RpcClient } from "effect/unstable/rpc"
@@ -29,7 +25,7 @@ const Echo = Tool.make("echo", {
 
 const EchoToolkit = Toolkit.make(Echo)
 
-const scripted = (turns: ReadonlyArray<ReadonlyArray<Record<string, unknown>>>) =>
+const scripted = (turns: ReadonlyArray<ReadonlyArray<Response.StreamPartEncoded>>) =>
   Effect.gen(function* () {
     const index = yield* Ref.make(0)
     return yield* LanguageModel.make({
@@ -38,8 +34,7 @@ const scripted = (turns: ReadonlyArray<ReadonlyArray<Record<string, unknown>>>) 
         Stream.unwrap(
           Effect.gen(function* () {
             const i = yield* Ref.getAndUpdate(index, (n) => n + 1)
-            /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
-            return Stream.fromIterable((turns[i] ?? []) as never)
+            return Stream.fromIterable(turns[i] ?? [])
           }),
         ),
     })
@@ -159,8 +154,12 @@ it.layer(AgentRpcServer.pipe(Layer.provide(TestLayer)))("AgentRpc", (it) => {
   )
 })
 
-const corruptDir = mkdtempSync(join(tmpdir(), "agentrpc-corrupt-"))
-writeFileSync(join(corruptDir, "corrupt.json"), "{ not json")
+const corruptSessionStore = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const dir = yield* fs.makeTempDirectory({ prefix: "agentrpc-corrupt-" })
+  yield* fs.writeFileString(`${dir}/corrupt.json`, "{ not json")
+  return SessionStoreFs(dir)
+}).pipe(Effect.orDie)
 
 const FsTestLayer = AgentLiveToolkit(EchoToolkit).pipe(
   Layer.provide(
@@ -175,7 +174,7 @@ const FsTestLayer = AgentLiveToolkit(EchoToolkit).pipe(
       },
     ]),
   ),
-  Layer.provide(SessionStoreFs(corruptDir)),
+  Layer.provide(Layer.unwrap(corruptSessionStore)),
   Layer.provide(NodeFileSystem.layer),
   Layer.provide(cryptoWeb),
   Layer.provide(

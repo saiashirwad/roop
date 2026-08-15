@@ -9,13 +9,7 @@ export const AgentRpcServer = AgentRpc.toLayer(
 
     return AgentRpc.of({
       Capabilities: () => agent.capabilities,
-      Prompt: ({ prompt, sessionId, modelId, maxTurns }) =>
-        agent.prompt({
-          prompt,
-          ...(sessionId !== undefined ? { sessionId } : {}),
-          ...(modelId !== undefined ? { modelId } : {}),
-          ...(maxTurns !== undefined ? { maxTurns } : {}),
-        }),
+      Prompt: (options) => agent.prompt(options),
       Interrupt: ({ sessionId }) => agent.interrupt(sessionId),
       GetHistory: ({ sessionId }) => agent.history(sessionId),
       ListSessions: () => agent.sessions,

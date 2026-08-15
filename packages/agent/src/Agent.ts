@@ -87,17 +87,11 @@ export const AgentLive = <Tools extends Record<string, Tool.Any>>(
         })
 
       return Agent.of({
-        capabilities:
-          Effect.map(
-            Effect.all([
-              context.tools,
-              context.models,
-              context.defaultModelId,
-              context.skills,
-            ]),
-            ([tools, models, defaultModelId, skills]) =>
-              capabilitiesFrom({ tools, models, defaultModelId, skills }),
-          ),
+        capabilities: Effect.map(
+          Effect.all([context.tools, context.models, context.defaultModelId, context.skills]),
+          ([tools, models, defaultModelId, skills]) =>
+            capabilitiesFrom({ tools, models, defaultModelId, skills }),
+        ),
         prompt: (request) =>
           Stream.unwrap(
             Effect.gen(function* () {

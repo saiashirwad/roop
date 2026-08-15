@@ -1,5 +1,6 @@
 import { useAtom, useAtomSet, useAtomValue } from "@effect/atom-react"
 import * as stylex from "@stylexjs/stylex"
+import { Clock, Effect } from "effect"
 import { useEffect, useRef, useState } from "react"
 
 import { Composer, type Command } from "./Composer.tsx"
@@ -9,6 +10,7 @@ import {
   capsAtom,
   interruptAtom,
   modelAtom,
+  nextSessionId,
   promptAtom,
   selectSessionAtom,
   sessionAtom,
@@ -157,7 +159,7 @@ const styles = stylex.create({
 })
 
 const ago = (timestamp: number) => {
-  const minutes = Math.round((Date.now() - timestamp) / 60_000)
+  const minutes = Math.round((Effect.runSync(Clock.currentTimeMillis) - timestamp) / 60_000)
   if (minutes < 1) return "now"
   if (minutes < 60) return `${minutes}m`
   if (minutes < 1_440) return `${Math.round(minutes / 60)}h`
@@ -230,7 +232,7 @@ export const App = () => {
     return () => window.removeEventListener("keydown", onKey)
   }, [])
   const newSession = () => {
-    setSession(crypto.randomUUID())
+    setSession(nextSessionId())
     setTranscript([])
   }
   const close = () => {

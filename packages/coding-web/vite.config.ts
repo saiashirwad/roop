@@ -1,6 +1,11 @@
 import stylexPostcss from "@stylexjs/postcss-plugin"
 import react from "@vitejs/plugin-react"
+import { Config, Effect } from "effect"
 import { defineConfig } from "vite"
+
+const harnessUrl = Effect.runSync(
+  Config.string("HARNESS_URL").pipe(Config.withDefault("http://localhost:8787")),
+)
 
 export default defineConfig({
   plugins: [react({ babel: { configFile: true } })],
@@ -10,6 +15,6 @@ export default defineConfig({
     },
   },
   server: {
-    proxy: { "/rpc": process.env["HARNESS_URL"] ?? "http://localhost:8787" },
+    proxy: { "/rpc": harnessUrl },
   },
 })

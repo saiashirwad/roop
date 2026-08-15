@@ -1,6 +1,6 @@
 import { assert, it } from "@effect/vitest"
 import { Effect, Layer, Ref, Schema, Stream } from "effect"
-import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
+import { LanguageModel, Response, Tool, Toolkit } from "effect/unstable/ai"
 
 import { Agent, AgentLiveToolkit } from "../src/Agent.ts"
 import { cryptoWeb } from "../src/cryptoWeb.ts"
@@ -15,7 +15,7 @@ const Ping = Tool.make("ping", {
 
 const PingToolkit = Toolkit.make(Ping)
 
-const scripted = (turns: ReadonlyArray<ReadonlyArray<Record<string, unknown>>>) =>
+const scripted = (turns: ReadonlyArray<ReadonlyArray<Response.StreamPartEncoded>>) =>
   Effect.gen(function* () {
     const index = yield* Ref.make(0)
     return yield* LanguageModel.make({
@@ -24,8 +24,7 @@ const scripted = (turns: ReadonlyArray<ReadonlyArray<Record<string, unknown>>>) 
         Stream.unwrap(
           Effect.gen(function* () {
             const i = yield* Ref.getAndUpdate(index, (n) => n + 1)
-            /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
-            return Stream.fromIterable((turns[i] ?? []) as never)
+            return Stream.fromIterable(turns[i] ?? [])
           }),
         ),
     })
@@ -58,8 +57,7 @@ const Live = AgentLiveToolkit(PingToolkit).pipe(
 
 it.effect("core runs inside workerd", () =>
   Effect.gen(function* () {
-    /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
-    assert.strictEqual(typeof (globalThis as { caches?: unknown }).caches, "object")
+    yield* Schema.decodeUnknownEffect(Schema.Struct({ caches: Schema.Unknown }))(globalThis)
 
     const agent = yield* Agent
     const events = yield* Stream.runCollect(agent.prompt({ prompt: "ping it", sessionId: "w" }))

@@ -1,7 +1,3 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
-
 import { NodeChildProcessSpawner, NodeFileSystem, NodePath } from "@effect/platform-node"
 import { assert, it } from "@effect/vitest"
 import { AgentRpc } from "@roop/agent-rpc/AgentRpc.ts"
@@ -11,17 +7,13 @@ import { cryptoWeb } from "@roop/agent/cryptoWeb.ts"
 import { AgentPlugins, Plugin } from "@roop/agent/Plugin.ts"
 import { SessionStoreMemory } from "@roop/agent/SessionStore.ts"
 import { CodingTools } from "@roop/coding-tools/CodingTools.ts"
-import { Effect, Layer, Ref, Stream } from "effect"
-import { LanguageModel } from "effect/unstable/ai"
+import { Effect, FileSystem, Layer, Path, Ref, Stream } from "effect"
+import { LanguageModel, Response } from "effect/unstable/ai"
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient"
 import * as HttpRouter from "effect/unstable/http/HttpRouter"
 import { RpcClient } from "effect/unstable/rpc"
-import { afterAll } from "vitest"
 
-const root = mkdtempSync(join(tmpdir(), "roop-harness-"))
-afterAll(() => rmSync(root, { recursive: true, force: true }))
-
-const scripted = (turns: ReadonlyArray<ReadonlyArray<Record<string, unknown>>>) =>
+const scripted = (turns: ReadonlyArray<ReadonlyArray<Response.StreamPartEncoded>>) =>
   Effect.gen(function* () {
     const index = yield* Ref.make(0)
     return yield* LanguageModel.make({
@@ -30,14 +22,13 @@ const scripted = (turns: ReadonlyArray<ReadonlyArray<Record<string, unknown>>>) 
         Stream.unwrap(
           Effect.gen(function* () {
             const i = yield* Ref.getAndUpdate(index, (n) => n + 1)
-            /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
-            return Stream.fromIterable((turns[i] ?? []) as never)
+            return Stream.fromIterable(turns[i] ?? [])
           }),
         ),
     })
   })
 
-const agentLayer = (model: Effect.Effect<LanguageModel.Service>) =>
+const agentLayer = (model: Effect.Effect<LanguageModel.Service>, root: string) =>
   AgentPlugins([
     CodingTools(root),
     Plugin({
@@ -54,7 +45,14 @@ const agentLayer = (model: Effect.Effect<LanguageModel.Service>) =>
     Layer.provide(NodePath.layer),
   )
 
-const turns: ReadonlyArray<ReadonlyArray<Record<string, unknown>>> = [
+const withWorkspace = <A, E, R>(run: (root: string) => Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const root = yield* fs.makeTempDirectoryScoped({ prefix: "roop-harness-" })
+    return yield* run(root)
+  }).pipe(Effect.provide(Layer.mergeAll(NodeFileSystem.layer, NodePath.layer)))
+
+const turns: ReadonlyArray<ReadonlyArray<Response.StreamPartEncoded>> = [
   [
     {
       type: "tool-call",
@@ -79,10 +77,12 @@ const expectedTags = [
   "Finish",
 ]
 
-it.layer(agentLayer(scripted(turns)))("coding harness", (it) => {
-  it.effect("runs writeFile, readFile, and bash through the agent", () =>
+it.effect("runs writeFile, readFile, and bash through the agent", () =>
+  withWorkspace((root) =>
     Effect.gen(function* () {
       const agent = yield* Agent
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
       const events = yield* Stream.runCollect(
         agent.prompt({ prompt: "do it", sessionId: "s1" }),
       ).pipe(Effect.map((chunk) => [...chunk]))
@@ -91,7 +91,7 @@ it.layer(agentLayer(scripted(turns)))("coding harness", (it) => {
         events.map((event: any) => event._tag),
         expectedTags,
       )
-      assert.strictEqual(readFileSync(join(root, "hello.txt"), "utf8"), "hi there")
+      assert.strictEqual(yield* fs.readFileString(path.join(root, "hello.txt")), "hi there")
 
       /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
       const read = events[3] as any
@@ -103,27 +103,35 @@ it.layer(agentLayer(scripted(turns)))("coding harness", (it) => {
       assert.strictEqual(bash.isFailure, false)
       assert.strictEqual(bash.result.exitCode, 0)
       assert.strictEqual(bash.result.stdout, "ok")
-    }),
-  )
-})
+    }).pipe(Effect.provide(agentLayer(scripted(turns), root))),
+  ),
+)
 
 it.effect("round-trips over HTTP RPC", () =>
-  Effect.gen(function* () {
-    const serverLayer = AgentRpcServerHttp("/rpc").pipe(Layer.provide(agentLayer(scripted(turns))))
-    const { handler, dispose } = HttpRouter.toWebHandler(serverLayer, { disableLogger: true })
-    yield* Effect.addFinalizer(() => Effect.promise(() => dispose()))
-    const fetchWithHandler: typeof fetch = (input, init) =>
-      handler(input instanceof Request ? input : new Request(input, init))
-    const clientLayer = AgentRpcClientHttp("http://localhost/rpc").pipe(
-      Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetchWithHandler)),
-    )
-    const client = yield* RpcClient.make(AgentRpc).pipe(Effect.provide(clientLayer))
+  withWorkspace((root) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const serverLayer = AgentRpcServerHttp("/rpc").pipe(
+        Layer.provide(agentLayer(scripted(turns), root)),
+      )
+      const { handler, dispose } = HttpRouter.toWebHandler(serverLayer, { disableLogger: true })
+      yield* Effect.addFinalizer(() => Effect.promise(() => dispose()))
+      const fetchWithHandler: typeof fetch = (input, init) =>
+        handler(input instanceof Request ? input : new Request(input, init))
+      const clientLayer = AgentRpcClientHttp("http://localhost/rpc").pipe(
+        Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetchWithHandler)),
+      )
+      const client = yield* RpcClient.make(AgentRpc).pipe(Effect.provide(clientLayer))
 
-    const events = yield* Stream.runCollect(client.Prompt({ prompt: "do it", sessionId: "s-http" }))
-    assert.deepStrictEqual(
-      [...events].map((event) => event._tag),
-      expectedTags,
-    )
-    assert.strictEqual(readFileSync(join(root, "hello.txt"), "utf8"), "hi there")
-  }),
+      const events = yield* Stream.runCollect(
+        client.Prompt({ prompt: "do it", sessionId: "s-http" }),
+      )
+      assert.deepStrictEqual(
+        [...events].map((event) => event._tag),
+        expectedTags,
+      )
+      assert.strictEqual(yield* fs.readFileString(path.join(root, "hello.txt")), "hi there")
+    }),
+  ),
 )

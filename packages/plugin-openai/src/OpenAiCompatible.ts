@@ -22,7 +22,7 @@ export const OpenAiCompatible = (options: {
     models: options.models.map((model) => ({
       id: model.id,
       provider: options.name,
-      ...(model.description !== undefined ? { description: model.description } : {}),
+      description: model.description,
       layer: OpenAiLanguageModel.model(model.id).pipe(Layer.provide(client)),
     })),
   })

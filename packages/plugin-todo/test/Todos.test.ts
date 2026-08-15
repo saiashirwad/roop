@@ -5,11 +5,11 @@ import { AgentPlugins, Plugin } from "@roop/agent/Plugin.ts"
 import { deriveMessages } from "@roop/agent/SessionEvent.ts"
 import { SessionStoreMemory } from "@roop/agent/SessionStore.ts"
 import { Effect, Layer, Ref, Stream } from "effect"
-import { LanguageModel } from "effect/unstable/ai"
+import { LanguageModel, Response } from "effect/unstable/ai"
 
 import { Todos } from "../src/Todos.ts"
 
-const scripted = (turns: ReadonlyArray<ReadonlyArray<Record<string, unknown>>>) =>
+const scripted = (turns: ReadonlyArray<ReadonlyArray<Response.StreamPartEncoded>>) =>
   Effect.gen(function* () {
     const index = yield* Ref.make(0)
     return yield* LanguageModel.make({
@@ -18,8 +18,7 @@ const scripted = (turns: ReadonlyArray<ReadonlyArray<Record<string, unknown>>>) 
         Stream.unwrap(
           Effect.gen(function* () {
             const i = yield* Ref.getAndUpdate(index, (n) => n + 1)
-            /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
-            return Stream.fromIterable((turns[i] ?? []) as never)
+            return Stream.fromIterable(turns[i] ?? [])
           }),
         ),
     })

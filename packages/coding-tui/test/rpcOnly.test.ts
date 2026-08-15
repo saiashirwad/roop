@@ -1,7 +1,17 @@
-import { readdirSync, readFileSync } from "node:fs"
-import { join } from "node:path"
-
 import { expect, it } from "vitest"
+
+declare global {
+  interface ImportMeta {
+    readonly glob: (
+      pattern: string,
+      options: {
+        readonly query: "?raw"
+        readonly eager: true
+        readonly import: "default"
+      },
+    ) => { readonly [path: string]: string }
+  }
+}
 
 const allowed = [
   /^@mariozechner\/pi-tui$/,
@@ -12,10 +22,15 @@ const allowed = [
   /^\.\//,
 ]
 
+const sources = import.meta.glob("../src/*.ts", {
+  query: "?raw",
+  eager: true,
+  import: "default",
+})
+
 it("only talks to the agent through the rpc client", () => {
-  const dir = join(import.meta.dirname, "../src")
-  for (const file of readdirSync(dir)) {
-    const source = readFileSync(join(dir, file), "utf8")
+  for (const [path, source] of Object.entries(sources)) {
+    const file = path.slice(Math.max(0, path.lastIndexOf("/") + 1))
     for (const match of source.matchAll(/from "([^"]+)"/g)) {
       const specifier = match[1]!
       expect(

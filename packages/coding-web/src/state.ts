@@ -2,7 +2,7 @@ import { AgentRpc } from "@roop/agent-rpc/AgentRpc.ts"
 import { AgentRpcClientHttp } from "@roop/agent-rpc/AgentRpcHttp.ts"
 import type { AgentEvent } from "@roop/agent/AgentEvent.ts"
 import { deriveMessages } from "@roop/agent/SessionEvent.ts"
-import { Effect, Stream } from "effect"
+import { Crypto, Effect, Stream } from "effect"
 import { Atom } from "effect/unstable/reactivity"
 import { RpcClient } from "effect/unstable/rpc"
 
@@ -67,57 +67,63 @@ const apply = (items: ReadonlyArray<Item>, event: AgentEvent): ReadonlyArray<Ite
   }
 }
 
-const fromMessages = (
-  messages: ReadonlyArray<{ readonly role: string; readonly content: unknown }>,
-): ReadonlyArray<Item> => {
+const fromMessages = (messages: ReturnType<typeof deriveMessages>): ReadonlyArray<Item> => {
   let items: ReadonlyArray<Item> = []
   for (const message of messages) {
-    if (message.role === "system" || typeof message.content === "string") continue
-    /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
-    for (const part of message.content as ReadonlyArray<Record<string, unknown>>) {
-      switch (part["type"]) {
-        case "text": {
-          /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
-          const text = part["text"] as string
-          items =
-            message.role === "user"
-              ? [...items, { kind: "user", text }]
-              : [...items, { kind: "assistant", text }]
-          break
+    switch (message.role) {
+      case "system":
+        break
+      case "user": {
+        for (const part of message.content) {
+          if (part.type === "text") {
+            items = [...items, { kind: "user", text: part.text }]
+          }
         }
-        case "tool-call": {
-          items = [
-            ...items,
-            {
-              kind: "tool",
-              /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
-              id: part["id"] as string,
-              /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
-              name: part["name"] as string,
-              params: part["params"],
-            },
-          ]
-          break
+        break
+      }
+      case "assistant": {
+        for (const part of message.content) {
+          if (part.type === "text") {
+            items = [...items, { kind: "assistant", text: part.text }]
+          } else if (part.type === "tool-call") {
+            items = [...items, { kind: "tool", id: part.id, name: part.name, params: part.params }]
+          }
         }
-        case "tool-result": {
-          items = items.map((item) =>
-            item.kind === "tool" && item.id === part["id"]
-              /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
-              ? { ...item, result: part["result"], isFailure: part["isFailure"] as boolean }
-              : item,
-          )
-          break
+        break
+      }
+      case "tool": {
+        for (const part of message.content) {
+          if (part.type === "tool-result") {
+            items = items.map((item) =>
+              item.kind === "tool" && item.id === part.id
+                ? { ...item, result: part.result, isFailure: part.isFailure }
+                : item,
+            )
+          }
         }
+        break
       }
     }
   }
   return items
 }
 
+const sessionCrypto = Crypto.make({
+  randomBytes: (size) => globalThis.crypto.getRandomValues(new Uint8Array(size)),
+  digest: (algorithm, data) =>
+    Effect.promise(() =>
+      globalThis.crypto.subtle
+        .digest(algorithm, new Uint8Array(data))
+        .then((bytes) => new Uint8Array(bytes)),
+    ),
+})
+
+export const nextSessionId = (): string => Effect.runSync(Effect.orDie(sessionCrypto.randomUUIDv4))
+
 const runtime = Atom.runtime(AgentRpcClientHttp("/rpc"))
 
 export const transcriptAtom = Atom.make<ReadonlyArray<Item>>([])
-export const sessionAtom = Atom.make<string>(crypto.randomUUID())
+export const sessionAtom = Atom.make<string>(nextSessionId())
 export const modelAtom = Atom.make<string | undefined>(undefined)
 
 export const capsAtom = runtime.atom(
@@ -132,27 +138,25 @@ export const promptAtom = runtime.fn((text: string, ctx: Atom.FnContext) =>
     const client = yield* RpcClient.make(AgentRpc)
     ctx.set(transcriptAtom, [...ctx(transcriptAtom), { kind: "user", text }])
     const modelId = ctx(modelAtom)
-    yield* client
-      .Prompt({
-        prompt: text,
-        sessionId: ctx(sessionAtom),
-        ...(modelId === undefined ? {} : { modelId }),
-        maxTurns: 50,
-      })
-      .pipe(
-        Stream.runForEach((event) =>
-          Effect.sync(() => ctx.set(transcriptAtom, apply(ctx(transcriptAtom), event))),
+    const payload = {
+      prompt: text,
+      sessionId: ctx(sessionAtom),
+      maxTurns: 50,
+    }
+    yield* client.Prompt(modelId === undefined ? payload : { ...payload, modelId }).pipe(
+      Stream.runForEach((event) =>
+        Effect.sync(() => ctx.set(transcriptAtom, apply(ctx(transcriptAtom), event))),
+      ),
+      Effect.catch((error) =>
+        Effect.sync(() =>
+          ctx.set(transcriptAtom, [
+            ...ctx(transcriptAtom),
+            { kind: "notice", text: String(error) },
+          ]),
         ),
-        Effect.catch((error) =>
-          Effect.sync(() =>
-            ctx.set(transcriptAtom, [
-              ...ctx(transcriptAtom),
-              { kind: "notice", text: String(error) },
-            ]),
-          ),
-        ),
-        Effect.ensuring(Effect.sync(() => ctx.refresh(sessionsAtom))),
-      )
+      ),
+      Effect.ensuring(Effect.sync(() => ctx.refresh(sessionsAtom))),
+    )
   }),
 )
 

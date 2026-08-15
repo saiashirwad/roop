@@ -1,14 +1,14 @@
 import { stdin as input, stdout as output } from "node:process"
 import { createInterface } from "node:readline/promises"
 
-import { NodeHttpClient } from "@effect/platform-node"
+import { NodeHttpClient, NodeRuntime } from "@effect/platform-node"
 import { Agent } from "@roop/agent/Agent.ts"
 import type { AgentEvent } from "@roop/agent/AgentEvent.ts"
 import { cryptoWeb } from "@roop/agent/cryptoWeb.ts"
 import { AgentPlugins, Plugin } from "@roop/agent/Plugin.ts"
 import { SessionStoreMemory } from "@roop/agent/SessionStore.ts"
 import { OpenAiCompatible } from "@roop/plugin-openai/OpenAiCompatible.ts"
-import { Cause, Effect, Layer, Schema, Stream } from "effect"
+import { Cause, Config, DateTime, Effect, Layer, Schema, Stream } from "effect"
 import { Tool, Toolkit } from "effect/unstable/ai"
 
 const NowToolkit = Toolkit.make(
@@ -23,7 +23,7 @@ const now = Plugin({
   name: "now",
   toolkit: NowToolkit,
   handlers: NowToolkit.toLayer({
-    now: () => Effect.succeed({ iso: new Date().toISOString() }),
+    now: () => Effect.map(DateTime.now, (now) => ({ iso: DateTime.formatIso(now) })),
   }),
 })
 
@@ -47,7 +47,7 @@ const render = (event: AgentEvent): string | undefined => {
   }
 }
 
-const main = Effect.gen(function* () {
+const loop = Effect.gen(function* () {
   const agent = yield* Agent
   const lines = createInterface({ input, output })
 
@@ -68,23 +68,23 @@ const main = Effect.gen(function* () {
   )
 })
 
-const apiKey = process.env["DEEPSEEK_API_KEY"]
-if (apiKey === undefined) {
-  console.error("DEEPSEEK_API_KEY is not set")
-  process.exit(1)
-}
-
-const deepseek = OpenAiCompatible({
-  name: "deepseek",
-  apiUrl: "https://api.deepseek.com",
-  apiKey,
-  models: [{ id: "deepseek-chat", description: "DeepSeek V3 via the OpenAI-compatible API" }],
+const main = Effect.gen(function* () {
+  const apiKey = yield* Config.string("DEEPSEEK_API_KEY")
+  const deepseek = OpenAiCompatible({
+    name: "deepseek",
+    apiUrl: "https://api.deepseek.com",
+    apiKey,
+    models: [{ id: "deepseek-chat", description: "DeepSeek V3 via the OpenAI-compatible API" }],
+  })
+  yield* loop.pipe(
+    Effect.provide(
+      AgentPlugins([deepseek, now]).pipe(
+        Layer.provide(SessionStoreMemory),
+        Layer.provide(cryptoWeb),
+        Layer.provide(NodeHttpClient.layerUndici),
+      ),
+    ),
+  )
 })
 
-const Live = AgentPlugins([deepseek, now]).pipe(
-  Layer.provide(SessionStoreMemory),
-  Layer.provide(cryptoWeb),
-  Layer.provide(NodeHttpClient.layerUndici),
-)
-
-Effect.runPromise(main.pipe(Effect.provide(Live)))
+NodeRuntime.runMain(main)

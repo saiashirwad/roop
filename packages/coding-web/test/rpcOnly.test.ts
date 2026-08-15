@@ -1,6 +1,3 @@
-import { readdirSync, readFileSync } from "node:fs"
-import { join } from "node:path"
-
 import { expect, it } from "vitest"
 
 const allowed = [
@@ -19,10 +16,16 @@ const allowed = [
   /^\.\//,
 ]
 
+const sources = import.meta.glob("../src/*.{ts,tsx}", {
+  query: "?raw",
+  eager: true,
+  import: "default",
+})
+
 it("only talks to the agent through the rpc client", () => {
-  const dir = join(import.meta.dirname, "../src")
-  for (const file of readdirSync(dir).filter((file) => !file.endsWith(".d.ts"))) {
-    const source = readFileSync(join(dir, file), "utf8")
+  for (const [path, source] of Object.entries(sources)) {
+    const file = path.slice(Math.max(0, path.lastIndexOf("/") + 1))
+    if (file.endsWith(".d.ts")) continue
     for (const match of source.matchAll(/from "([^"]+)"/g)) {
       const specifier = match[1]!
       expect(

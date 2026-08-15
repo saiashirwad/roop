@@ -1,15 +1,11 @@
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
-
 import { NodeFileSystem } from "@effect/platform-node"
 import { assert, it } from "@effect/vitest"
-import { Cause, Effect, Exit, FileSystem, Layer, Option } from "effect"
+import { Cause, Effect, Exit, FileSystem, Layer, Option, Schema } from "effect"
 import { Prompt } from "effect/unstable/ai"
 
 import { cryptoWeb } from "../src/cryptoWeb.ts"
 import { deriveMessages, SESSION_FORMAT_VERSION, type SessionEvent } from "../src/SessionEvent.ts"
-import { SessionStore, SessionStoreFs, SessionStoreMemory } from "../src/SessionStore.ts"
+import { Session, SessionStore, SessionStoreFs, SessionStoreMemory } from "../src/SessionStore.ts"
 
 const scripted: ReadonlyArray<SessionEvent> = [
   { _tag: "system/message", content: "you are a test" },
@@ -115,9 +111,14 @@ it.effect("memory store appends and derives", () =>
   }).pipe(Effect.provide(SessionStoreMemory)),
 )
 
-const dir = mkdtempSync(join(tmpdir(), "sessions-"))
+const dir = await Effect.runPromise(
+  Effect.flatMap(FileSystem.FileSystem, (fs) => fs.makeTempDirectory({ prefix: "sessions-" })).pipe(
+    Effect.orDie,
+    Effect.provide(NodeFileSystem.layer),
+  ),
+)
 const StoreLive = SessionStoreFs(dir).pipe(
-  Layer.provide(NodeFileSystem.layer),
+  Layer.provideMerge(NodeFileSystem.layer),
   Layer.provide(cryptoWeb),
 )
 
@@ -185,25 +186,26 @@ it.layer(StoreLive)("SessionStoreFs", (it) => {
   // A read permission error (EACCES) on append must die as a defect, not be
   // misread as SessionNotFound and silently reset the log. No-op when
   // permission bits are not enforced (root, Windows).
-  const permissionEnforced =
-    typeof process.getuid === "function" && process.getuid() !== 0 && process.platform !== "win32"
+  const uid = process.getuid?.()
+  const permissionEnforced = uid !== undefined && uid !== 0 && process.platform !== "win32"
   it.effect("append dies (does not reset) when the log is unreadable", () => {
-    const lockedDir = join(dir, "locked")
+    const lockedDir = `${dir}/locked`
     const LockedStore = SessionStoreFs(lockedDir).pipe(
-      Layer.provide(NodeFileSystem.layer),
+      Layer.provideMerge(NodeFileSystem.layer),
       Layer.provide(cryptoWeb),
     )
     return Effect.provide(
       Effect.gen(function* () {
         if (!permissionEnforced) return
+        const fs = yield* FileSystem.FileSystem
         yield* appendAll("locked-session")
-        chmodSync(lockedDir, 0o000)
+        yield* fs.chmod(lockedDir, 0o000)
         const exit = yield* Effect.exit(
           (yield* SessionStore).append("locked-session", {
             _tag: "user/message",
             content: "should not land",
           }),
-        ).pipe(Effect.onExit(() => Effect.sync(() => chmodSync(lockedDir, 0o700))))
+        ).pipe(Effect.onExit(() => fs.chmod(lockedDir, 0o700)))
         assert.ok(Exit.isFailure(exit))
         assert.ok(exit.cause.reasons.some(Cause.isDieReason))
       }),
@@ -213,15 +215,14 @@ it.layer(StoreLive)("SessionStoreFs", (it) => {
 
   it.effect("rejects a log with a newer format version", () =>
     Effect.gen(function* () {
-      writeFileSync(
-        join(dir, "future.json"),
-        JSON.stringify({
-          id: "future",
-          header: { version: SESSION_FORMAT_VERSION + 1, createdAt: 0 },
-          events: [{ _tag: "user/message", content: "hi" }],
-          updatedAt: 0,
-        }),
-      )
+      const fs = yield* FileSystem.FileSystem
+      const json = yield* Schema.encodeEffect(Schema.fromJsonString(Session))({
+        id: "future",
+        header: { version: SESSION_FORMAT_VERSION + 1, createdAt: 0 },
+        events: [{ _tag: "user/message", content: "hi" }],
+        updatedAt: 0,
+      })
+      yield* fs.writeFileString(`${dir}/future.json`, json)
 
       const store = yield* SessionStore
       const exit = yield* Effect.exit(store.load("future"))
@@ -242,7 +243,9 @@ it.layer(StoreLive)("SessionStoreFs", (it) => {
   it.effect("list skips corrupt sessions and returns the valid ones", () =>
     Effect.gen(function* () {
       yield* appendAll("good")
-      writeFileSync(join(dir, "broken.json"), "{not json")
+      yield* FileSystem.FileSystem.pipe(
+        Effect.flatMap((fs) => fs.writeFileString(`${dir}/broken.json`, "{not json")),
+      )
 
       const metas = yield* (yield* SessionStore).list
       // timestamps can collide within a millisecond, so only assert membership
@@ -252,7 +255,9 @@ it.layer(StoreLive)("SessionStoreFs", (it) => {
 
   it.effect("rejects a log that fails validation", () =>
     Effect.gen(function* () {
-      writeFileSync(join(dir, "corrupt.json"), "{not json")
+      yield* FileSystem.FileSystem.pipe(
+        Effect.flatMap((fs) => fs.writeFileString(`${dir}/corrupt.json`, "{not json")),
+      )
 
       const exit = yield* Effect.exit((yield* SessionStore).load("corrupt"))
       assert.ok(Exit.isFailure(exit))

@@ -1,5 +1,6 @@
 import { Context, Effect, Layer, Schema } from "effect"
 import { LanguageModel } from "effect/unstable/ai"
+import type * as Tool from "effect/unstable/ai/Tool"
 
 /** Per-call context threaded through every seam by the loop. */
 export interface RunContext {
@@ -10,7 +11,7 @@ export interface RunContext {
 
 export interface ToolCallInfo {
   readonly name: string
-  readonly params: unknown
+  readonly params: Tool.Parameters<Tool.Any>
 }
 
 /** A hook's rejection before a model step is admitted. */
@@ -95,12 +96,10 @@ export const AgentHooks = Context.Reference<AgentHooks>("roop/AgentHooks", {
 })
 
 /** Explicit layer retained for composing hook waterfalls. */
-/* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
-export const layerNoop = Layer.succeed(AgentHooks, hooksNoop) as Layer.Layer<
-  AgentHooks,
-  never,
-  never
->
+export const layerNoop =
+  /* SAFETY: Context.Reference identifiers are `never`, so Layer.succeed types the
+   * provided service as never; the runtime key is still AgentHooks. */
+  Layer.succeed(AgentHooks, hooksNoop) as Layer.Layer<AgentHooks>
 
 /**
  * Build one waterfall stage. The returned layer requires the downstream
@@ -124,15 +123,12 @@ export const layerHook = <R = never>(
   name: string,
   wrap: (downstream: AgentHooksInterface) => Effect.Effect<AgentHooksInterface, never, R>,
 ): Layer.Layer<AgentHooks, never, AgentHooks | R> =>
-  /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
+  /* SAFETY: Context.Reference identifiers are `never`, so Layer.effect types the
+   * provided service as never; the runtime key is still AgentHooks. */
   Layer.effect(
     AgentHooks,
     Effect.gen(function* () {
-      const downstream = yield* Effect.contextWith((context) =>
-        Effect.succeed(Context.get(context, AgentHooks)),
-      )
-      const wrapped = yield* wrap(downstream)
-      /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
-      return wrapped as AgentHooks
+      const downstream = yield* AgentHooks
+      return yield* wrap(downstream)
     }),
-  ).pipe(Layer.withSpan(`AgentHooks/${name}`)) as unknown as Layer.Layer<AgentHooks, never, R>
+  ).pipe(Layer.withSpan(`AgentHooks/${name}`)) as Layer.Layer<AgentHooks, never, AgentHooks | R>

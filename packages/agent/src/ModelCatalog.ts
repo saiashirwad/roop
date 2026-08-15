@@ -40,7 +40,7 @@ export const ModelCatalogLive = <E, R>(specs: ReadonlyArray<ModelSpec<E, R>>) =>
           ad: {
             id: spec.id,
             provider: spec.provider,
-            ...(spec.description !== undefined ? { description: spec.description } : {}),
+            ...(spec.description === undefined ? undefined : { description: spec.description }),
           },
           model: Context.get(context, LanguageModel.LanguageModel),
         })),

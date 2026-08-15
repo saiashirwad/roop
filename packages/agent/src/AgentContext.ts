@@ -94,32 +94,28 @@ export const make = (options?: {
       )
 
     return AgentContext.of({
-      toolkit:
-        resolvedTools().pipe(
-          Effect.map((entries) => {
-            const byName = Object.fromEntries(entries.map((entry) => [entry.tool.name, entry]))
-            return {
-              tools: Object.fromEntries(entries.map((entry) => [entry.tool.name, entry.tool])),
-              /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
-              handle: ((name: string, params: unknown) =>
-                byName[name]!.toolkit.handle(name, params)) as any,
-            }
-          }),
+      toolkit: resolvedTools().pipe(
+        Effect.map((entries) => {
+          const byName = Object.fromEntries(entries.map((entry) => [entry.tool.name, entry]))
+          return {
+            tools: Object.fromEntries(entries.map((entry) => [entry.tool.name, entry.tool])),
+            /* SAFETY: Dynamic tools share the erased handle contract of ErasedToolkit. */
+            handle: ((name: string, params: Tool.Parameters<Tool.Any>) =>
+              byName[name]!.toolkit.handle(name, params)) as ErasedToolkit["handle"],
+          }
+        }),
+      ),
+      tools: resolvedTools().pipe(
+        Effect.map((entries) =>
+          Object.fromEntries(entries.map((entry) => [entry.tool.name, entry.tool])),
         ),
-      tools:
-        resolvedTools().pipe(
-          Effect.map((entries) =>
-            Object.fromEntries(entries.map((entry) => [entry.tool.name, entry.tool])),
-          ),
+      ),
+      skills: Ref.get(skills).pipe(Effect.map((entries) => latestBy(entries, (entry) => entry.id))),
+      systemPrompt: Ref.get(promptSections).pipe(
+        Effect.map((sections) =>
+          [basePrompt, ...sections].filter((text) => text !== "").join("\n\n"),
         ),
-      skills:
-        Ref.get(skills).pipe(Effect.map((entries) => latestBy(entries, (entry) => entry.id))),
-      systemPrompt:
-        Ref.get(promptSections).pipe(
-          Effect.map((sections) =>
-            [basePrompt, ...sections].filter((text) => text !== "").join("\n\n"),
-          ),
-        ),
+      ),
       promptSections: Ref.get(promptSections),
       models: allModels(),
       defaultModelId: allModels().pipe(Effect.map((entries) => entries[0]?.id ?? "")),
@@ -139,7 +135,7 @@ export const make = (options?: {
             ad: {
               id: spec.id,
               provider: spec.provider,
-              ...(spec.description === undefined ? {} : { description: spec.description }),
+              ...(spec.description === undefined ? undefined : { description: spec.description }),
             },
             model: Context.get(built, LanguageModel.LanguageModel),
           }

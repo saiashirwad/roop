@@ -18,7 +18,7 @@ export const Claude = (options?: {
     models: models.map((model) => ({
       id: model.id,
       provider: "claude",
-      ...(model.description !== undefined ? { description: model.description } : {}),
+      description: model.description,
       layer: ClaudeLanguageModel.layer({ ...options?.config, model: model.id }),
     })),
   })

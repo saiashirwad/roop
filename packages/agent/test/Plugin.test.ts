@@ -1,16 +1,16 @@
 import { assert, it } from "@effect/vitest"
 import { Effect, Layer, Ref, Schema, Stream } from "effect"
-import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
+import { LanguageModel, Response, Tool, Toolkit } from "effect/unstable/ai"
 
 import { Agent } from "../src/Agent.ts"
-import { AgentHooks, layerHook } from "../src/AgentHooks.ts"
+import { layerHook } from "../src/AgentHooks.ts"
 import { cryptoWeb } from "../src/cryptoWeb.ts"
 import { AgentPlugins, Plugin } from "../src/Plugin.ts"
 import { deriveMessages } from "../src/SessionEvent.ts"
 import { SessionStoreMemory } from "../src/SessionStore.ts"
 import { subagent } from "../src/subagent.ts"
 
-const scripted = (turns: ReadonlyArray<ReadonlyArray<Record<string, unknown>>>) =>
+const scripted = (turns: ReadonlyArray<ReadonlyArray<Response.StreamPartEncoded>>) =>
   Effect.gen(function* () {
     const index = yield* Ref.make(0)
     return yield* LanguageModel.make({
@@ -19,14 +19,16 @@ const scripted = (turns: ReadonlyArray<ReadonlyArray<Record<string, unknown>>>) 
         Stream.unwrap(
           Effect.gen(function* () {
             const i = yield* Ref.getAndUpdate(index, (n) => n + 1)
-            /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
-            return Stream.fromIterable((turns[i] ?? []) as never)
+            return Stream.fromIterable(turns[i] ?? [])
           }),
         ),
     })
   })
 
-const model = (id: string, turns: ReadonlyArray<ReadonlyArray<Record<string, unknown>>>): Plugin =>
+const model = (
+  id: string,
+  turns: ReadonlyArray<ReadonlyArray<Response.StreamPartEncoded>>,
+): Plugin =>
   Plugin({
     name: `model-${id}`,
     models: [
@@ -65,7 +67,7 @@ const shout = Plugin({
   systemPrompt: "shout things",
 })
 
-const collect = (stream: Stream.Stream<unknown, unknown>) =>
+const collect = <A, E = never, R = never>(stream: Stream.Stream<A, E, R>) =>
   Stream.runCollect(stream).pipe(Effect.map((chunk) => [...chunk]))
 
 const Composed = AgentPlugins([
@@ -137,8 +139,7 @@ const worker = subagent({
 
 const hookOrder = Ref.makeUnsafe<Array<string>>([])
 
-const recording = (name: string): Layer.Layer<AgentHooks, never, never> =>
-  /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
+const recording = (name: string) =>
   layerHook(name, (downstream) =>
     Effect.succeed({
       ...downstream,
@@ -150,7 +151,7 @@ const recording = (name: string): Layer.Layer<AgentHooks, never, never> =>
           return result
         }),
     }),
-  ) as unknown as Layer.Layer<AgentHooks, never, never>
+  )
 
 const outerHook = Plugin<Record<string, never>, never>({
   name: "outer-hook",

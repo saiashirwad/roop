@@ -9,6 +9,16 @@ import type { SessionEvent } from "./SessionEvent.ts"
 
 export type ErasedToolkit = Toolkit.WithHandler<Record<string, Tool.Any>>
 
+/** Toolkit shape used only to keep `Tool.Any` handler services off Effect channels. */
+type ClosedToolkit = Toolkit.WithHandler<Record<string, never>>
+
+interface ClosedToolkitValue {}
+
+const asClosedToolkit = (toolkit: ClosedToolkitValue): ClosedToolkit => {
+  /* SAFETY: Tool handlers are already installed; this closes their `any` service channel. */
+  return toolkit as ClosedToolkit
+}
+
 export type LoopOptions = {
   readonly sessionId: string
   readonly chat: Chat.Service
@@ -58,7 +68,6 @@ const appendStepEvents = (
   const events: Array<SessionEvent> = []
   for (const message of content) {
     if (message.role === "assistant") {
-      if (typeof message.content === "string") continue
       const parts = message.content
         .filter((part) => part.type === "text" || part.type === "reasoning")
         .map((part) => ({ type: part.type, text: part.text }))
@@ -67,7 +76,7 @@ const appendStepEvents = (
         if (part.type === "tool-call")
           events.push({ _tag: "tool/call", id: part.id, name: part.name, params: part.params })
       }
-    } else if (typeof message.content !== "string") {
+    } else if (message.role === "tool") {
       for (const part of message.content) {
         if (part.type === "tool-result")
           events.push({
@@ -97,13 +106,13 @@ const interceptModel = (
       Effect.gen(function* () {
         const admitted = yield* hooks.beforeRequest(context(), {
           prompt: request.prompt,
-          ...(request.toolChoice !== undefined ? { toolChoice: request.toolChoice } : {}),
+          toolChoice: request.toolChoice,
         })
         yield* append({ _tag: "model/request", request: admitted })
         /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
         return model.streamText({
           prompt: admitted.prompt,
-          ...(admitted.toolChoice !== undefined ? { toolChoice: admitted.toolChoice } : {}),
+          toolChoice: admitted.toolChoice,
           // Tool execution and concurrency are loop-owned; hook output cannot
           // disable or replace either control.
           toolkit: request.toolkit,
@@ -129,14 +138,11 @@ const interceptToolkit = (
   context: () => RunContext,
 ): ErasedToolkit => ({
   tools: toolkit.tools,
-  /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
-  handle: ((name: string, params: unknown) =>
+  /* SAFETY: The intercept preserves ErasedToolkit.handle while inserting hook seams. */
+  handle: ((name: string, params: Tool.Parameters<Tool.Any>) =>
     Effect.gen(function* () {
       const admitted = yield* hooks.beforeToolExecute(context(), { name, params })
-      const results = yield* (
-        /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
-        toolkit.handle as (name: string, params: unknown) => Effect.Effect<Stream.Stream<any>>
-      )(name, admitted.params)
+      const results = yield* toolkit.handle(name, admitted.params)
       return Stream.tap(results, (result) =>
         result.preliminary === true
           ? Effect.void
@@ -214,7 +220,9 @@ export const runLoop = (options: LoopOptions): Stream.Stream<AgentEvent> =>
           const stepStream = options.chat
             .streamText({
               prompt: [],
-              toolkit: interceptToolkit(yield* options.toolkit, hooks, () => context),
+              toolkit: asClosedToolkit(
+                interceptToolkit(yield* options.toolkit, hooks, () => context),
+              ),
               concurrency: "unbounded",
             })
             .pipe(

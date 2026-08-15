@@ -1,7 +1,5 @@
-import { isAbsolute, relative, resolve as resolvePath, sep } from "node:path"
-
 import { Plugin } from "@roop/agent/Plugin.ts"
-import { Effect, FileSystem, Schema, Stream } from "effect"
+import { Effect, FileSystem, Path, Schema, Stream } from "effect"
 import { Tool, Toolkit } from "effect/unstable/ai"
 import { ChildProcess } from "effect/unstable/process"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
@@ -10,17 +8,21 @@ export class ToolFailure extends Schema.TaggedErrorClass<ToolFailure>()("ToolFai
   message: Schema.String,
 }) {}
 
-export const CodingTools = (root: string): Plugin<FileSystem.FileSystem | ChildProcessSpawner> => {
-  const workspace = resolvePath(root)
-
-  const within = (path: string): Effect.Effect<string, ToolFailure> => {
-    const target = isAbsolute(path) ? path : resolvePath(workspace, path)
-    const rel = relative(workspace, target)
-    const escapes = rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)
-    return escapes
-      ? Effect.fail(new ToolFailure({ message: `path escapes the workspace: ${path}` }))
-      : Effect.succeed(target)
-  }
+export const CodingTools = (
+  root: string,
+): Plugin<FileSystem.FileSystem | ChildProcessSpawner | Path.Path> => {
+  const within = (raw: string): Effect.Effect<string, ToolFailure, Path.Path> =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path
+      const workspace = path.resolve(root)
+      const target = path.isAbsolute(raw) ? raw : path.resolve(workspace, raw)
+      const rel = path.relative(workspace, target)
+      const escapes = rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)
+      if (escapes) {
+        return yield* new ToolFailure({ message: `path escapes the workspace: ${raw}` })
+      }
+      return target
+    })
 
   const asFailure = <A, E extends { readonly message: string }>(
     effect: Effect.Effect<A, E>,
@@ -34,7 +36,7 @@ export const CodingTools = (root: string): Plugin<FileSystem.FileSystem | ChildP
       success: Schema.Struct({ content: Schema.String }),
       failure: ToolFailure,
       failureMode: "return",
-      dependencies: [FileSystem.FileSystem],
+      dependencies: [FileSystem.FileSystem, Path.Path],
     }),
     Tool.make("writeFile", {
       description: "Create or overwrite a UTF-8 text file inside the workspace",
@@ -42,7 +44,7 @@ export const CodingTools = (root: string): Plugin<FileSystem.FileSystem | ChildP
       success: Schema.Struct({ path: Schema.String }),
       failure: ToolFailure,
       failureMode: "return",
-      dependencies: [FileSystem.FileSystem],
+      dependencies: [FileSystem.FileSystem, Path.Path],
     }),
     Tool.make("listFiles", {
       description: "Recursively list file paths under a workspace directory",
@@ -50,7 +52,7 @@ export const CodingTools = (root: string): Plugin<FileSystem.FileSystem | ChildP
       success: Schema.Struct({ files: Schema.Array(Schema.String) }),
       failure: ToolFailure,
       failureMode: "return",
-      dependencies: [FileSystem.FileSystem],
+      dependencies: [FileSystem.FileSystem, Path.Path],
     }),
     Tool.make("bash", {
       description: "Run a shell command in the workspace and capture stdout, stderr, and exit code",
@@ -62,7 +64,7 @@ export const CodingTools = (root: string): Plugin<FileSystem.FileSystem | ChildP
       }),
       failure: ToolFailure,
       failureMode: "return",
-      dependencies: [ChildProcessSpawner],
+      dependencies: [ChildProcessSpawner, Path.Path],
     }),
   )
 
@@ -96,9 +98,10 @@ export const CodingTools = (root: string): Plugin<FileSystem.FileSystem | ChildP
       bash: ({ command }) =>
         Effect.scoped(
           Effect.gen(function* () {
+            const path = yield* Path.Path
             const spawner = yield* ChildProcessSpawner
             const handle = yield* spawner.spawn(
-              ChildProcess.make(command, { shell: true, cwd: workspace }),
+              ChildProcess.make(command, { shell: true, cwd: path.resolve(root) }),
             )
             const [stdout, stderr, exitCode] = yield* Effect.all(
               [

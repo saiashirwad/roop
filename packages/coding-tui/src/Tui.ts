@@ -13,7 +13,7 @@ import {
 import { AgentRpc } from "@roop/agent-rpc/AgentRpc.ts"
 import { AgentRpcClientHttp } from "@roop/agent-rpc/AgentRpcHttp.ts"
 import type { AgentEvent } from "@roop/agent/AgentEvent.ts"
-import { Effect, Queue, Stream } from "effect"
+import { Crypto, Effect, Layer, Queue, Stream } from "effect"
 import { RpcClient } from "effect/unstable/rpc"
 
 import { bold, cyan, dim, editorTheme, markdownTheme, red } from "./theme.ts"
@@ -24,11 +24,25 @@ type Action =
   | { readonly _tag: "Interrupt" }
   | { readonly _tag: "Quit" }
 
+const cryptoLive = Layer.succeed(
+  Crypto.Crypto,
+  Crypto.make({
+    randomBytes: (size) => globalThis.crypto.getRandomValues(new Uint8Array(size)),
+    digest: (algorithm, data) =>
+      Effect.promise(() =>
+        globalThis.crypto.subtle
+          .digest(algorithm, new Uint8Array(data))
+          .then((bytes) => new Uint8Array(bytes)),
+      ),
+  }),
+)
+
 const main = Effect.gen(function* () {
   const url = process.argv[2] ?? "http://localhost:8787/rpc"
   const client = yield* RpcClient.make(AgentRpc).pipe(Effect.provide(AgentRpcClientHttp(url)))
   const caps = yield* client.Capabilities()
-  let sessionId = crypto.randomUUID()
+  const crypto = yield* Crypto.Crypto
+  let sessionId = yield* Effect.orDie(crypto.randomUUIDv4)
   let modelId = caps.defaultModelId
   const actions = yield* Queue.unbounded<Action>()
 
@@ -77,11 +91,11 @@ const main = Effect.gen(function* () {
       getArgumentCompletions: (prefix) =>
         caps.models
           .filter((model) => model.id.startsWith(prefix))
-          .map((model) => ({
-            value: model.id,
-            label: model.id,
-            ...(model.description === undefined ? {} : { description: model.description }),
-          })),
+          .map((model) =>
+            model.description === undefined
+              ? { value: model.id, label: model.id }
+              : { value: model.id, label: model.id, description: model.description },
+          ),
     },
     { name: "skills", description: "list the agent's skills" },
     { name: "tools", description: "list the agent's tools" },
@@ -89,61 +103,64 @@ const main = Effect.gen(function* () {
     { name: "help", description: "list commands" },
   ]
   editor.setAutocompleteProvider(new CombinedAutocompleteProvider(commands, process.cwd()))
-  const command = (line: string) => {
-    const [name, arg] = line.slice(1).split(/\s+/, 2)
-    switch (name) {
-      case "models": {
-        if (arg === undefined) {
+  const command = (line: string) =>
+    Effect.gen(function* () {
+      const [name, arg] = line.slice(1).split(/\s+/, 2)
+      switch (name) {
+        case "models": {
+          if (arg === undefined) {
+            info(
+              caps.models
+                .map(
+                  (model) =>
+                    `${model.id === modelId ? cyan("●") : dim("○")} ${model.id}${
+                      model.description === undefined ? "" : dim(` — ${model.description}`)
+                    }`,
+                )
+                .join("\n"),
+            )
+          } else if (caps.models.some((model) => model.id === arg)) {
+            modelId = arg
+            header.setText(headerText())
+            info(dim(`model → ${arg}`))
+          } else {
+            info(red(`unknown model: ${arg}`))
+          }
+          return
+        }
+        case "skills": {
           info(
-            caps.models
-              .map(
-                (model) =>
-                  `${model.id === modelId ? cyan("●") : dim("○")} ${model.id}${
-                    model.description === undefined ? "" : dim(` — ${model.description}`)
-                  }`,
-              )
+            caps.skills.length === 0
+              ? dim("no skills")
+              : caps.skills
+                  .map((skill) => `${bold(skill.id)} ${dim(skill.description)}`)
+                  .join("\n"),
+          )
+          return
+        }
+        case "tools": {
+          info(caps.tools.map((tool) => `${bold(tool.name)} ${dim(tool.description)}`).join("\n"))
+          return
+        }
+        case "new": {
+          sessionId = yield* Effect.orDie(crypto.randomUUIDv4)
+          chat.clear()
+          info(dim("new session"))
+          return
+        }
+        case "help": {
+          info(
+            commands
+              .map((entry) => `${bold(`/${entry.name}`)} ${dim(entry.description ?? "")}`)
               .join("\n"),
           )
-        } else if (caps.models.some((model) => model.id === arg)) {
-          modelId = arg
-          header.setText(headerText())
-          info(dim(`model → ${arg}`))
-        } else {
-          info(red(`unknown model: ${arg}`))
+          return
         }
-        return
+        default: {
+          info(red(`unknown command: /${name}`))
+        }
       }
-      case "skills": {
-        info(
-          caps.skills.length === 0
-            ? dim("no skills")
-            : caps.skills.map((skill) => `${bold(skill.id)} ${dim(skill.description)}`).join("\n"),
-        )
-        return
-      }
-      case "tools": {
-        info(caps.tools.map((tool) => `${bold(tool.name)} ${dim(tool.description)}`).join("\n"))
-        return
-      }
-      case "new": {
-        sessionId = crypto.randomUUID()
-        chat.clear()
-        info(dim("new session"))
-        return
-      }
-      case "help": {
-        info(
-          commands
-            .map((entry) => `${bold(`/${entry.name}`)} ${dim(entry.description ?? "")}`)
-            .join("\n"),
-        )
-        return
-      }
-      default: {
-        info(red(`unknown command: /${name}`))
-      }
-    }
-  }
+    })
 
   const run = (prompt: string) =>
     Effect.gen(function* () {
@@ -252,7 +269,7 @@ const main = Effect.gen(function* () {
       switch (action._tag) {
         case "Submit": {
           if (action.text.startsWith("/")) {
-            return Effect.sync(() => command(action.text))
+            return command(action.text)
           }
           if (busy) {
             return Effect.sync(() => {
@@ -275,7 +292,8 @@ const main = Effect.gen(function* () {
 
 Effect.runFork(
   Effect.scoped(main).pipe(
-    Effect.catchCause((cause) => Effect.sync(() => console.error(String(cause)))),
+    Effect.provide(cryptoLive),
+    Effect.catchCause((cause) => Effect.logError(String(cause))),
     Effect.ensuring(Effect.sync(() => process.exit(0))),
   ),
 )

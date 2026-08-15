@@ -1,4 +1,15 @@
-import { Clock, Console, Context, Crypto, Effect, FileSystem, Layer, Ref, Schema } from "effect"
+import {
+  Clock,
+  Console,
+  Context,
+  Crypto,
+  Effect,
+  FileSystem,
+  Layer,
+  PlatformError,
+  Ref,
+  Schema,
+} from "effect"
 import { Prompt } from "effect/unstable/ai"
 
 import {
@@ -137,8 +148,9 @@ export const SessionStoreMemory = Layer.effect(
               : Effect.succeed(session)
           }),
         ),
-      list:
-        Ref.get(sessions).pipe(Effect.map((map) => [...map.values()].map(metaOf).sort(byRecency))),
+      list: Ref.get(sessions).pipe(
+        Effect.map((map) => [...map.values()].map(metaOf).sort(byRecency)),
+      ),
     })
   }),
 )
@@ -156,16 +168,9 @@ export const SessionStoreFs = (
 
       // FileSystem.readFileString fails with a PlatformError whose `reason` is a
       // SystemError; every platform implementation normalizes ENOENT to the
-      // reason tag "NotFound" (see effect's platform-node errno mapping). We
-      // match structurally so this stays portable across platform adapters.
-      const isFileNotFound = (error: unknown): boolean => {
-        /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
-        const reason = (error as { reason?: { _tag?: string } } | null)?.reason
-        if (reason !== undefined && reason._tag !== undefined) {
-          return reason._tag === "NotFound"
-        }
-        return error instanceof Error && error.message.includes("ENOENT")
-      }
+      // reason tag "NotFound" (see effect's platform-node errno mapping).
+      const isFileNotFound = (error: PlatformError.PlatformError): boolean =>
+        error.reason._tag === "NotFound"
 
       const write = (session: Session) =>
         Effect.flatMap(crypto.randomUUIDv4, (suffix) => {
@@ -225,36 +230,35 @@ export const SessionStoreFs = (
         deriveMessages: (sessionId) =>
           Effect.map(read(sessionId), (session) => deriveMessages(session.events)),
         load: read,
-        list:
-          fs.readDirectory(dir).pipe(
-            Effect.flatMap((entries) =>
-              Effect.forEach(
-                entries.filter((entry) => entry.endsWith(".json")),
-                (entry) => {
-                  const sessionId = decodeURIComponent(entry.replace(/\.json$/, ""))
-                  return read(sessionId).pipe(
-                    // A missing file is normal (deleted mid-listing) and stays
-                    // silent; anything else (e.g. a newer format version)
-                    // deserves a warning before the session is skipped.
-                    Effect.tapError((error) =>
-                      error._tag === "SessionNotFound"
-                        ? Effect.void
-                        : Console.warn(
-                            `skipping session ${sessionId} (${entry}): ${error._tag}: ${error.message ?? ""}`,
-                          ),
-                    ),
-                    Effect.option,
-                  )
-                },
-              ),
+        list: fs.readDirectory(dir).pipe(
+          Effect.flatMap((entries) =>
+            Effect.forEach(
+              entries.filter((entry) => entry.endsWith(".json")),
+              (entry) => {
+                const sessionId = decodeURIComponent(entry.replace(/\.json$/, ""))
+                return read(sessionId).pipe(
+                  // A missing file is normal (deleted mid-listing) and stays
+                  // silent; anything else (e.g. a newer format version)
+                  // deserves a warning before the session is skipped.
+                  Effect.tapError((error) =>
+                    error._tag === "SessionNotFound"
+                      ? Effect.void
+                      : Console.warn(
+                          `skipping session ${sessionId} (${entry}): ${error._tag}: ${error.message ?? ""}`,
+                        ),
+                  ),
+                  Effect.option,
+                )
+              },
             ),
-            Effect.map((sessions) =>
-              sessions
-                .flatMap((session) => (session._tag === "Some" ? [metaOf(session.value)] : []))
-                .sort(byRecency),
-            ),
-            Effect.orDie,
           ),
+          Effect.map((sessions) =>
+            sessions
+              .flatMap((session) => (session._tag === "Some" ? [metaOf(session.value)] : []))
+              .sort(byRecency),
+          ),
+          Effect.orDie,
+        ),
       })
     }),
   )

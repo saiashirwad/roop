@@ -1,6 +1,6 @@
 import { assert, it } from "@effect/vitest"
 import { Effect, Layer, Ref, Schema, Stream } from "effect"
-import { LanguageModel, Prompt, Tool, Toolkit } from "effect/unstable/ai"
+import { LanguageModel, Prompt, Response, Tool, Toolkit } from "effect/unstable/ai"
 
 import { Agent, AgentLiveToolkit } from "../src/Agent.ts"
 import {
@@ -28,7 +28,7 @@ const EchoToolkit = Toolkit.make(Echo)
 
 /** A scripted model that records the prompt it was handed for each request. */
 const scripted = (
-  turns: ReadonlyArray<ReadonlyArray<Record<string, unknown>>>,
+  turns: ReadonlyArray<ReadonlyArray<Response.StreamPartEncoded>>,
   prompts?: Ref.Ref<Array<ReadonlyArray<unknown>>>,
 ) =>
   Effect.gen(function* () {
@@ -44,8 +44,7 @@ const scripted = (
               yield* Ref.update(prompts, (seen) => [...seen, options.prompt.content])
             }
             const i = yield* Ref.getAndUpdate(index, (n) => n + 1)
-            /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
-            return Stream.fromIterable((turns[i] ?? []) as never)
+            return Stream.fromIterable(turns[i] ?? [])
           }),
         ),
     })
@@ -71,7 +70,7 @@ const Main = (
   return hooks === undefined ? base : base.pipe(Layer.provide(hooks))
 }
 
-const collect = (stream: Stream.Stream<unknown, unknown>) =>
+const collect = <A, E = never, R = never>(stream: Stream.Stream<A, E, R>) =>
   Stream.runCollect(stream).pipe(Effect.map((chunk) => [...chunk]))
 
 const tags = (events: ReadonlyArray<any>) => events.map((event) => event._tag)

@@ -4,12 +4,12 @@ import { cryptoWeb } from "@roop/agent/cryptoWeb.ts"
 import { AgentPlugins, Plugin } from "@roop/agent/Plugin.ts"
 import { SessionStoreMemory } from "@roop/agent/SessionStore.ts"
 import { Effect, Layer, Ref, Stream } from "effect"
-import { LanguageModel } from "effect/unstable/ai"
+import { LanguageModel, Response as AiResponse } from "effect/unstable/ai"
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient"
 
 import { WebTools } from "../src/WebTools.ts"
 
-const scripted = (turns: ReadonlyArray<ReadonlyArray<Record<string, unknown>>>) =>
+const scripted = (turns: ReadonlyArray<ReadonlyArray<AiResponse.StreamPartEncoded>>) =>
   Effect.gen(function* () {
     const index = yield* Ref.make(0)
     return yield* LanguageModel.make({
@@ -18,8 +18,7 @@ const scripted = (turns: ReadonlyArray<ReadonlyArray<Record<string, unknown>>>) 
         Stream.unwrap(
           Effect.gen(function* () {
             const i = yield* Ref.getAndUpdate(index, (n) => n + 1)
-            /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
-            return Stream.fromIterable((turns[i] ?? []) as never)
+            return Stream.fromIterable(turns[i] ?? [])
           }),
         ),
     })

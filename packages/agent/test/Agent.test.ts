@@ -1,11 +1,7 @@
-import { mkdtempSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
-
 import { NodeFileSystem } from "@effect/platform-node"
 import { assert, it } from "@effect/vitest"
-import { Effect, Exit, Fiber, Layer, Option, Queue, Ref, Schema, Stream } from "effect"
-import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
+import { Effect, Exit, Fiber, FileSystem, Layer, Option, Queue, Ref, Schema, Stream } from "effect"
+import { LanguageModel, Response, Tool, Toolkit } from "effect/unstable/ai"
 
 import { Agent, AgentLiveToolkit } from "../src/Agent.ts"
 import { delegation } from "../src/agentTool.ts"
@@ -23,7 +19,7 @@ const Echo = Tool.make("echo", {
 
 const EchoToolkit = Toolkit.make(Echo)
 
-const scripted = (turns: ReadonlyArray<ReadonlyArray<Record<string, unknown>>>) =>
+const scripted = (turns: ReadonlyArray<ReadonlyArray<Response.StreamPartEncoded>>) =>
   Effect.gen(function* () {
     const index = yield* Ref.make(0)
     return yield* LanguageModel.make({
@@ -32,8 +28,7 @@ const scripted = (turns: ReadonlyArray<ReadonlyArray<Record<string, unknown>>>) 
         Stream.unwrap(
           Effect.gen(function* () {
             const i = yield* Ref.getAndUpdate(index, (n) => n + 1)
-            /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
-            return Stream.fromIterable((turns[i] ?? []) as never)
+            return Stream.fromIterable(turns[i] ?? [])
           }),
         ),
     })
@@ -62,7 +57,7 @@ const Main = (model: Effect.Effect<LanguageModel.Service>) =>
     ),
   )
 
-const collect = (stream: Stream.Stream<unknown, unknown>) =>
+const collect = <A, E = never, R = never>(stream: Stream.Stream<A, E, R>) =>
   Stream.runCollect(stream).pipe(Effect.map((chunk) => [...chunk]))
 
 it.layer(
@@ -241,7 +236,11 @@ it.layer(
     }),
   )
 })
-const sysPromptDir = mkdtempSync(join(tmpdir(), "agent-sysprompt-"))
+const sysPromptDir = await Effect.runPromise(
+  Effect.flatMap(FileSystem.FileSystem, (fs) =>
+    fs.makeTempDirectory({ prefix: "agent-sysprompt-" }),
+  ).pipe(Effect.orDie, Effect.provide(NodeFileSystem.layer)),
+)
 
 const withSystemPrompt = (systemPrompt: string, prompt: string, sessionId: string) =>
   Effect.gen(function* () {
@@ -306,8 +305,14 @@ it.effect("does not duplicate the system message when resuming with the same pro
   }),
 )
 
-const corruptDir = mkdtempSync(join(tmpdir(), "agent-corrupt-"))
-writeFileSync(join(corruptDir, "corrupt.json"), "{ not json")
+const corruptDir = await Effect.runPromise(
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const dir = yield* fs.makeTempDirectory({ prefix: "agent-corrupt-" })
+    yield* fs.writeFileString(`${dir}/corrupt.json`, "{ not json")
+    return dir
+  }).pipe(Effect.orDie, Effect.provide(NodeFileSystem.layer)),
+)
 const FsLayer = AgentLiveToolkit(EchoToolkit).pipe(
   Layer.provide(
     ModelCatalogLive([

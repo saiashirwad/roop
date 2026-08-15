@@ -4,11 +4,11 @@ import { Agent } from "@roop/agent/Agent.ts"
 import { cryptoWeb } from "@roop/agent/cryptoWeb.ts"
 import { AgentPlugins } from "@roop/agent/Plugin.ts"
 import { SessionStoreMemory } from "@roop/agent/SessionStore.ts"
-import { Effect, Layer, Stream } from "effect"
+import { Config, Effect, Layer, Option, Stream } from "effect"
 
 import { Codex } from "../src/Codex.ts"
 
-const live = process.env.CODEX_SMOKE !== undefined
+const live = Option.isSome(Effect.runSync(Config.option(Config.string("CODEX_SMOKE"))))
 
 it.layer(
   AgentPlugins([Codex()]).pipe(

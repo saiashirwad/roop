@@ -1,4 +1,5 @@
 import * as stylex from "@stylexjs/stylex"
+import { Option, Schema } from "effect"
 import { useState } from "react"
 
 import { Markdown } from "./Markdown.tsx"
@@ -116,66 +117,118 @@ const line = (text: string, max = 120) => {
 
 const bytes = (count: number) => (count < 1024 ? `${count}b` : `${(count / 1024).toFixed(1)}kb`)
 
-const summaries: Record<string, (tool: Tool) => [string, string]> = {
-  readFile: ({ params, result }) => {
-    /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
-    const { path } = params as { path: string }
-    /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
-    const { content } = (result ?? {}) as { content?: string }
-    return ["read", `${path}${content === undefined ? "" : ` · ${bytes(content.length)}`}`]
-  },
-  writeFile: ({ params }) => {
-    /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
-    const { path, content } = params as { path: string; content: string }
-    return ["write", `${path} · ${bytes(content.length)}`]
-  },
-  listFiles: ({ params, result }) => {
-    /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
-    const { path } = params as { path?: string }
-    /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
-    const { files } = (result ?? {}) as { files?: ReadonlyArray<string> }
-    return ["list", `${path ?? "."}${files === undefined ? "" : ` · ${files.length} files`}`]
-  },
-  bash: ({ params, result }) => {
-    /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
-    const { command } = params as { command: string }
-    /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
-    const { exitCode } = (result ?? {}) as { exitCode?: number }
-    const exit = exitCode === undefined || exitCode === 0 ? "" : ` · exit ${exitCode}`
-    return ["$", `${line(command)}${exit}`]
-  },
-  webFetch: ({ params, result }) => {
-    /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
-    const { url } = params as { url: string }
-    /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
-    const { status, body } = (result ?? {}) as { status?: number; body?: string }
-    return [
-      "fetch",
-      `${line(url)}${status === undefined ? "" : ` · ${status} · ${bytes(body?.length ?? 0)}`}`,
-    ]
-  },
-  /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
-  skill: ({ params }) => ["skill", (params as { id: string }).id],
+const ReadFileParams = Schema.Struct({ path: Schema.String })
+const ReadFileResult = Schema.Struct({ content: Schema.optionalKey(Schema.String) })
+const WriteFileParams = Schema.Struct({ path: Schema.String, content: Schema.String })
+const ListFilesParams = Schema.Struct({ path: Schema.optionalKey(Schema.String) })
+const ListFilesResult = Schema.Struct({ files: Schema.optionalKey(Schema.Array(Schema.String)) })
+const BashParams = Schema.Struct({ command: Schema.String })
+const BashResult = Schema.Struct({ exitCode: Schema.optionalKey(Schema.Finite) })
+const WebFetchParams = Schema.Struct({ url: Schema.String })
+const WebFetchResult = Schema.Struct({
+  status: Schema.optionalKey(Schema.Finite),
+  body: Schema.optionalKey(Schema.String),
+})
+const SkillParams = Schema.Struct({ id: Schema.String })
+const TaskParams = Schema.Struct({ task: Schema.String })
+const ResultMessage = Schema.Struct({ message: Schema.optionalKey(Schema.String) })
+const ResultSummary = Schema.Struct({ summary: Schema.optionalKey(Schema.String) })
+const TodoState = Schema.Literals(["pending", "active", "done"])
+const WriteTodosParams = Schema.Struct({
+  todos: Schema.Array(Schema.Struct({ text: Schema.String, state: TodoState })),
+})
+const FallbackParams = Schema.Record(Schema.String, Schema.Json)
+const jsonString = Schema.fromJsonString(Schema.Json)
+
+const formatParam = (value: Schema.Json): string =>
+  Schema.is(Schema.String)(value) ? line(value, 40) : line(Schema.encodeSync(jsonString)(value), 40)
+
+const fallback = (tool: Tool): [string, string] => {
+  const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(FallbackParams)(tool.params))
+  const summary =
+    decoded === undefined
+      ? ""
+      : Object.entries(decoded)
+          .map(([key, value]) => `${key}: ${formatParam(value)}`)
+          .join(" · ")
+  return [tool.name, summary]
 }
 
-const fallback = (tool: Tool): [string, string] => [
-  tool.name,
-  /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
-  Object.entries((tool.params ?? {}) as Record<string, unknown>)
-    .map(
-      ([key, value]) =>
-        `${key}: ${line(typeof value === "string" ? value : JSON.stringify(value), 40)}`,
-    )
-    .join(" · "),
-]
+const summaries = {
+  readFile: (tool: Tool): [string, string] => {
+    const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(ReadFileParams)(tool.params))
+    if (decoded === undefined) return fallback(tool)
+    const content =
+      tool.result === undefined
+        ? undefined
+        : Option.getOrUndefined(Schema.decodeUnknownOption(ReadFileResult)(tool.result))?.content
+    return ["read", `${decoded.path}${content === undefined ? "" : ` · ${bytes(content.length)}`}`]
+  },
+  writeFile: (tool: Tool): [string, string] => {
+    const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(WriteFileParams)(tool.params))
+    if (decoded === undefined) return fallback(tool)
+    return ["write", `${decoded.path} · ${bytes(decoded.content.length)}`]
+  },
+  listFiles: (tool: Tool): [string, string] => {
+    const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(ListFilesParams)(tool.params))
+    if (decoded === undefined) return fallback(tool)
+    const files =
+      tool.result === undefined
+        ? undefined
+        : Option.getOrUndefined(Schema.decodeUnknownOption(ListFilesResult)(tool.result))?.files
+    return [
+      "list",
+      `${decoded.path ?? "."}${files === undefined ? "" : ` · ${files.length} files`}`,
+    ]
+  },
+  bash: (tool: Tool): [string, string] => {
+    const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(BashParams)(tool.params))
+    if (decoded === undefined) return fallback(tool)
+    const exitCode =
+      tool.result === undefined
+        ? undefined
+        : Option.getOrUndefined(Schema.decodeUnknownOption(BashResult)(tool.result))?.exitCode
+    const exit = exitCode === undefined || exitCode === 0 ? "" : ` · exit ${exitCode}`
+    return ["$", `${line(decoded.command)}${exit}`]
+  },
+  webFetch: (tool: Tool): [string, string] => {
+    const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(WebFetchParams)(tool.params))
+    if (decoded === undefined) return fallback(tool)
+    const payload =
+      tool.result === undefined
+        ? undefined
+        : Option.getOrUndefined(Schema.decodeUnknownOption(WebFetchResult)(tool.result))
+    return [
+      "fetch",
+      `${line(decoded.url)}${payload?.status === undefined ? "" : ` · ${payload.status} · ${bytes(payload.body?.length ?? 0)}`}`,
+    ]
+  },
+  skill: (tool: Tool): [string, string] => {
+    const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(SkillParams)(tool.params))
+    if (decoded === undefined) return fallback(tool)
+    return ["skill", decoded.id]
+  },
+}
+
+const summarize = (tool: Tool): [string, string] => {
+  switch (tool.name) {
+    case "readFile":
+    case "writeFile":
+    case "listFiles":
+    case "bash":
+    case "webFetch":
+    case "skill":
+      return summaries[tool.name](tool)
+    default:
+      return fallback(tool)
+  }
+}
 
 const marks = { pending: "○", active: "◉", done: "✓" } as const
 
 const Todos = ({ tool }: { readonly tool: Tool }) => {
-  /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
-  const { todos } = tool.params as {
-    todos: ReadonlyArray<{ text: string; state: keyof typeof marks }>
-  }
+  const todos =
+    Option.getOrUndefined(Schema.decodeUnknownOption(WriteTodosParams)(tool.params))?.todos ?? []
   return (
     <div {...stylex.props(styles.body)}>
       <span {...stylex.props(styles.name)}>todos</span>
@@ -198,7 +251,7 @@ const activity = (items: ReadonlyArray<Item>): string => {
   switch (last.kind) {
     case "tool": {
       if (last.children !== undefined) return activity(last.children)
-      const [label, summary] = (summaries[last.name] ?? fallback)(last)
+      const [label, summary] = summarize(last)
       return `${label} ${summary}`
     }
     case "assistant":
@@ -212,16 +265,16 @@ const SubagentCard = ({ tool }: { readonly tool: Tool }) => {
   const [manual, setManual] = useState<boolean | undefined>(undefined)
   const running = tool.result === undefined
   const open = manual ?? running
-  /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
-  const { task } = tool.params as { task: string }
+  const task =
+    Option.getOrUndefined(Schema.decodeUnknownOption(TaskParams)(tool.params))?.task ?? ""
   const caption =
     tool.isFailure === true
-      /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
-      ? ((tool.result as { message?: string }).message ?? "failed")
+      ? (Option.getOrUndefined(Schema.decodeUnknownOption(ResultMessage)(tool.result))?.message ??
+        "failed")
       : running
         ? activity(tool.children ?? [])
-        /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
-        : ((tool.result as { summary?: string })?.summary ?? "")
+        : (Option.getOrUndefined(Schema.decodeUnknownOption(ResultSummary)(tool.result))?.summary ??
+          "")
   return (
     <div {...stylex.props(styles.page)}>
       <button {...stylex.props(styles.pageHeader)} onClick={() => setManual(!open)}>
@@ -263,18 +316,17 @@ const SubagentCard = ({ tool }: { readonly tool: Tool }) => {
 }
 
 export const ToolCard = ({ tool }: { readonly tool: Tool }) => {
-  /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
-  if (typeof (tool.params as { task?: unknown })?.task === "string") {
+  if (Schema.is(TaskParams)(tool.params)) {
     return <SubagentCard tool={tool} />
   }
   const [label, summary] =
     tool.isFailure === true
       ? [
-          (summaries[tool.name] ?? fallback)({ ...tool, result: undefined })[0],
-          /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
-          (tool.result as { message?: string }).message ?? "failed",
+          summarize({ ...tool, result: undefined })[0],
+          Option.getOrUndefined(Schema.decodeUnknownOption(ResultMessage)(tool.result))?.message ??
+            "failed",
         ]
-      : (summaries[tool.name] ?? fallback)(tool)
+      : summarize(tool)
   return (
     <div {...stylex.props(styles.callout)}>
       <span {...stylex.props(styles.dot, statusOf(tool))} />

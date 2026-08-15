@@ -52,8 +52,8 @@ export const delegation = (options: DelegationOptions) => {
       yield* Stream.runForEach(
         agent.prompt({
           prompt: params.task,
-          ...(options.modelId !== undefined ? { modelId: options.modelId } : {}),
-          ...(options.maxTurns !== undefined ? { maxTurns: options.maxTurns } : {}),
+          modelId: options.modelId,
+          maxTurns: options.maxTurns,
         }),
         (event) =>
           Effect.gen(function* () {
