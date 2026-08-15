@@ -211,6 +211,9 @@ export const SessionStoreFs = (
             )
             yield* write({
               ...session,
+              // Appending v2 events upgrades a readable v1 log before writing;
+              // otherwise its header would falsely describe the contents.
+              header: { ...session.header, version: SESSION_FORMAT_VERSION },
               events: [...session.events, event],
               updatedAt: yield* Clock.currentTimeMillis,
             })

@@ -1,17 +1,18 @@
-import { assert, it } from "@effect/vitest"
-import { NodeFileSystem } from "@effect/platform-node"
-import { Effect, Exit, Fiber, Layer, Option, Queue, Ref, Schema, Stream } from "effect"
-import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
 import { mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
+import { NodeFileSystem } from "@effect/platform-node"
+import { assert, it } from "@effect/vitest"
+import { Effect, Exit, Fiber, Layer, Option, Queue, Ref, Schema, Stream } from "effect"
+import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
+
 import { Agent, AgentLiveToolkit } from "../src/Agent.ts"
 import { delegation } from "../src/agentTool.ts"
+import { cryptoWeb } from "../src/cryptoWeb.ts"
 import { ModelCatalogLive } from "../src/ModelCatalog.ts"
 import { deriveMessages } from "../src/SessionEvent.ts"
 import { SessionStoreFs, SessionStoreMemory } from "../src/SessionStore.ts"
-import { cryptoWeb } from "../src/cryptoWeb.ts"
 import { Skills } from "../src/Skills.ts"
 
 const Echo = Tool.make("echo", {
@@ -193,6 +194,14 @@ it.layer(Main(hanging))("Agent kernel concurrency", (it) => {
         deriveMessages(session.events).map((message) => message.role),
         ["user"],
       )
+      assert.deepStrictEqual(
+        session.events.map((event) => event._tag),
+        ["user/message", "turn/start", "step/start", "model/request", "step/end", "turn/end"],
+      )
+      const stepEnd = session.events[4] as any
+      const turnEnd = session.events[5] as any
+      assert.strictEqual(stepEnd.reason, "interrupted")
+      assert.strictEqual(turnEnd.reason, "interrupted")
     }),
   )
 
@@ -241,7 +250,9 @@ const withSystemPrompt = (systemPrompt: string, prompt: string, sessionId: strin
             {
               id: "fake",
               provider: "test",
-              layer: modelLayer(scripted([[{ type: "text-delta" as const, id: "t1", delta: "done" }]])),
+              layer: modelLayer(
+                scripted([[{ type: "text-delta" as const, id: "t1", delta: "done" }]]),
+              ),
             },
           ]),
         ),
@@ -263,10 +274,10 @@ it.effect("records a new system/message when resuming with a diverging prompt", 
     const session = yield* withSystemPrompt("you are v2", "again", "sys")
 
     const systemEvents = session.events.filter((event) => event._tag === "system/message")
-    assert.deepStrictEqual(systemEvents.map((event: any) => event.content), [
-      "you are v1",
-      "you are v2",
-    ])
+    assert.deepStrictEqual(
+      systemEvents.map((event: any) => event.content),
+      ["you are v1", "you are v2"],
+    )
 
     const systems = deriveMessages(session.events).filter((message) => message.role === "system")
     assert.deepStrictEqual(
@@ -282,7 +293,10 @@ it.effect("does not duplicate the system message when resuming with the same pro
     const session = yield* withSystemPrompt("you are stable", "again", "stable")
 
     const systemEvents = session.events.filter((event) => event._tag === "system/message")
-    assert.deepStrictEqual(systemEvents.map((event: any) => event.content), ["you are stable"])
+    assert.deepStrictEqual(
+      systemEvents.map((event: any) => event.content),
+      ["you are stable"],
+    )
   }),
 )
 
@@ -291,7 +305,11 @@ writeFileSync(join(corruptDir, "corrupt.json"), "{ not json")
 const FsLayer = AgentLiveToolkit(EchoToolkit).pipe(
   Layer.provide(
     ModelCatalogLive([
-      { id: "fake", provider: "test", layer: modelLayer(scripted([[{ type: "text-delta" as const, id: "t1", delta: "done" }]])) },
+      {
+        id: "fake",
+        provider: "test",
+        layer: modelLayer(scripted([[{ type: "text-delta" as const, id: "t1", delta: "done" }]])),
+      },
     ]),
   ),
   Layer.provide(SessionStoreFs(corruptDir)),

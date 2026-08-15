@@ -3,10 +3,11 @@ import { Effect, Layer, Ref, Schema, Stream } from "effect"
 import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
 
 import { Agent } from "../src/Agent.ts"
+import { AgentHooks, layerHook } from "../src/AgentHooks.ts"
+import { cryptoWeb } from "../src/cryptoWeb.ts"
 import { AgentPlugins, Plugin } from "../src/Plugin.ts"
 import { deriveMessages } from "../src/SessionEvent.ts"
 import { SessionStoreMemory } from "../src/SessionStore.ts"
-import { cryptoWeb } from "../src/cryptoWeb.ts"
 import { subagent } from "../src/subagent.ts"
 
 const scripted = (turns: ReadonlyArray<ReadonlyArray<Record<string, unknown>>>) =>
@@ -130,6 +131,48 @@ const worker = subagent({
       [{ type: "text-delta", id: "w2", delta: "child did the task" }],
     ]),
   ],
+})
+
+const hookOrder = Effect.runSync(Ref.make<Array<string>>([]))
+
+const recording = (name: string): Layer.Layer<AgentHooks, never, never> =>
+  layerHook(name, (downstream) =>
+    Effect.succeed({
+      ...downstream,
+      beforeRequest: (context, request) =>
+        Effect.gen(function* () {
+          yield* Ref.update(hookOrder, (entries) => [...entries, `${name}:in`])
+          const result = yield* downstream.beforeRequest(context, request)
+          yield* Ref.update(hookOrder, (entries) => [...entries, `${name}:out`])
+          return result
+        }),
+    }),
+  ) as unknown as Layer.Layer<AgentHooks, never, never>
+
+const outerHook = Plugin<Record<string, never>, never>({ name: "outer-hook", hooks: recording("outer") })
+const innerHook = Plugin<Record<string, never>, never>({ name: "inner-hook", hooks: recording("inner") })
+const Hooked = AgentPlugins([
+  outerHook,
+  innerHook,
+  model("fake", [[{ type: "text-delta", id: "t1", delta: "done" }]]),
+]).pipe(Layer.provide(SessionStoreMemory), Layer.provide(cryptoWeb))
+
+it.layer(Hooked)("plugin hooks", (it) => {
+  it.effect("composes plugin hook waterfalls outermost-first", () =>
+    Effect.gen(function* () {
+      const agent = yield* Agent
+      yield* Ref.set(hookOrder, [])
+      const events = yield* collect(agent.prompt({ prompt: "go", sessionId: "h1" }))
+      assert.strictEqual((events[events.length - 1] as any).reason, "completed")
+
+      assert.deepStrictEqual(yield* Ref.get(hookOrder), [
+        "outer:in",
+        "inner:in",
+        "inner:out",
+        "outer:out",
+      ])
+    }),
+  )
 })
 
 const Parent = AgentPlugins([

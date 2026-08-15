@@ -7,21 +7,27 @@ import { assert, it } from "@effect/vitest"
 import { Cause, Effect, Exit, FileSystem, Layer, Option } from "effect"
 import { Prompt } from "effect/unstable/ai"
 
+import { cryptoWeb } from "../src/cryptoWeb.ts"
 import { deriveMessages, SESSION_FORMAT_VERSION, type SessionEvent } from "../src/SessionEvent.ts"
 import { SessionStore, SessionStoreFs, SessionStoreMemory } from "../src/SessionStore.ts"
-import { cryptoWeb } from "../src/cryptoWeb.ts"
 
 const scripted: ReadonlyArray<SessionEvent> = [
   { _tag: "system/message", content: "you are a test" },
   { _tag: "user/message", content: "first question" },
   { _tag: "turn/start" },
+  { _tag: "step/start", index: 1 },
+  { _tag: "model/request", request: { prompt: { content: [] }, toolChoice: "auto" } },
   { _tag: "tool/call", id: "c1", name: "echo", params: { note: "hi" } },
   { _tag: "tool/call", id: "c2", name: "echo", params: { note: "again" } },
   { _tag: "tool/result", id: "c1", name: "echo", isFailure: false, result: { reply: "hi" } },
   { _tag: "tool/result", id: "c2", name: "echo", isFailure: false, result: { reply: "again" } },
+  { _tag: "step/end", reason: "completed" },
   { _tag: "turn/end", reason: "completed" },
   { _tag: "turn/start" },
+  { _tag: "step/start", index: 1 },
+  { _tag: "model/request", request: { prompt: { content: [] } } },
   { _tag: "assistant/message", parts: [{ type: "text", text: "all done" }] },
+  { _tag: "step/end", reason: "completed" },
   { _tag: "turn/end", reason: "completed" },
 ]
 
@@ -109,7 +115,10 @@ it.effect("memory store appends and derives", () =>
 )
 
 const dir = mkdtempSync(join(tmpdir(), "sessions-"))
-const StoreLive = SessionStoreFs(dir).pipe(Layer.provide(NodeFileSystem.layer), Layer.provide(cryptoWeb))
+const StoreLive = SessionStoreFs(dir).pipe(
+  Layer.provide(NodeFileSystem.layer),
+  Layer.provide(cryptoWeb),
+)
 
 it.layer(StoreLive)("SessionStoreFs", (it) => {
   it.effect("persists events and reloads to the same projection (replay)", () =>
@@ -152,7 +161,10 @@ it.layer(StoreLive)("SessionStoreFs", (it) => {
 
       const session = yield* (yield* SessionStore).load("grow")
       assert.strictEqual(session.events.length, scripted.length + 1)
-      assert.deepStrictEqual(session.events[scripted.length], { _tag: "user/message", content: "more" })
+      assert.deepStrictEqual(session.events[scripted.length], {
+        _tag: "user/message",
+        content: "more",
+      })
     }),
   )
 
@@ -161,7 +173,10 @@ it.layer(StoreLive)("SessionStoreFs", (it) => {
       yield* appendAll("tmpcheck")
       const fs = yield* FileSystem.FileSystem
       const entries = yield* fs.readDirectory(dir)
-      assert.deepStrictEqual(entries.filter((entry) => entry.endsWith(".tmp")), [])
+      assert.deepStrictEqual(
+        entries.filter((entry) => entry.endsWith(".tmp")),
+        [],
+      )
     }).pipe(Effect.provide(NodeFileSystem.layer), Effect.provide(cryptoWeb)),
   )
 
@@ -172,7 +187,10 @@ it.layer(StoreLive)("SessionStoreFs", (it) => {
     typeof process.getuid === "function" && process.getuid() !== 0 && process.platform !== "win32"
   it.effect("append dies (does not reset) when the log is unreadable", () => {
     const lockedDir = join(dir, "locked")
-    const LockedStore = SessionStoreFs(lockedDir).pipe(Layer.provide(NodeFileSystem.layer), Layer.provide(cryptoWeb))
+    const LockedStore = SessionStoreFs(lockedDir).pipe(
+      Layer.provide(NodeFileSystem.layer),
+      Layer.provide(cryptoWeb),
+    )
     return Effect.provide(
       Effect.gen(function* () {
         if (!permissionEnforced) return
@@ -225,10 +243,12 @@ it.layer(StoreLive)("SessionStoreFs", (it) => {
 
       const metas = yield* (yield* SessionStore).list()
       // timestamps can collide within a millisecond, so only assert membership
-      assert.deepStrictEqual(
-        [...metas.map((meta) => meta.id)].sort(),
-        ["a", "good", "grow", "tmpcheck"],
-      )
+      assert.deepStrictEqual([...metas.map((meta) => meta.id)].sort(), [
+        "a",
+        "good",
+        "grow",
+        "tmpcheck",
+      ])
     }),
   )
 

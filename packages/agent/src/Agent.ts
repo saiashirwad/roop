@@ -3,6 +3,7 @@ import { Chat, Toolkit } from "effect/unstable/ai"
 import type * as Tool from "effect/unstable/ai/Tool"
 
 import { AgentEvent } from "./AgentEvent.ts"
+import { AgentHooks } from "./AgentHooks.ts"
 import { runLoop, type ErasedToolkit } from "./agentLoop.ts"
 import { capabilitiesFrom, type Capabilities } from "./Capabilities.ts"
 import { ModelCatalog, ModelNotFound } from "./ModelCatalog.ts"
@@ -69,6 +70,7 @@ export const AgentLive = <Tools extends Record<string, Tool.Any>>(
       const crypto = yield* Crypto.Crypto
       const skillsOption = yield* Effect.serviceOption(Skills)
       const skills = skillsOption._tag === "Some" ? skillsOption.value.list : []
+      const hooks = yield* AgentHooks
       const active = yield* Ref.make(new Map<string, Deferred.Deferred<void>>())
       const loop = toolkit as unknown as ErasedToolkit
 
@@ -92,7 +94,7 @@ export const AgentLive = <Tools extends Record<string, Tool.Any>>(
         prompt: (request) =>
           Stream.unwrap(
             Effect.gen(function* () {
-          const sessionId = request.sessionId ?? (yield* Effect.orDie(crypto.randomUUIDv4))
+              const sessionId = request.sessionId ?? (yield* Effect.orDie(crypto.randomUUIDv4))
               const model = yield* catalog.resolve(request.modelId)
 
               const interrupt = yield* Deferred.make<void>()
@@ -118,9 +120,8 @@ export const AgentLive = <Tools extends Record<string, Tool.Any>>(
               // non-empty one is appended whenever it diverges from the last
               // system message already recorded (including when there is none).
               if (systemPrompt !== "") {
-                const lastSystem = stored._tag === "Some"
-                  ? findLastSystemMessage(stored.value.events)
-                  : undefined
+                const lastSystem =
+                  stored._tag === "Some" ? findLastSystemMessage(stored.value.events) : undefined
                 if (lastSystem !== systemPrompt) {
                   yield* append({ _tag: "system/message", content: systemPrompt })
                 }
@@ -129,25 +130,27 @@ export const AgentLive = <Tools extends Record<string, Tool.Any>>(
 
               const chat = yield* Effect.orDie(
                 Chat.fromPrompt(
-                yield* store.deriveMessages(sessionId).pipe(
-                  // The log was just appended to, so a missing session here is
-                  // impossible; treat it as a defect rather than widening the
-                  // prompt error channel with SessionNotFound.
-                  Effect.catchIf(
-                    (error): error is SessionNotFound => error._tag === "SessionNotFound",
-                    () => Effect.die(new Error(`session ${sessionId} vanished after append`)),
+                  yield* store.deriveMessages(sessionId).pipe(
+                    // The log was just appended to, so a missing session here is
+                    // impossible; treat it as a defect rather than widening the
+                    // prompt error channel with SessionNotFound.
+                    Effect.catchIf(
+                      (error): error is SessionNotFound => error._tag === "SessionNotFound",
+                      () => Effect.die(new Error(`session ${sessionId} vanished after append`)),
+                    ),
                   ),
                 ),
-              ),
               )
 
               return runLoop({
+                sessionId,
                 chat,
                 model,
                 toolkit: loop,
                 maxTurns: request.maxTurns,
                 interrupt,
                 append,
+                hooks,
               }).pipe(Stream.ensuring(clearActive(sessionId)))
             }),
           ),
@@ -169,5 +172,8 @@ export const AgentLive = <Tools extends Record<string, Tool.Any>>(
 export const AgentLiveToolkit = <Tools extends Record<string, Tool.Any>>(
   toolkit: Toolkit.Toolkit<Tools>,
   options?: { readonly systemPrompt?: string | undefined },
-): Layer.Layer<Agent, never, Crypto.Crypto | Tool.HandlersFor<Tools> | ModelCatalog | SessionStore> =>
-  Layer.unwrap(Effect.map(toolkit, (withHandler) => AgentLive(withHandler, options)))
+): Layer.Layer<
+  Agent,
+  never,
+  Crypto.Crypto | Tool.HandlersFor<Tools> | ModelCatalog | SessionStore
+> => Layer.unwrap(Effect.map(toolkit, (withHandler) => AgentLive(withHandler, options)))

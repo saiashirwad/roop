@@ -4,8 +4,11 @@ import { Prompt } from "effect/unstable/ai"
 /**
  * Monotonic format version stamped on every session log header. Loaders reject
  * logs with an unknown (newer) version instead of silently misreading them.
+ * Version 2 added `step/*` markers and the model-facing request record; version
+ * 1 logs remain readable because every v1 event tag still decodes against the
+ * current union.
  */
-export const SESSION_FORMAT_VERSION = 1
+export const SESSION_FORMAT_VERSION = 2
 
 export const SessionHeader = Schema.Struct({
   version: Schema.Number,
@@ -46,6 +49,16 @@ export const SessionEvent = Schema.Union([
   Schema.TaggedStruct("turn/start", {}),
   Schema.TaggedStruct("turn/end", {
     reason: Schema.Literals(["completed", "failed", "interrupted", "stopped"]),
+    message: Schema.optionalKey(Schema.String),
+  }),
+  Schema.TaggedStruct("step/start", {
+    index: Schema.Number,
+  }),
+  Schema.TaggedStruct("model/request", {
+    request: Schema.Unknown,
+  }),
+  Schema.TaggedStruct("step/end", {
+    reason: Schema.Literals(["completed", "failed", "interrupted"]),
     message: Schema.optionalKey(Schema.String),
   }),
 ])
@@ -138,7 +151,10 @@ export const deriveMessages = (
         break
       }
       case "turn/start":
-      case "turn/end": {
+      case "turn/end":
+      case "step/start":
+      case "model/request":
+      case "step/end": {
         break
       }
     }
