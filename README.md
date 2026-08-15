@@ -1,49 +1,65 @@
-# Roop
+# ROOP
 
-A smol, Effect-native agents layer. The agent is the protocol: an agent is exposed as an Effect
-`RpcGroup`, and capability discovery is derived from the same live values the agent runs with — a
-`Toolkit`, a model catalog, and a skill list.
+ROOP is an Effect-native runtime for building composable coding agents.
 
-Built from replaceable Effect services, so models, tools, storage, and transports can be swapped
-without changing the loop. Agents are composed from plugins — values contributing tools, models,
-skills, and prompt fragments — and `subagent(...)` turns a plugin list into a delegation tool.
+The core is a small agent service: it resolves a model, runs a tool loop, stores session history,
+exposes capabilities, and can be reached through Effect RPC. Models, tools, storage, skills, and
+transports are replaceable services, so the agent kernel does not need to know where any particular
+capability comes from.
 
-Start here:
+Plugins contribute the pieces that make an agent useful. A plugin can provide tools, model adapters,
+skills, prompt fragments, or a subagent. The coding harness is one composition of those parts:
+coding tools, a model, a session store, and RPC clients for the terminal and web.
 
-- [`SPEC.md`](SPEC.md) — design.
-- [`packages/agent/src/Agent.ts`](packages/agent/src/Agent.ts) — the kernel service.
-- [`packages/agent-rpc/src/AgentRpc.ts`](packages/agent-rpc/src/AgentRpc.ts) — the protocol.
-- [`packages/agent-node/src/Cli.ts`](packages/agent-node/src/Cli.ts) — a readline CLI over DeepSeek.
-- [`packages/coding-harness/src/Cli.ts`](packages/coding-harness/src/Cli.ts) — a coding harness
-  served over RPC.
+```text
+plugins
+   ↓
+agent kernel
+   ↓
+Effect RPC
+   ├─ terminal client
+   └─ web client
+```
 
-## Packages
+The kernel is deliberately portable. It depends only on `effect` and `effect/unstable/ai`, which
+allows the same agent logic to run in Node, Workers, and other platform adapters.
 
-- `@roop/agent` — kernel: agent loop, model catalog, session store, capability derivation,
-  agent-as-tool. Imports only `effect`.
-- `@roop/agent-rpc` — `RpcGroup` protocol, server layer, HTTP transport helpers.
-- `@roop/agent-node` — Node adapter: a readline CLI over the kernel.
-- `@roop/plugin-openai` — any OpenAI-compatible API (OpenAI, DeepSeek, local) as a model plugin.
-- `@roop/plugin-claude` — your Claude Code subscription via the local `claude` CLI.
-- `@roop/plugin-codex` — your ChatGPT subscription via the local `codex` CLI.
-- `@roop/plugin-web` — `webFetch` tool over the Effect `HttpClient`.
-- `@roop/plugin-todo` — `writeTodos` planning tool with a prompt nudge.
-- `@roop/plugin-skills` — serves a directory of `SKILL.md` files through a `skill` tool.
-- `@roop/coding-tools` — coding toolkit (`readFile`/`writeFile`/`listFiles`/`bash`), a plain library
-  composed into an agent at build time.
-- `@roop/coding-harness` — the composition: kernel + coding tools + DeepSeek behind an RPC HTTP
-  server.
-- `@roop/coding-tui` — a pi-like terminal UI over `@mariozechner/pi-tui` with slash commands
-  (`/models`, `/skills`, `/tools`, `/new`, `/help`); talks to the server only through the RPC client
-- `@roop/coding-web` — a web client: React + StyleX + `@effect/atom-react`; same RPC-only constraint
-  as the TUI. (guarded by a test).
+## Direction
 
-## Scripts
+ROOP is moving toward an agent runtime with explicit turn and step boundaries, composable
+interception points, durable execution history, and plugins that can extend the loop without editing
+it.
 
-- `pnpm typecheck` — typecheck all packages.
-- `pnpm test` — run all tests (a live DeepSeek smoke test runs when `DEEPSEEK_API_KEY` is set).
-- `pnpm --filter=@roop/agent-node cli` — chat with an agent over DeepSeek.
-- `pnpm --filter=@roop/coding-harness serve [port]` — serve the coding agent over RPC (HTTP).
-- `pnpm --filter=@roop/coding-tui start [url]` — the pi-like TUI client.
-- `pnpm --filter=@roop/coding-web dev` — the web client (proxies `/rpc` to `HARNESS_URL`, default
-  `http://localhost:8787`).
+Longer term, the project is also a place to explore inspectable agent workflows. Instead of calling
+tools one at a time, an agent could describe a multi-step task as a typed program: search files,
+prepare patches, request approval, apply changes, and run tests. A runtime could inspect that
+program, check its capabilities and policies, show a preview, and then execute or resume it.
+
+That work is exploratory. The current focus is a reliable, portable agent kernel and the seams that
+let richer runtime behavior be added without turning the loop into a collection of special cases.
+
+## Try it
+
+Install dependencies and typecheck the workspace:
+
+```sh
+pnpm install
+pnpm typecheck
+```
+
+Run the simple Node client:
+
+```sh
+pnpm --filter=@roop/agent-node cli
+```
+
+Run the coding harness over RPC:
+
+```sh
+pnpm --filter=@roop/coding-harness serve
+```
+
+Start with [`packages/agent/src/Agent.ts`](packages/agent/src/Agent.ts) for the kernel,
+[`packages/agent-rpc/src/AgentRpc.ts`](packages/agent-rpc/src/AgentRpc.ts) for the protocol, and
+[`packages/coding-harness/src/Serve.ts`](packages/coding-harness/src/Serve.ts) for a complete
+composition.
