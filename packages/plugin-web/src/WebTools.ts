@@ -3,7 +3,7 @@ import { Effect, Schema } from "effect"
 import { Tool, Toolkit } from "effect/unstable/ai"
 import { HttpClient } from "effect/unstable/http/HttpClient"
 
-export class WebFailure extends Schema.TaggedErrorClass<WebFailure>()("WebFailure", {
+class WebFailure extends Schema.TaggedErrorClass<WebFailure>()("WebFailure", {
   message: Schema.String,
 }) {}
 

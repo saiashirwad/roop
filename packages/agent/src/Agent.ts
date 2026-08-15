@@ -35,14 +35,12 @@ export class SessionBusy extends Schema.TaggedErrorClass<SessionBusy>()("Session
   sessionId: Schema.String,
 }) {}
 
-export type PromptOptions = {
+type PromptOptions = {
   readonly prompt: string
   readonly sessionId?: string | undefined
   readonly modelId?: string | undefined
   readonly maxTurns?: number | undefined
 }
-
-export type AgentService = Agent["Service"]
 
 export class Agent extends Context.Service<
   Agent,

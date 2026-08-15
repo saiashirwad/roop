@@ -19,7 +19,7 @@ const asClosedToolkit = (toolkit: ClosedToolkitValue): ClosedToolkit => {
   return toolkit as ClosedToolkit
 }
 
-export type LoopOptions = {
+type LoopOptions = {
   readonly sessionId: string
   readonly chat: Chat.Service
   readonly model: LanguageModel.Service

@@ -1,7 +1,7 @@
 import { Effect, Schema, Stream } from "effect"
 import { Tool } from "effect/unstable/ai"
 
-import type { AgentService } from "./Agent.ts"
+import type { Agent } from "./Agent.ts"
 import { AgentEmit } from "./AgentEmit.ts"
 import type { AgentEvent } from "./AgentEvent.ts"
 
@@ -43,7 +43,7 @@ export const delegation = (options: DelegationOptions) => {
     }
   }
 
-  const handler = (agent: AgentService) => (params: { readonly task: string }) =>
+  const handler = (agent: Agent["Service"]) => (params: { readonly task: string }) =>
     Effect.gen(function* () {
       const emit = yield* Effect.serviceOption(AgentEmit)
       let summary = ""

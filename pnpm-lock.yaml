@@ -37,9 +37,6 @@ importers:
       oxlint-tsgolint:
         specifier: 7.0.2001
         version: 7.0.2001
-      tsx:
-        specifier: ^4.23.0
-        version: 4.23.0
       turbo:
         specifier: ^2.10.4
         version: 2.10.4
