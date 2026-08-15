@@ -22,14 +22,14 @@ export class AgentContext extends Context.Service<
   AgentContext,
   {
     /** The current tool view. Later registrations shadow earlier ones by name. */
-    readonly toolkit: () => Effect.Effect<ErasedToolkit>
-    readonly tools: () => Effect.Effect<Record<string, Tool.Any>>
-    readonly skills: () => Effect.Effect<ReadonlyArray<Skill>>
-    readonly systemPrompt: () => Effect.Effect<string>
+    readonly toolkit: Effect.Effect<ErasedToolkit>
+    readonly tools: Effect.Effect<Record<string, Tool.Any>>
+    readonly skills: Effect.Effect<ReadonlyArray<Skill>>
+    readonly systemPrompt: Effect.Effect<string>
     /** Sections registered after the run begins, to journal before the next request. */
-    readonly promptSections: () => Effect.Effect<ReadonlyArray<string>>
-    readonly models: () => Effect.Effect<ReadonlyArray<ModelAd>>
-    readonly defaultModelId: () => Effect.Effect<string>
+    readonly promptSections: Effect.Effect<ReadonlyArray<string>>
+    readonly models: Effect.Effect<ReadonlyArray<ModelAd>>
+    readonly defaultModelId: Effect.Effect<string>
     readonly resolveModel: (
       modelId: string | undefined,
     ) => Effect.Effect<LanguageModel.Service, ModelNotFound>
@@ -46,16 +46,17 @@ export class AgentContext extends Context.Service<
 >()("roop/AgentContext") {}
 
 const scoped = <A>(ref: Ref.Ref<ReadonlyArray<A>>, value: A) =>
-  Effect.gen(function* () {
-    yield* Ref.update(ref, (entries) => [...entries, value])
+  Effect.suspend(() => {
     let disposed = false
     const dispose = Effect.suspend(() => {
       if (disposed) return Effect.void
       disposed = true
       return Ref.update(ref, (entries) => entries.filter((entry) => entry !== value))
     })
-    yield* Effect.addFinalizer(() => dispose)
-    return dispose
+    return Ref.update(ref, (entries) => [...entries, value]).pipe(
+      Effect.andThen(Effect.addFinalizer(() => dispose)),
+      Effect.as(dispose),
+    )
   })
 
 const latestBy = <A>(entries: ReadonlyArray<A>, key: (entry: A) => string): ReadonlyArray<A> => {
@@ -86,14 +87,14 @@ export const make = (options?: {
       Ref.get(tools).pipe(Effect.map((entries) => latestBy(entries, (entry) => entry.tool.name)))
 
     const allModels = () =>
-      Effect.all([catalog.list(), Ref.get(models)]).pipe(
+      Effect.all([catalog.list, Ref.get(models)]).pipe(
         Effect.map(([base, registered]) =>
           latestBy([...base, ...registered.map((entry) => entry.ad)], (entry) => entry.id),
         ),
       )
 
     return AgentContext.of({
-      toolkit: () =>
+      toolkit:
         resolvedTools().pipe(
           Effect.map((entries) => {
             const byName = Object.fromEntries(entries.map((entry) => [entry.tool.name, entry]))
@@ -104,23 +105,23 @@ export const make = (options?: {
             }
           }),
         ),
-      tools: () =>
+      tools:
         resolvedTools().pipe(
           Effect.map((entries) =>
             Object.fromEntries(entries.map((entry) => [entry.tool.name, entry.tool])),
           ),
         ),
-      skills: () =>
+      skills:
         Ref.get(skills).pipe(Effect.map((entries) => latestBy(entries, (entry) => entry.id))),
-      systemPrompt: () =>
+      systemPrompt:
         Ref.get(promptSections).pipe(
           Effect.map((sections) =>
             [basePrompt, ...sections].filter((text) => text !== "").join("\n\n"),
           ),
         ),
-      promptSections: () => Ref.get(promptSections),
-      models: allModels,
-      defaultModelId: () => allModels().pipe(Effect.map((entries) => entries[0]?.id ?? "")),
+      promptSections: Ref.get(promptSections),
+      models: allModels(),
+      defaultModelId: allModels().pipe(Effect.map((entries) => entries[0]?.id ?? "")),
       resolveModel: (modelId) =>
         Ref.get(models).pipe(
           Effect.flatMap((registered) => {

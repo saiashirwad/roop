@@ -17,7 +17,7 @@ export const WebTools = (options?: {
       description: "Fetch a URL over HTTP GET and return the response body as text",
       parameters: Schema.Struct({ url: Schema.String }),
       success: Schema.Struct({
-        status: Schema.Number,
+        status: Schema.Finite,
         body: Schema.String,
         truncated: Schema.Boolean,
       }),

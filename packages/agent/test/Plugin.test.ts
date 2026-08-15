@@ -82,7 +82,7 @@ const Composed = AgentPlugins([
 it.layer(Composed)("AgentPlugins", (it) => {
   it.effect("merges tools, models, skills, and prompts from plugins", () =>
     Effect.gen(function* () {
-      const caps = yield* (yield* Agent).capabilities()
+      const caps = yield* (yield* Agent).capabilities
 
       assert.deepStrictEqual(
         caps.tools.map((tool) => tool.name),
@@ -133,7 +133,7 @@ const worker = subagent({
   ],
 })
 
-const hookOrder = Effect.runSync(Ref.make<Array<string>>([]))
+const hookOrder = Ref.makeUnsafe<Array<string>>([])
 
 const recording = (name: string): Layer.Layer<AgentHooks, never, never> =>
   layerHook(name, (downstream) =>
@@ -194,7 +194,7 @@ it.layer(Parent)("subagent", (it) => {
     Effect.gen(function* () {
       const agent = yield* Agent
 
-      const caps = yield* agent.capabilities()
+      const caps = yield* agent.capabilities
       assert.deepStrictEqual(
         caps.tools.map((tool) => tool.name),
         ["worker"],

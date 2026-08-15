@@ -21,7 +21,7 @@ it.layer(
 )("Claude plugin", (it) => {
   it.effect("advertises the claude model", () =>
     Effect.gen(function* () {
-      const caps = yield* (yield* Agent).capabilities()
+      const caps = yield* (yield* Agent).capabilities
       assert.deepStrictEqual(
         caps.models.map((model) => [model.id, model.provider]),
         [["sonnet", "claude"]],

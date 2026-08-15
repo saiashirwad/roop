@@ -21,7 +21,7 @@ it.layer(
 )("Codex plugin", (it) => {
   it.effect("advertises the codex model", () =>
     Effect.gen(function* () {
-      const caps = yield* (yield* Agent).capabilities()
+      const caps = yield* (yield* Agent).capabilities
       assert.deepStrictEqual(
         caps.models.map((model) => [model.id, model.provider]),
         [["gpt-5-codex", "codex"]],

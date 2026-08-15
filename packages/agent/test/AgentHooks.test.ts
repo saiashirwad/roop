@@ -155,7 +155,7 @@ it.layer(
   )
 })
 
-const deniedResults = Effect.runSync(Ref.make<Array<readonly [string, boolean]>>([]))
+const deniedResults = Ref.makeUnsafe<Array<readonly [string, boolean]>>([])
 
 it.layer(
   Main(
@@ -206,7 +206,7 @@ it.layer(
   )
 })
 
-const modelPrompts = Effect.runSync(Ref.make<Array<ReadonlyArray<unknown>>>([]))
+const modelPrompts = Ref.makeUnsafe<Array<ReadonlyArray<unknown>>>([])
 
 it.layer(
   Main(

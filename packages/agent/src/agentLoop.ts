@@ -14,7 +14,7 @@ export type LoopOptions = {
   readonly chat: Chat.Service
   readonly model: LanguageModel.Service
   /** A request-bound capability snapshot. */
-  readonly toolkit: () => Effect.Effect<ErasedToolkit>
+  readonly toolkit: Effect.Effect<ErasedToolkit>
   readonly beforeRequest?: (() => Effect.Effect<void>) | undefined
   readonly maxTurns?: number | undefined
   readonly interrupt: Deferred.Deferred<void>
@@ -210,7 +210,7 @@ export const runLoop = (options: LoopOptions): Stream.Stream<AgentEvent> =>
           const stepStream = options.chat
             .streamText({
               prompt: [],
-              toolkit: interceptToolkit(yield* options.toolkit(), hooks, () => context),
+              toolkit: interceptToolkit(yield* options.toolkit, hooks, () => context),
               concurrency: "unbounded",
             })
             .pipe(

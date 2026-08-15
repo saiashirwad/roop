@@ -11,8 +11,8 @@ import { Prompt } from "effect/unstable/ai"
 export const SESSION_FORMAT_VERSION = 2
 
 export const SessionHeader = Schema.Struct({
-  version: Schema.Number,
-  createdAt: Schema.Number,
+  version: Schema.Finite,
+  createdAt: Schema.Finite,
 })
 
 export type SessionHeader = typeof SessionHeader.Type
@@ -52,7 +52,7 @@ export const SessionEvent = Schema.Union([
     message: Schema.optionalKey(Schema.String),
   }),
   Schema.TaggedStruct("step/start", {
-    index: Schema.Number,
+    index: Schema.Finite,
   }),
   Schema.TaggedStruct("model/request", {
     request: Schema.Unknown,

@@ -56,7 +56,7 @@ export const CodingTools = (root: string): Plugin<FileSystem.FileSystem | ChildP
       description: "Run a shell command in the workspace and capture stdout, stderr, and exit code",
       parameters: Schema.Struct({ command: Schema.String }),
       success: Schema.Struct({
-        exitCode: Schema.Number,
+        exitCode: Schema.Finite,
         stdout: Schema.String,
         stderr: Schema.String,
       }),

@@ -103,7 +103,7 @@ it.effect("memory store appends and derives", () =>
     const messages = yield* store.deriveMessages("mem")
     assert.deepStrictEqual(messages, deriveMessages(scripted))
 
-    const metas = yield* store.list()
+    const metas = yield* store.list
     assert.deepStrictEqual(
       metas.map((meta) => [meta.id, meta.title]),
       [["mem", "first question"]],
@@ -137,7 +137,7 @@ it.layer(StoreLive)("SessionStoreFs", (it) => {
       assert.strictEqual(events.length, scripted.length)
       assert.deepStrictEqual(messages, deriveMessages(scripted))
 
-      const metas = yield* (yield* SessionStore).list()
+      const metas = yield* (yield* SessionStore).list
       assert.deepStrictEqual(
         metas.map((meta) => [meta.id, meta.title]),
         [["a", "first question"]],
@@ -241,7 +241,7 @@ it.layer(StoreLive)("SessionStoreFs", (it) => {
       yield* appendAll("good")
       writeFileSync(join(dir, "broken.json"), "{not json")
 
-      const metas = yield* (yield* SessionStore).list()
+      const metas = yield* (yield* SessionStore).list
       // timestamps can collide within a millisecond, so only assert membership
       assert.deepStrictEqual(metas.map((meta) => meta.id).sort(), ["a", "good", "grow", "tmpcheck"])
     }),

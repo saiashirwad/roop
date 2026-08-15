@@ -66,7 +66,7 @@ it.layer(Main)("SkillsDir", (it) => {
     Effect.gen(function* () {
       const agent = yield* Agent
 
-      const caps = yield* agent.capabilities()
+      const caps = yield* agent.capabilities
       assert.deepStrictEqual(caps.skills, [{ id: "greet", description: "Greet the user warmly." }])
 
       const events = yield* Stream.runCollect(agent.prompt({ prompt: "hi", sessionId: "s1" })).pipe(

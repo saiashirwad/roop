@@ -85,7 +85,7 @@ export const hooksNoop: AgentHooksInterface = {
   beforeRequest: (_context, request) => Effect.succeed(request),
   beforeToolExecute: (_context, call) => Effect.succeed(call),
   afterToolExecute: () => Effect.void,
-  turnStopping: () => Effect.succeed(undefined),
+  turnStopping: () => Effect.as(Effect.void, undefined),
 }
 
 export interface AgentHooks extends AgentHooksInterface {}

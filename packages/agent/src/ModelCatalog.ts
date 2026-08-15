@@ -23,8 +23,8 @@ export type ModelSpec<E, R> = {
 export class ModelCatalog extends Context.Service<
   ModelCatalog,
   {
-    readonly list: () => Effect.Effect<ReadonlyArray<ModelAd>>
-    readonly defaultModelId: () => Effect.Effect<string>
+    readonly list: Effect.Effect<ReadonlyArray<ModelAd>>
+    readonly defaultModelId: Effect.Effect<string>
     readonly resolve: (
       modelId: string | undefined,
     ) => Effect.Effect<LanguageModel.Service, ModelNotFound>
@@ -55,8 +55,8 @@ export const ModelCatalogLive = <E, R>(specs: ReadonlyArray<ModelSpec<E, R>>) =>
       }
 
       return ModelCatalog.of({
-        list: () => Effect.sync(() => entries.map((entry) => entry.ad)),
-        defaultModelId: () => Effect.sync(() => entries[0]?.ad.id ?? ""),
+        list: Effect.sync(() => entries.map((entry) => entry.ad)),
+        defaultModelId: Effect.sync(() => entries[0]?.ad.id ?? ""),
         resolve,
       })
     }),

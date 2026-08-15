@@ -38,14 +38,12 @@ const scripted = (turns: ReadonlyArray<ReadonlyArray<Record<string, unknown>>>) 
     })
   })
 
-const hanging = Effect.gen(function* () {
-  return yield* LanguageModel.make({
-    generateText: () => Effect.succeed([]),
-    streamText: () =>
-      Stream.make({ type: "text-delta" as const, id: "h", delta: "start" }).pipe(
-        Stream.concat(Stream.never),
-      ),
-  })
+const hanging = LanguageModel.make({
+  generateText: () => Effect.succeed([]),
+  streamText: () =>
+    Stream.make({ type: "text-delta" as const, id: "h", delta: "start" }).pipe(
+      Stream.concat(Stream.never),
+    ),
 })
 
 const modelLayer = (model: Effect.Effect<LanguageModel.Service>) =>
@@ -97,7 +95,7 @@ it.layer(
 
   it.effect("reports capabilities derived from the toolkit and catalog", () =>
     Effect.gen(function* () {
-      const caps = yield* (yield* Agent).capabilities()
+      const caps = yield* (yield* Agent).capabilities
 
       assert.deepStrictEqual(
         caps.tools.map((tool) => tool.name),
@@ -227,7 +225,7 @@ it.layer(
 )("capabilities with skills", (it) => {
   it.effect("lists skills when provided", () =>
     Effect.gen(function* () {
-      const caps = yield* (yield* Agent).capabilities()
+      const caps = yield* (yield* Agent).capabilities
       assert.deepStrictEqual(
         caps.skills.map((skill) => skill.id),
         ["summarize"],

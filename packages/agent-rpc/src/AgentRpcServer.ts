@@ -8,7 +8,7 @@ export const AgentRpcServer = AgentRpc.toLayer(
     const agent = yield* Agent
 
     return AgentRpc.of({
-      Capabilities: () => agent.capabilities(),
+      Capabilities: () => agent.capabilities,
       Prompt: ({ prompt, sessionId, modelId, maxTurns }) =>
         agent.prompt({
           prompt,
@@ -18,7 +18,7 @@ export const AgentRpcServer = AgentRpc.toLayer(
         }),
       Interrupt: ({ sessionId }) => agent.interrupt(sessionId),
       GetHistory: ({ sessionId }) => agent.history(sessionId),
-      ListSessions: () => agent.sessions(),
+      ListSessions: () => agent.sessions,
     })
   }),
 )

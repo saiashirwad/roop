@@ -24,7 +24,7 @@ export const Session = Schema.Struct({
   id: Schema.String,
   header: SessionHeader,
   events: Schema.Array(SessionEvent),
-  updatedAt: Schema.Number,
+  updatedAt: Schema.Finite,
 })
 
 export type Session = typeof Session.Type
@@ -32,7 +32,7 @@ export type Session = typeof Session.Type
 export const SessionMeta = Schema.Struct({
   id: Schema.String,
   title: Schema.String,
-  updatedAt: Schema.Number,
+  updatedAt: Schema.Finite,
 })
 
 export type SessionMeta = typeof SessionMeta.Type
@@ -67,22 +67,26 @@ const decodeSession = (
   sessionId: string,
   json: string,
 ): Effect.Effect<Session, SessionFormatError> =>
-  Effect.try({
-    try: () => {
-      const session = Schema.decodeSync(Schema.fromJsonString(Session))(json)
+  Schema.decodeEffect(Schema.fromJsonString(Session))(json).pipe(
+    Effect.mapError(
+      (error) =>
+        new SessionFormatError({
+          sessionId,
+          message: String(error),
+        }),
+    ),
+    Effect.flatMap((session) => {
       if (session.header.version > SESSION_FORMAT_VERSION) {
-        throw new Error(
-          `session log version ${session.header.version} is newer than supported version ${SESSION_FORMAT_VERSION}`,
+        return Effect.fail(
+          new SessionFormatError({
+            sessionId,
+            message: `session log version ${session.header.version} is newer than supported version ${SESSION_FORMAT_VERSION}`,
+          }),
         )
       }
-      return session
-    },
-    catch: (error) =>
-      new SessionFormatError({
-        sessionId,
-        message: error instanceof Error ? error.message : "session log failed validation",
-      }),
-  })
+      return Effect.succeed(session)
+    }),
+  )
 
 export class SessionStore extends Context.Service<
   SessionStore,
@@ -92,7 +96,7 @@ export class SessionStore extends Context.Service<
       sessionId: string,
     ) => Effect.Effect<ReadonlyArray<Prompt.Message>, SessionLoadError>
     readonly load: (sessionId: string) => Effect.Effect<Session, SessionLoadError>
-    readonly list: () => Effect.Effect<ReadonlyArray<SessionMeta>>
+    readonly list: Effect.Effect<ReadonlyArray<SessionMeta>>
   }
 >()("roop/SessionStore") {}
 
@@ -133,7 +137,7 @@ export const SessionStoreMemory = Layer.effect(
               : Effect.succeed(session)
           }),
         ),
-      list: () =>
+      list:
         Ref.get(sessions).pipe(Effect.map((map) => [...map.values()].map(metaOf).sort(byRecency))),
     })
   }),
@@ -220,7 +224,7 @@ export const SessionStoreFs = (
         deriveMessages: (sessionId) =>
           Effect.map(read(sessionId), (session) => deriveMessages(session.events)),
         load: read,
-        list: () =>
+        list:
           fs.readDirectory(dir).pipe(
             Effect.flatMap((entries) =>
               Effect.forEach(
@@ -233,7 +237,7 @@ export const SessionStoreFs = (
                     // deserves a warning before the session is skipped.
                     Effect.tapError((error) =>
                       error._tag === "SessionNotFound"
-                        ? Effect.succeed(undefined)
+                        ? Effect.void
                         : Console.warn(
                             `skipping session ${sessionId} (${entry}): ${error._tag}: ${error.message ?? ""}`,
                           ),

@@ -46,7 +46,7 @@ export type AgentService = Agent["Service"]
 export class Agent extends Context.Service<
   Agent,
   {
-    readonly capabilities: () => Effect.Effect<Capabilities>
+    readonly capabilities: Effect.Effect<Capabilities>
     readonly prompt: (
       options: PromptOptions,
     ) => Stream.Stream<AgentEvent, ModelNotFound | SessionBusy | SessionFormatError>
@@ -54,7 +54,7 @@ export class Agent extends Context.Service<
     readonly history: (
       sessionId: string,
     ) => Effect.Effect<Session, SessionNotFound | SessionFormatError>
-    readonly sessions: () => Effect.Effect<ReadonlyArray<SessionMeta>>
+    readonly sessions: Effect.Effect<ReadonlyArray<SessionMeta>>
   }
 >()("roop/Agent") {}
 
@@ -86,13 +86,13 @@ export const AgentLive = <Tools extends Record<string, Tool.Any>>(
         })
 
       return Agent.of({
-        capabilities: () =>
+        capabilities:
           Effect.map(
             Effect.all([
-              context.tools(),
-              context.models(),
-              context.defaultModelId(),
-              context.skills(),
+              context.tools,
+              context.models,
+              context.defaultModelId,
+              context.skills,
             ]),
             ([tools, models, defaultModelId, skills]) =>
               capabilitiesFrom({ tools, models, defaultModelId, skills }),
@@ -102,7 +102,7 @@ export const AgentLive = <Tools extends Record<string, Tool.Any>>(
             Effect.gen(function* () {
               const sessionId = request.sessionId ?? (yield* Effect.orDie(crypto.randomUUIDv4))
               const model = yield* context.resolveModel(request.modelId)
-              const systemPrompt = yield* context.systemPrompt()
+              const systemPrompt = yield* context.systemPrompt
 
               const interrupt = yield* Deferred.make<void>()
               const claimed = yield* Ref.modify(active, (map) =>
@@ -159,7 +159,7 @@ export const AgentLive = <Tools extends Record<string, Tool.Any>>(
                 toolkit: context.toolkit,
                 beforeRequest: () =>
                   Effect.gen(function* () {
-                    for (const section of yield* context.promptSections()) {
+                    for (const section of yield* context.promptSections) {
                       if (journaledSections.has(section)) continue
                       journaledSections.add(section)
                       yield* append({ _tag: "system/message", content: section })
@@ -185,7 +185,7 @@ export const AgentLive = <Tools extends Record<string, Tool.Any>>(
             }),
           ),
         history: (sessionId) => store.load(sessionId),
-        sessions: () => store.list(),
+        sessions: store.list,
       })
     }),
   )

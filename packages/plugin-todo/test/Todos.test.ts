@@ -54,7 +54,7 @@ it.layer(Main)("Todos", (it) => {
     Effect.gen(function* () {
       const agent = yield* Agent
 
-      const caps = yield* agent.capabilities()
+      const caps = yield* agent.capabilities
       assert.deepStrictEqual(
         caps.tools.map((tool) => tool.name),
         ["writeTodos"],
