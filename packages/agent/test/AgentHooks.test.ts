@@ -1,6 +1,6 @@
 import { assert, it } from "@effect/vitest"
 import { Effect, Layer, Ref, Schema, Stream } from "effect"
-import { LanguageModel, Prompt, Response, Tool, Toolkit } from "effect/unstable/ai"
+import { LanguageModel, Prompt, Tool, Toolkit } from "effect/unstable/ai"
 
 import { Agent, AgentLiveToolkit } from "../src/Agent.ts"
 import {
@@ -16,6 +16,7 @@ import {
 import { AgentHooks } from "../src/AgentHooks.ts"
 import { cryptoWeb } from "../src/cryptoWeb.ts"
 import { SessionStoreMemory } from "../src/SessionStore.ts"
+import { scripted } from "../src/Testing.ts"
 
 const Echo = Tool.make("echo", {
   description: "echo a note back",
@@ -24,30 +25,6 @@ const Echo = Tool.make("echo", {
 })
 
 const EchoToolkit = Toolkit.make(Echo)
-
-/** A scripted model that records the prompt it was handed for each request. */
-const scripted = (
-  turns: ReadonlyArray<ReadonlyArray<Response.StreamPartEncoded>>,
-  prompts?: Ref.Ref<Array<ReadonlyArray<unknown>>>,
-) =>
-  Effect.gen(function* () {
-    const index = yield* Ref.make(0)
-    return yield* LanguageModel.make({
-      generateText: () => Effect.succeed([]),
-      streamText: (options: {
-        readonly prompt: { readonly content: ReadonlyArray<{ role: string; content: unknown }> }
-      }) =>
-        Stream.unwrap(
-          Effect.gen(function* () {
-            if (prompts !== undefined) {
-              yield* Ref.update(prompts, (seen) => [...seen, options.prompt.content])
-            }
-            const i = yield* Ref.getAndUpdate(index, (n) => n + 1)
-            return Stream.fromIterable(turns[i] ?? [])
-          }),
-        ),
-    })
-  })
 
 const modelLayer = (model: Effect.Effect<LanguageModel.Service>) =>
   Layer.effect(LanguageModel.LanguageModel, model)

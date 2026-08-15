@@ -15,6 +15,7 @@
     "./SessionEvent.ts": "./src/SessionEvent.ts",
     "./SessionStore.ts": "./src/SessionStore.ts",
     "./Skills.ts": "./src/Skills.ts",
+    "./Testing.ts": "./src/Testing.ts",
     "./agentTool.ts": "./src/agentTool.ts",
     "./cryptoWeb.ts": "./src/cryptoWeb.ts",
     "./subagent.ts": "./src/subagent.ts"

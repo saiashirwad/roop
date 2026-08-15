@@ -4,25 +4,11 @@ import { cryptoWeb } from "@roop/agent/cryptoWeb.ts"
 import { AgentPlugins, Plugin } from "@roop/agent/Plugin.ts"
 import { deriveMessages } from "@roop/agent/SessionEvent.ts"
 import { SessionStoreMemory } from "@roop/agent/SessionStore.ts"
-import { Effect, Layer, Ref, Stream } from "effect"
-import { LanguageModel, Response } from "effect/unstable/ai"
+import { scripted } from "@roop/agent/Testing.ts"
+import { Effect, Layer, Stream } from "effect"
+import { LanguageModel } from "effect/unstable/ai"
 
 import { Todos } from "../src/Todos.ts"
-
-const scripted = (turns: ReadonlyArray<ReadonlyArray<Response.StreamPartEncoded>>) =>
-  Effect.gen(function* () {
-    const index = yield* Ref.make(0)
-    return yield* LanguageModel.make({
-      generateText: () => Effect.succeed([]),
-      streamText: () =>
-        Stream.unwrap(
-          Effect.gen(function* () {
-            const i = yield* Ref.getAndUpdate(index, (n) => n + 1)
-            return Stream.fromIterable(turns[i] ?? [])
-          }),
-        ),
-    })
-  })
 
 const plan = [
   { text: "write the file", state: "active" },

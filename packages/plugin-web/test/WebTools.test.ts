@@ -3,26 +3,12 @@ import { Agent } from "@roop/agent/Agent.ts"
 import { cryptoWeb } from "@roop/agent/cryptoWeb.ts"
 import { AgentPlugins, Plugin } from "@roop/agent/Plugin.ts"
 import { SessionStoreMemory } from "@roop/agent/SessionStore.ts"
-import { Effect, Layer, Ref, Stream } from "effect"
-import { LanguageModel, Response as AiResponse } from "effect/unstable/ai"
+import { scripted } from "@roop/agent/Testing.ts"
+import { Effect, Layer, Stream } from "effect"
+import { LanguageModel } from "effect/unstable/ai"
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient"
 
 import { WebTools } from "../src/WebTools.ts"
-
-const scripted = (turns: ReadonlyArray<ReadonlyArray<AiResponse.StreamPartEncoded>>) =>
-  Effect.gen(function* () {
-    const index = yield* Ref.make(0)
-    return yield* LanguageModel.make({
-      generateText: () => Effect.succeed([]),
-      streamText: () =>
-        Stream.unwrap(
-          Effect.gen(function* () {
-            const i = yield* Ref.getAndUpdate(index, (n) => n + 1)
-            return Stream.fromIterable(turns[i] ?? [])
-          }),
-        ),
-    })
-  })
 
 const fakeFetch: typeof fetch = () =>
   Promise.resolve(new Response("hello from the web", { status: 200 }))

@@ -1,13 +1,14 @@
 import { NodeFileSystem } from "@effect/platform-node"
 import { assert, it } from "@effect/vitest"
-import { Effect, Exit, Fiber, FileSystem, Layer, Option, Queue, Ref, Schema, Stream } from "effect"
-import { LanguageModel, Response, Tool, Toolkit } from "effect/unstable/ai"
+import { Effect, Exit, Fiber, FileSystem, Layer, Option, Queue, Schema, Stream } from "effect"
+import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
 
 import { Agent, AgentLiveToolkit } from "../src/Agent.ts"
 import { delegation } from "../src/agentTool.ts"
 import { cryptoWeb } from "../src/cryptoWeb.ts"
 import { deriveMessages } from "../src/SessionEvent.ts"
 import { SessionStoreFs, SessionStoreMemory } from "../src/SessionStore.ts"
+import { scripted } from "../src/Testing.ts"
 
 const Echo = Tool.make("echo", {
   description: "echo a note back",
@@ -16,21 +17,6 @@ const Echo = Tool.make("echo", {
 })
 
 const EchoToolkit = Toolkit.make(Echo)
-
-const scripted = (turns: ReadonlyArray<ReadonlyArray<Response.StreamPartEncoded>>) =>
-  Effect.gen(function* () {
-    const index = yield* Ref.make(0)
-    return yield* LanguageModel.make({
-      generateText: () => Effect.succeed([]),
-      streamText: () =>
-        Stream.unwrap(
-          Effect.gen(function* () {
-            const i = yield* Ref.getAndUpdate(index, (n) => n + 1)
-            return Stream.fromIterable(turns[i] ?? [])
-          }),
-        ),
-    })
-  })
 
 const hanging = LanguageModel.make({
   generateText: () => Effect.succeed([]),

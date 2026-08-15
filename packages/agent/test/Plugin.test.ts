@@ -1,41 +1,17 @@
 import { assert, it } from "@effect/vitest"
 import { Effect, Exit, Layer, Ref, Schema, Scope, Stream } from "effect"
-import { LanguageModel, Response, Tool, Toolkit } from "effect/unstable/ai"
+import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
 
 import { Agent } from "../src/Agent.ts"
 import { AgentContext } from "../src/AgentContext.ts"
 import { layerHook } from "../src/AgentHooks.ts"
+import { scripted, scriptedPlugin } from "../src/Testing.ts"
 import { cryptoWeb } from "../src/cryptoWeb.ts"
 import { AgentPlugins, Plugin } from "../src/Plugin.ts"
 import { deriveMessages } from "../src/SessionEvent.ts"
 import { SessionStoreMemory } from "../src/SessionStore.ts"
 import { subagent } from "../src/subagent.ts"
 
-const scripted = (turns: ReadonlyArray<ReadonlyArray<Response.StreamPartEncoded>>) =>
-  Effect.gen(function* () {
-    const index = yield* Ref.make(0)
-    return yield* LanguageModel.make({
-      generateText: () => Effect.succeed([]),
-      streamText: () =>
-        Stream.unwrap(
-          Effect.gen(function* () {
-            const i = yield* Ref.getAndUpdate(index, (n) => n + 1)
-            return Stream.fromIterable(turns[i] ?? [])
-          }),
-        ),
-    })
-  })
-
-const model = (
-  id: string,
-  turns: ReadonlyArray<ReadonlyArray<Response.StreamPartEncoded>>,
-): Plugin =>
-  Plugin({
-    name: `model-${id}`,
-    models: [
-      { id, provider: "test", layer: Layer.effect(LanguageModel.LanguageModel, scripted(turns)) },
-    ],
-  })
 
 const EchoToolkit = Toolkit.make(
   Tool.make("echo", {
@@ -74,7 +50,7 @@ const collect = <A, E = never, R = never>(stream: Stream.Stream<A, E, R>) =>
 const Composed = AgentPlugins([
   echo,
   shout,
-  model("fake", [
+  scriptedPlugin("fake", [
     [
       { type: "tool-call", id: "c1", name: "echo", params: { note: "hi" } },
       { type: "tool-call", id: "c2", name: "shout", params: { note: "hi" } },
@@ -131,7 +107,7 @@ const worker = subagent({
   description: "delegate a task",
   plugins: [
     echo,
-    model("child", [
+    scriptedPlugin("child", [
       [{ type: "tool-call", id: "w1", name: "echo", params: { note: "from child" } }],
       [{ type: "text-delta", id: "w2", delta: "child did the task" }],
     ]),
@@ -165,7 +141,7 @@ const innerHook = Plugin<Record<string, never>, never>({
 const Hooked = AgentPlugins([
   outerHook,
   innerHook,
-  model("fake", [[{ type: "text-delta", id: "t1", delta: "done" }]]),
+  scriptedPlugin("fake", [[{ type: "text-delta", id: "t1", delta: "done" }]]),
 ]).pipe(Layer.provide(SessionStoreMemory), Layer.provide(cryptoWeb))
 
 it.layer(Hooked)("plugin hooks", (it) => {
@@ -189,7 +165,7 @@ it.layer(Hooked)("plugin hooks", (it) => {
 
 const Parent = AgentPlugins([
   worker,
-  model("parent", [
+  scriptedPlugin("parent", [
     [{ type: "tool-call", id: "p1", name: "worker", params: { task: "do the thing" } }],
     [{ type: "text-delta", id: "p2", delta: "delegated" }],
   ]),
@@ -317,7 +293,7 @@ const prober = Plugin({
 const Registered = AgentPlugins([
   echo,
   registrar,
-  model("fake", [[{ type: "text-delta", id: "t1", delta: "done" }]]),
+  scriptedPlugin("fake", [[{ type: "text-delta", id: "t1", delta: "done" }]]),
 ]).pipe(Layer.provide(SessionStoreMemory), Layer.provide(cryptoWeb))
 
 it.layer(Registered)("runtime registration", (it) => {
@@ -397,7 +373,7 @@ it.effect("unwinds every registration when the agent layer's scope closes", () =
       AgentPlugins([
         echo,
         registrar,
-        model("fake", [[{ type: "text-delta", id: "t1", delta: "done" }]]),
+        scriptedPlugin("fake", [[{ type: "text-delta", id: "t1", delta: "done" }]]),
       ]),
       scope,
     ).pipe(Effect.provide([SessionStoreMemory, cryptoWeb]))
@@ -414,7 +390,7 @@ it.effect("unwinds every registration when the agent layer's scope closes", () =
 
 const MidRun = AgentPlugins([
   prober,
-  model("fake", [
+  scriptedPlugin("fake", [
     [{ type: "tool-call", id: "c1", name: "probe", params: {} }],
     [{ type: "tool-call", id: "c2", name: "later", params: {} }],
     [{ type: "text-delta", id: "t1", delta: "done" }],

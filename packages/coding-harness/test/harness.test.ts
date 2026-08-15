@@ -6,27 +6,13 @@ import { Agent } from "@roop/agent/Agent.ts"
 import { cryptoWeb } from "@roop/agent/cryptoWeb.ts"
 import { AgentPlugins, Plugin } from "@roop/agent/Plugin.ts"
 import { SessionStoreMemory } from "@roop/agent/SessionStore.ts"
+import { scripted } from "@roop/agent/Testing.ts"
 import { CodingTools } from "@roop/coding-tools/CodingTools.ts"
-import { Effect, FileSystem, Layer, Path, Ref, Stream } from "effect"
+import { Effect, FileSystem, Layer, Path, Stream } from "effect"
 import { LanguageModel, Response } from "effect/unstable/ai"
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient"
 import * as HttpRouter from "effect/unstable/http/HttpRouter"
 import { RpcClient } from "effect/unstable/rpc"
-
-const scripted = (turns: ReadonlyArray<ReadonlyArray<Response.StreamPartEncoded>>) =>
-  Effect.gen(function* () {
-    const index = yield* Ref.make(0)
-    return yield* LanguageModel.make({
-      generateText: () => Effect.succeed([]),
-      streamText: () =>
-        Stream.unwrap(
-          Effect.gen(function* () {
-            const i = yield* Ref.getAndUpdate(index, (n) => n + 1)
-            return Stream.fromIterable(turns[i] ?? [])
-          }),
-        ),
-    })
-  })
 
 const agentLayer = (model: Effect.Effect<LanguageModel.Service>, root: string) =>
   AgentPlugins([
