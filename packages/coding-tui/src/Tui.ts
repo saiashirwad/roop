@@ -13,7 +13,8 @@ import {
 import { AgentRpc } from "@roop/agent-rpc/AgentRpc.ts"
 import { AgentRpcClientHttp } from "@roop/agent-rpc/AgentRpcHttp.ts"
 import type { AgentEvent } from "@roop/agent/AgentEvent.ts"
-import { Effect, Queue, Stream } from "effect"
+import { cryptoWeb } from "@roop/agent/cryptoWeb.ts"
+import { Crypto, Effect, Queue, Stream } from "effect"
 import { RpcClient } from "effect/unstable/rpc"
 
 import { bold, cyan, dim, editorTheme, markdownTheme, red } from "./theme.ts"
@@ -28,7 +29,8 @@ const main = Effect.gen(function* () {
   const url = process.argv[2] ?? "http://localhost:8787/rpc"
   const client = yield* RpcClient.make(AgentRpc).pipe(Effect.provide(AgentRpcClientHttp(url)))
   const caps = yield* client.Capabilities()
-  let sessionId = globalThis.crypto.randomUUID()
+  const crypto = yield* Crypto.Crypto
+  let sessionId = yield* Effect.orDie(crypto.randomUUIDv4)
   let modelId = caps.defaultModelId
   const actions = yield* Queue.unbounded<Action>()
 
@@ -129,7 +131,7 @@ const main = Effect.gen(function* () {
           return
         }
         case "new": {
-          sessionId = globalThis.crypto.randomUUID()
+          sessionId = yield* Effect.orDie(crypto.randomUUIDv4)
           chat.clear()
           info(dim("new session"))
           return
@@ -278,6 +280,7 @@ const main = Effect.gen(function* () {
 
 Effect.runFork(
   Effect.scoped(main).pipe(
+    Effect.provide(cryptoWeb),
     Effect.catchCause((cause) => Effect.logError(String(cause))),
     Effect.ensuring(Effect.sync(() => process.exit(0))),
   ),

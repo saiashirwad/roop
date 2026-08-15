@@ -4,6 +4,7 @@ const allowed = [
   /^@effect\/atom-react$/,
   /^@roop\/agent\/AgentEvent\.ts$/,
   /^@roop\/agent\/SessionEvent\.ts$/,
+  /^@roop\/agent\/cryptoWeb\.ts$/,
   /^@roop\/agent-rpc\//,
   /^@stylexjs\/stylex$/,
   /^effect$/,

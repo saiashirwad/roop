@@ -1,14 +1,17 @@
 import { AgentRpc } from "@roop/agent-rpc/AgentRpc.ts"
 import { AgentRpcClientHttp } from "@roop/agent-rpc/AgentRpcHttp.ts"
 import { apply, type Item, fromMessages } from "@roop/agent-rpc/Transcript.ts"
+import { cryptoWeb } from "@roop/agent/cryptoWeb.ts"
 import { deriveMessages } from "@roop/agent/SessionEvent.ts"
-import { Effect, Stream } from "effect"
+import { Context, Crypto, Effect, Layer, Stream } from "effect"
 import { Atom } from "effect/unstable/reactivity"
 import { RpcClient } from "effect/unstable/rpc"
 
 export type { Item }
 
-export const nextSessionId = (): string => globalThis.crypto.randomUUID()
+const crypto = Context.get(Effect.runSync(Effect.scoped(Layer.build(cryptoWeb))), Crypto.Crypto)
+
+export const nextSessionId = (): string => Effect.runSync(Effect.orDie(crypto.randomUUIDv4))
 
 const runtime = Atom.runtime(AgentRpcClientHttp("/rpc"))
 
