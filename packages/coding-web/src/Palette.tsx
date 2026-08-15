@@ -23,25 +23,19 @@ const styles = stylex.create({
 })
 
 export type Model = { readonly id: string; readonly description?: string | undefined }
-export type Entry = { readonly id: string; readonly description: string }
 
 export type PaletteAction =
   | { readonly kind: "new" }
   | { readonly kind: "model"; readonly id: string }
-  | { readonly kind: "insert"; readonly text: string }
 
 export const Palette = ({
   activeModel,
   models,
-  skills,
-  tools,
   onAction,
   onClose,
 }: {
   readonly activeModel: string
   readonly models: ReadonlyArray<Model>
-  readonly skills: ReadonlyArray<Entry>
-  readonly tools: ReadonlyArray<{ readonly name: string; readonly description: string }>
   readonly onAction: (action: PaletteAction) => void
   readonly onClose: () => void
 }) => (
@@ -72,34 +66,6 @@ export const Palette = ({
                   {model.id === activeModel ? " ·" : ""}
                 </span>
                 {model.description !== undefined && <small>{model.description}</small>}
-              </Command.Item>
-            ))}
-          </Command.Group>
-          {skills.length > 0 && (
-            <Command.Group heading="Skills">
-              {skills.map((skill) => (
-                <Command.Item
-                  key={skill.id}
-                  value={`skill ${skill.id}`}
-                  onSelect={() =>
-                    onAction({ kind: "insert", text: `Use the ${skill.id} skill to ` })
-                  }
-                >
-                  <span>{skill.id}</span>
-                  <small>{skill.description}</small>
-                </Command.Item>
-              ))}
-            </Command.Group>
-          )}
-          <Command.Group heading="Tools">
-            {tools.map((tool) => (
-              <Command.Item
-                key={tool.name}
-                value={`tool ${tool.name}`}
-                onSelect={() => onAction({ kind: "insert", text: `Use the ${tool.name} tool to ` })}
-              >
-                <span>{tool.name}</span>
-                <small>{tool.description}</small>
               </Command.Item>
             ))}
           </Command.Group>

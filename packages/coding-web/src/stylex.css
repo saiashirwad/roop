@@ -174,3 +174,12 @@ body {
   padding: 16px;
   text-align: center;
 }
+
+.composer-tag {
+  background: var(--hover);
+  border-radius: 4px;
+  box-shadow: 0 0 0 1px var(--border);
+  font-weight: 500;
+  padding: 1px 5px;
+  white-space: nowrap;
+}

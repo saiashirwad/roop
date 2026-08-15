@@ -2,6 +2,7 @@ import { useAtom, useAtomSet, useAtomValue } from "@effect/atom-react"
 import * as stylex from "@stylexjs/stylex"
 import { useEffect, useRef, useState } from "react"
 
+import { Composer, type Command } from "./Composer.tsx"
 import { Markdown } from "./Markdown.tsx"
 import { Palette, type PaletteAction } from "./Palette.tsx"
 import {
@@ -153,68 +154,6 @@ const styles = stylex.create({
     paddingInline: 24,
     width: "100%",
   },
-  inputCard: {
-    backgroundColor: "var(--surface)",
-    borderColor: "var(--border)",
-    borderRadius: 12,
-    borderStyle: "solid",
-    borderWidth: 1,
-    boxShadow: "0 4px 18px rgba(55, 53, 47, 0.07)",
-    display: "flex",
-    flexDirection: "column",
-    gap: 8,
-    padding: 12,
-  },
-  input: {
-    backgroundColor: "transparent",
-    borderWidth: 0,
-    color: "var(--text)",
-    fontFamily: "inherit",
-    fontSize: 15,
-    lineHeight: 1.5,
-    outline: "none",
-    resize: "none",
-    width: "100%",
-  },
-  chips: { alignItems: "center", display: "flex", gap: 6 },
-  chip: {
-    alignItems: "center",
-    backgroundColor: { default: "transparent", ":hover": "var(--hover)" },
-    borderColor: "var(--border)",
-    borderRadius: 14,
-    borderStyle: "solid",
-    borderWidth: 1,
-    color: "var(--muted)",
-    cursor: "pointer",
-    display: "flex",
-    fontFamily: "inherit",
-    fontSize: 12,
-    gap: 5,
-    paddingBlock: 3,
-    paddingInline: 10,
-  },
-  chipDot: {
-    backgroundColor: "var(--green)",
-    borderRadius: "50%",
-    height: 6,
-    width: 6,
-  },
-  send: {
-    alignItems: "center",
-    backgroundColor: "var(--blue)",
-    borderRadius: "50%",
-    borderWidth: 0,
-    color: "#fff",
-    cursor: "pointer",
-    display: "flex",
-    fontSize: 15,
-    height: 28,
-    justifyContent: "center",
-    marginLeft: "auto",
-    opacity: { default: 1, ":disabled": 0.35 },
-    width: 28,
-  },
-  stop: { backgroundColor: "var(--red)" },
 })
 
 const ago = (timestamp: number) => {
@@ -267,77 +206,6 @@ const Sidebar = ({ busy, onNew }: { readonly busy: boolean; readonly onNew: () =
   )
 }
 
-const Composer = ({
-  busy,
-  model,
-  text,
-  setText,
-  onSlash,
-}: {
-  readonly busy: boolean
-  readonly model: string
-  readonly text: string
-  readonly setText: (text: string) => void
-  readonly onSlash: () => void
-}) => {
-  const send = useAtomSet(promptAtom)
-  const interrupt = useAtomSet(interruptAtom)
-  const submit = () => {
-    const prompt = text.trim()
-    if (prompt.length === 0 || busy) return
-    setText("")
-    send(prompt)
-  }
-  return (
-    <div {...stylex.props(styles.composer)}>
-      <div {...stylex.props(styles.inputCard)}>
-        <textarea
-          {...stylex.props(styles.input)}
-          autoFocus
-          id="composer"
-          placeholder="Ask, build, or run anything…"
-          rows={2}
-          value={text}
-          onChange={(event) => setText(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "/" && text === "") {
-              event.preventDefault()
-              onSlash()
-              return
-            }
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault()
-              submit()
-            }
-          }}
-        />
-        <div {...stylex.props(styles.chips)}>
-          <button {...stylex.props(styles.chip)} onClick={onSlash}>
-            <span {...stylex.props(styles.chipDot)} />
-            {model}
-          </button>
-          <button {...stylex.props(styles.chip)} onClick={onSlash}>
-            / Commands
-          </button>
-          {busy ? (
-            <button {...stylex.props(styles.send, styles.stop)} onClick={() => interrupt()}>
-              ◼
-            </button>
-          ) : (
-            <button
-              {...stylex.props(styles.send)}
-              disabled={text.trim().length === 0}
-              onClick={submit}
-            >
-              ↑
-            </button>
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
 export const App = () => {
   const transcript = useAtomValue(transcriptAtom)
   const setTranscript = useAtomSet(transcriptAtom)
@@ -346,7 +214,6 @@ export const App = () => {
   const caps = useAtomValue(capsAtom)
   const prompt = useAtomValue(promptAtom)
   const busy = prompt.waiting
-  const [text, setText] = useState("")
   const [paletteOpen, setPaletteOpen] = useState(false)
   const bottom = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -380,15 +247,51 @@ export const App = () => {
         setModelId(action.id)
         break
       }
-      case "insert": {
-        setText(action.text)
-        break
-      }
     }
     close()
   }
+  const send = useAtomSet(promptAtom)
+  const interrupt = useAtomSet(interruptAtom)
   const model = modelId ?? (caps._tag === "Success" ? caps.value.defaultModelId : "")
   const title = transcript.find((item) => item.kind === "user")
+  const tagCommands: ReadonlyArray<Command> =
+    caps._tag === "Success"
+      ? [
+          ...caps.value.skills.map((skill) => ({
+            group: "Skills",
+            icon: "◈",
+            label: skill.id,
+            description: skill.description,
+            action: { kind: "tag" as const },
+          })),
+          ...caps.value.tools.map((tool) => ({
+            group: "Tools",
+            icon: "⚙",
+            label: tool.name,
+            description: tool.description,
+            action: { kind: "tag" as const },
+          })),
+        ]
+      : []
+  const slashCommands: ReadonlyArray<Command> =
+    caps._tag === "Success"
+      ? [
+          {
+            group: "Session",
+            icon: "✚",
+            label: "New session",
+            action: { kind: "run" as const, run: newSession },
+          },
+          ...caps.value.models.map((entry) => ({
+            group: "Models",
+            icon: entry.id === model ? "●" : "○",
+            label: entry.id,
+            description: entry.description,
+            action: { kind: "run" as const, run: () => setModelId(entry.id) },
+          })),
+          ...tagCommands,
+        ]
+      : []
   return (
     <div {...stylex.props(styles.app)}>
       <Sidebar busy={busy} onNew={newSession} />
@@ -435,20 +338,22 @@ export const App = () => {
             <div ref={bottom} />
           </div>
         </div>
-        <Composer
-          busy={busy}
-          model={model}
-          text={text}
-          setText={setText}
-          onSlash={() => setPaletteOpen(true)}
-        />
+        <div {...stylex.props(styles.composer)}>
+          <Composer
+            busy={busy}
+            commands={slashCommands}
+            mentions={tagCommands}
+            model={model}
+            onInterrupt={() => interrupt()}
+            onModelClick={() => setPaletteOpen(true)}
+            onSubmit={(prompt) => send(prompt)}
+          />
+        </div>
       </main>
       {paletteOpen && caps._tag === "Success" && (
         <Palette
           activeModel={model}
           models={caps.value.models}
-          skills={caps.value.skills}
-          tools={caps.value.tools}
           onAction={onAction}
           onClose={close}
         />
