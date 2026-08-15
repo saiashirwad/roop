@@ -154,6 +154,7 @@ const main = Effect.gen(function* () {
       let markdown: Markdown | undefined
       let buffer = ""
       const calls = new Map<string, { readonly text: Text; readonly params: unknown }>()
+      const tickers = new Map<string, Text>()
       const flush = () => {
         markdown = undefined
         buffer = ""
@@ -191,6 +192,25 @@ const main = Effect.gen(function* () {
               chat.addChild(new Text(rendered, 0, 0))
             } else {
               call.text.setText(rendered)
+            }
+            return
+          }
+          case "Subagent": {
+            const inner = event.event
+            let ticker = tickers.get(event.name)
+            if (ticker === undefined) {
+              ticker = new Text("", 0, 0)
+              tickers.set(event.name, ticker)
+              chat.addChild(ticker)
+            }
+            if (inner._tag === "ToolCall") {
+              ticker.setText(
+                `${dim("└")} ${renderToolCall({ name: inner.name, params: inner.params })}`,
+              )
+            }
+            if (inner._tag === "Finish") {
+              chat.removeChild(ticker)
+              tickers.delete(event.name)
             }
             return
           }

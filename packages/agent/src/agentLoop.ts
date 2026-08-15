@@ -2,6 +2,7 @@ import { Cause, Deferred, Effect, Queue, Stream } from "effect"
 import { Chat, LanguageModel, Toolkit, type Response } from "effect/unstable/ai"
 import type * as Tool from "effect/unstable/ai/Tool"
 
+import { AgentEmit } from "./AgentEmit.ts"
 import type { AgentEvent } from "./AgentEvent.ts"
 
 export type ErasedToolkit = Toolkit.WithHandler<Record<string, Tool.Any>>
@@ -67,6 +68,7 @@ export const runLoop = (options: LoopOptions): Stream.Stream<AgentEvent> =>
           })
           .pipe(
             Stream.provideService(LanguageModel.LanguageModel, options.model),
+            Stream.provideService(AgentEmit, { emit }),
             Stream.tap((part) => {
               const event = toEvent(part)
               return event === undefined ? Effect.void : emit(event)

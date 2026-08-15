@@ -15,6 +15,7 @@ export type Item =
       readonly params: unknown
       readonly result?: unknown
       readonly isFailure?: boolean
+      readonly children?: ReadonlyArray<Item>
     }
   | { readonly kind: "notice"; readonly text: string }
 
@@ -49,6 +50,18 @@ const apply = (items: ReadonlyArray<Item>, event: AgentEvent): ReadonlyArray<Ite
               text: `${event.reason}${event.message === undefined ? "" : `: ${event.message}`}`,
             },
           ]
+    }
+    case "Subagent": {
+      let done = false
+      return items
+        .slice()
+        .reverse()
+        .map((item) =>
+          !done && item.kind === "tool" && item.name === event.name && item.result === undefined
+            ? ((done = true), { ...item, children: apply(item.children ?? [], event.event) })
+            : item,
+        )
+        .reverse()
     }
   }
 }

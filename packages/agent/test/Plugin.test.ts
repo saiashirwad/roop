@@ -153,6 +153,17 @@ it.layer(Parent)("subagent", (it) => {
       const result = events.find((event: any) => event._tag === "ToolResult") as any
       assert.strictEqual(result.isFailure, false)
       assert.deepStrictEqual(result.result, { summary: "child did the task" })
+
+      const nested = events.filter((event: any) => event._tag === "Subagent") as Array<any>
+      assert.deepStrictEqual(
+        nested.map((wrapped) => [wrapped.name, wrapped.event._tag]),
+        [
+          ["worker", "ToolCall"],
+          ["worker", "ToolResult"],
+          ["worker", "TextDelta"],
+          ["worker", "Finish"],
+        ],
+      )
     }),
   )
 })

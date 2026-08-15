@@ -2,6 +2,8 @@ import { Effect, Schema, Stream } from "effect"
 import { Tool } from "effect/unstable/ai"
 
 import type { AgentService } from "./Agent.ts"
+import { AgentEmit } from "./AgentEmit.ts"
+import type { AgentEvent } from "./AgentEvent.ts"
 
 export class DelegationFailed extends Schema.TaggedErrorClass<DelegationFailed>()(
   "DelegationFailed",
@@ -24,14 +26,43 @@ export const delegation = (options: DelegationOptions) => {
     failureMode: "return",
   })
 
+  const failureFor = (event: Extract<AgentEvent, { _tag: "Finish" }>) => {
+    switch (event.reason) {
+      case "completed": {
+        return undefined
+      }
+      case "failed": {
+        return new DelegationFailed({ message: event.message ?? "delegated agent failed" })
+      }
+      case "interrupted": {
+        return new DelegationFailed({ message: "delegated agent was interrupted" })
+      }
+      case "stopped": {
+        return new DelegationFailed({ message: "delegated agent hit its turn cap" })
+      }
+    }
+  }
+
   const handler = (agent: AgentService) => (params: { readonly task: string }) =>
     Effect.gen(function* () {
-      const events = yield* Stream.runCollect(
+      const emit = yield* Effect.serviceOption(AgentEmit)
+      let summary = ""
+      let failure: DelegationFailed | undefined
+
+      yield* Stream.runForEach(
         agent.prompt({
           prompt: params.task,
           ...(options.modelId !== undefined ? { modelId: options.modelId } : {}),
           ...(options.maxTurns !== undefined ? { maxTurns: options.maxTurns } : {}),
         }),
+        (event) =>
+          Effect.gen(function* () {
+            if (emit._tag === "Some") {
+              yield* emit.value.emit({ _tag: "Subagent", name: options.name, event })
+            }
+            if (event._tag === "TextDelta") summary += event.delta
+            if (event._tag === "Finish") failure = failure ?? failureFor(event)
+          }),
       ).pipe(
         Effect.catchTags({
           ModelNotFound: (error) =>
@@ -41,25 +72,7 @@ export const delegation = (options: DelegationOptions) => {
         }),
       )
 
-      let summary = ""
-      for (const event of events) {
-        if (event._tag === "Finish") {
-          if (event.reason === "failed") {
-            return yield* new DelegationFailed({
-              message: event.message ?? "delegated agent failed",
-            })
-          }
-          if (event.reason === "interrupted") {
-            return yield* new DelegationFailed({ message: "delegated agent was interrupted" })
-          }
-          if (event.reason === "stopped") {
-            return yield* new DelegationFailed({ message: "delegated agent hit its turn cap" })
-          }
-        }
-        if (event._tag === "TextDelta") {
-          summary += event.delta
-        }
-      }
+      if (failure !== undefined) return yield* failure
       return { summary: summary.trim() || "(no output)" }
     })
 

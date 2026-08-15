@@ -4,7 +4,7 @@ import { Command } from "cmdk"
 const styles = stylex.create({
   overlay: {
     alignItems: "flex-start",
-    backgroundColor: "rgba(24, 24, 27, 0.25)",
+    backgroundColor: "rgba(15, 15, 15, 0.2)",
     display: "flex",
     inset: 0,
     justifyContent: "center",
@@ -14,13 +14,11 @@ const styles = stylex.create({
   },
   card: {
     backgroundColor: "var(--surface)",
-    borderColor: "var(--border)",
-    borderRadius: 14,
-    borderStyle: "solid",
-    borderWidth: 1,
-    boxShadow: "0 16px 48px rgba(24, 24, 27, 0.18)",
+    borderRadius: 10,
+    boxShadow:
+      "rgba(15, 15, 15, 0.05) 0px 0px 0px 1px, rgba(15, 15, 15, 0.1) 0px 5px 10px, rgba(15, 15, 15, 0.2) 0px 15px 40px",
     overflow: "hidden",
-    width: 520,
+    width: 540,
   },
 })
 

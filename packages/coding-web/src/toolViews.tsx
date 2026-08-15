@@ -1,21 +1,20 @@
 import * as stylex from "@stylexjs/stylex"
+import { useState } from "react"
 
+import { Markdown } from "./Markdown.tsx"
 import type { Item } from "./state.ts"
 
 const styles = stylex.create({
-  card: {
+  callout: {
     alignItems: "baseline",
-    backgroundColor: "var(--surface)",
-    borderColor: "var(--border)",
-    borderRadius: 10,
-    borderStyle: "solid",
-    borderWidth: 1,
+    backgroundColor: "var(--callout)",
+    borderRadius: 6,
     display: "flex",
     fontFamily: "var(--mono)",
     fontSize: 13,
-    gap: 8,
+    gap: 10,
     paddingBlock: 8,
-    paddingInline: 12,
+    paddingInline: 14,
   },
   dot: {
     borderRadius: "50%",
@@ -41,6 +40,71 @@ const styles = stylex.create({
   todo: { color: "var(--text)", display: "flex", gap: 8 },
   todoDone: { color: "var(--faint)", textDecoration: "line-through" },
   todoMark: { flexShrink: 0, width: 14 },
+  page: {
+    borderColor: "var(--border)",
+    borderRadius: 8,
+    borderStyle: "solid",
+    borderWidth: 1,
+    overflow: "hidden",
+  },
+  pageHeader: {
+    alignItems: "center",
+    backgroundColor: { default: "transparent", ":hover": "var(--hover)" },
+    borderWidth: 0,
+    cursor: "pointer",
+    display: "flex",
+    fontFamily: "inherit",
+    fontSize: 14,
+    gap: 8,
+    paddingBlock: 8,
+    paddingInline: 12,
+    textAlign: "left",
+    width: "100%",
+  },
+  chevron: {
+    color: "var(--faint)",
+    display: "inline-block",
+    flexShrink: 0,
+    fontSize: 10,
+    transitionDuration: "150ms",
+    transitionProperty: "transform",
+    width: 12,
+  },
+  chevronOpen: { transform: "rotate(90deg)" },
+  pageIcon: { flexShrink: 0 },
+  pageTitle: {
+    fontWeight: 500,
+    minWidth: 0,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+  pageDot: { flexShrink: 0, marginLeft: "auto" },
+  caption: {
+    color: "var(--faint)",
+    fontSize: 13,
+    minWidth: 0,
+    overflow: "hidden",
+    paddingBlock: 0,
+    paddingInline: 40,
+    paddingBottom: 8,
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+  pageBody: {
+    borderLeftColor: "var(--border)",
+    borderLeftStyle: "solid",
+    borderLeftWidth: 2,
+    display: "flex",
+    flexDirection: "column",
+    fontSize: 14,
+    gap: 10,
+    marginBottom: 12,
+    marginLeft: 17,
+    marginRight: 12,
+    paddingLeft: 16,
+  },
+  childText: { fontSize: 14 },
 })
 
 type Tool = Extract<Item, { kind: "tool" }>
@@ -82,7 +146,6 @@ const summaries: Record<string, (tool: Tool) => [string, string]> = {
     ]
   },
   skill: ({ params }) => ["skill", (params as { id: string }).id],
-  task: ({ params }) => ["task", line((params as { task: string }).task)],
 }
 
 const fallback = (tool: Tool): [string, string] => [
@@ -114,9 +177,80 @@ const Todos = ({ tool }: { readonly tool: Tool }) => {
   )
 }
 
+const statusOf = (tool: Tool) =>
+  tool.result === undefined ? styles.running : tool.isFailure === true ? styles.failed : styles.ok
+
+const activity = (items: ReadonlyArray<Item>): string => {
+  const last = items.at(-1)
+  if (last === undefined) return "starting…"
+  switch (last.kind) {
+    case "tool": {
+      if (last.children !== undefined) return activity(last.children)
+      const [label, summary] = (summaries[last.name] ?? fallback)(last)
+      return `${label} ${summary}`
+    }
+    case "assistant":
+      return line(last.text.slice(-160), 90)
+    default:
+      return "working…"
+  }
+}
+
+const SubagentCard = ({ tool }: { readonly tool: Tool }) => {
+  const [manual, setManual] = useState<boolean | undefined>(undefined)
+  const running = tool.result === undefined
+  const open = manual ?? running
+  const { task } = tool.params as { task: string }
+  const caption =
+    tool.isFailure === true
+      ? ((tool.result as { message?: string }).message ?? "failed")
+      : running
+        ? activity(tool.children ?? [])
+        : ((tool.result as { summary?: string })?.summary ?? "")
+  return (
+    <div {...stylex.props(styles.page)}>
+      <button {...stylex.props(styles.pageHeader)} onClick={() => setManual(!open)}>
+        <span {...stylex.props(styles.chevron, open && styles.chevronOpen)}>▶</span>
+        <span {...stylex.props(styles.pageIcon)}>📄</span>
+        <span {...stylex.props(styles.pageTitle)}>{line(task, 80)}</span>
+        <span {...stylex.props(styles.dot, styles.pageDot, statusOf(tool))} />
+      </button>
+      {!open && caption !== "" && (
+        <div {...stylex.props(styles.caption, tool.isFailure === true && styles.failure)}>
+          {caption}
+        </div>
+      )}
+      {open && (
+        <div {...stylex.props(styles.pageBody)}>
+          {(tool.children ?? []).map((item, index) => {
+            switch (item.kind) {
+              case "assistant":
+                return (
+                  <div key={index} {...stylex.props(styles.childText)}>
+                    <Markdown text={item.text} />
+                  </div>
+                )
+              case "tool":
+                return <ToolCard key={index} tool={item} />
+              default:
+                return null
+            }
+          })}
+          {running && (
+            <div {...stylex.props(styles.caption)} style={{ padding: 0 }}>
+              {activity(tool.children ?? [])}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export const ToolCard = ({ tool }: { readonly tool: Tool }) => {
-  const state =
-    tool.result === undefined ? styles.running : tool.isFailure === true ? styles.failed : styles.ok
+  if (typeof (tool.params as { task?: unknown })?.task === "string") {
+    return <SubagentCard tool={tool} />
+  }
   const [label, summary] =
     tool.isFailure === true
       ? [
@@ -125,8 +259,8 @@ export const ToolCard = ({ tool }: { readonly tool: Tool }) => {
         ]
       : (summaries[tool.name] ?? fallback)(tool)
   return (
-    <div {...stylex.props(styles.card)}>
-      <span {...stylex.props(styles.dot, state)} />
+    <div {...stylex.props(styles.callout)}>
+      <span {...stylex.props(styles.dot, statusOf(tool))} />
       {tool.name === "writeTodos" ? (
         <Todos tool={tool} />
       ) : (

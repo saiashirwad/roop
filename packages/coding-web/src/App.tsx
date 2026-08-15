@@ -17,105 +17,153 @@ import {
 import { ToolCard } from "./toolViews.tsx"
 
 const styles = stylex.create({
-  app: { display: "grid", gridTemplateColumns: "260px 1fr", height: "100vh" },
+  app: { display: "grid", gridTemplateColumns: "248px 1fr", height: "100vh" },
   sidebar: {
+    backgroundColor: "var(--sidebar)",
     borderRightColor: "var(--border)",
     borderRightStyle: "solid",
     borderRightWidth: 1,
     display: "flex",
     flexDirection: "column",
-    gap: 16,
+    fontSize: 14,
     overflowY: "auto",
-    paddingBlock: 20,
-    paddingInline: 16,
+    paddingBlock: 8,
+    paddingInline: 8,
   },
-  wordmark: { fontSize: 18, fontWeight: 700, letterSpacing: "-0.02em" },
-  modelTag: { color: "var(--muted)", fontSize: 12 },
-  sectionTitle: {
-    color: "var(--faint)",
-    fontSize: 11,
-    fontWeight: 600,
-    letterSpacing: "0.08em",
-    textTransform: "uppercase",
-  },
-  sessions: { display: "flex", flexDirection: "column", gap: 2 },
-  session: {
-    backgroundColor: { default: "transparent", ":hover": "var(--accent-soft)" },
-    borderRadius: 8,
-    borderWidth: 0,
-    cursor: "pointer",
+  workspace: {
+    alignItems: "center",
+    borderRadius: 6,
     display: "flex",
-    flexDirection: "column",
-    fontFamily: "inherit",
-    fontSize: 13,
-    gap: 1,
+    gap: 8,
+    marginBottom: 4,
     paddingBlock: 6,
     paddingInline: 8,
-    textAlign: "left",
   },
-  sessionActive: { backgroundColor: "var(--accent-soft)" },
-  sessionTitle: {
+  logo: {
+    alignItems: "center",
+    backgroundColor: "var(--text)",
+    borderRadius: 4,
+    color: "#fff",
+    display: "flex",
+    flexShrink: 0,
+    fontSize: 12,
+    fontWeight: 700,
+    height: 20,
+    justifyContent: "center",
+    width: 20,
+  },
+  workspaceName: { fontWeight: 600 },
+  workspaceModel: {
+    color: "var(--faint)",
+    fontSize: 12,
+    marginLeft: "auto",
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
   },
-  sessionTime: { color: "var(--faint)", fontSize: 11 },
-  newSession: {
-    backgroundColor: "var(--text)",
-    borderRadius: 8,
+  row: {
+    alignItems: "center",
+    backgroundColor: { default: "transparent", ":hover": "var(--hover)" },
+    borderRadius: 6,
     borderWidth: 0,
-    color: "var(--surface)",
+    color: "var(--muted)",
     cursor: "pointer",
-    fontSize: 13,
-    fontWeight: 600,
-    paddingBlock: 8,
+    display: "flex",
+    fontFamily: "inherit",
+    fontSize: 14,
+    gap: 8,
+    minHeight: 28,
+    paddingBlock: 2,
+    paddingInline: 8,
+    textAlign: "left",
+    width: "100%",
   },
-  hint: { color: "var(--faint)", fontSize: 12, marginTop: "auto" },
+  rowActive: { backgroundColor: "var(--active)", color: "var(--text)", fontWeight: 500 },
+  rowIcon: { flexShrink: 0, fontSize: 14, opacity: 0.7, width: 18 },
+  rowText: {
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+  rowTime: { color: "var(--faint)", flexShrink: 0, fontSize: 12, marginLeft: "auto" },
+  sectionTitle: {
+    color: "var(--faint)",
+    fontSize: 12,
+    fontWeight: 500,
+    marginTop: 16,
+    paddingBlock: 4,
+    paddingInline: 8,
+  },
+  hint: {
+    color: "var(--faint)",
+    fontSize: 12,
+    marginTop: "auto",
+    paddingBlock: 8,
+    paddingInline: 8,
+  },
   key: {
-    backgroundColor: "var(--accent-soft)",
-    borderRadius: 4,
+    backgroundColor: "var(--hover)",
+    borderRadius: 3,
     fontFamily: "var(--mono)",
+    fontSize: 11,
     paddingBlock: 1,
-    paddingInline: 5,
+    paddingInline: 4,
   },
   main: { display: "flex", flexDirection: "column", overflow: "hidden" },
   chat: { flexGrow: 1, overflowY: "auto" },
   column: {
     display: "flex",
     flexDirection: "column",
-    gap: 16,
+    gap: 12,
     marginInline: "auto",
-    maxWidth: 720,
-    paddingBlock: 32,
+    maxWidth: 708,
+    paddingBlock: 48,
     paddingInline: 24,
+    width: "100%",
+  },
+  pageTitle: {
+    fontSize: 32,
+    fontWeight: 700,
+    letterSpacing: "-0.01em",
+    lineHeight: 1.2,
+    marginBottom: 12,
   },
   user: {
     alignSelf: "flex-end",
-    backgroundColor: "var(--accent-soft)",
-    borderRadius: 14,
+    backgroundColor: "var(--callout)",
+    borderRadius: 12,
     maxWidth: "85%",
     paddingBlock: 8,
     paddingInline: 14,
     whiteSpace: "pre-wrap",
   },
   notice: { color: "var(--red)", fontFamily: "var(--mono)", fontSize: 13 },
-  empty: { color: "var(--faint)", marginTop: "30vh", textAlign: "center" },
+  empty: {
+    color: "var(--faint)",
+    fontSize: 22,
+    fontWeight: 600,
+    marginTop: "26vh",
+    textAlign: "center",
+  },
+  emptySub: { color: "var(--faint)", fontSize: 14, fontWeight: 400, marginTop: 6 },
   composer: {
     marginInline: "auto",
-    maxWidth: 720,
-    paddingBlock: 16,
+    maxWidth: 708,
+    paddingBlock: 20,
     paddingInline: 24,
     width: "100%",
   },
   inputCard: {
     backgroundColor: "var(--surface)",
     borderColor: "var(--border)",
-    borderRadius: 14,
+    borderRadius: 12,
     borderStyle: "solid",
     borderWidth: 1,
+    boxShadow: "0 4px 18px rgba(55, 53, 47, 0.07)",
     display: "flex",
+    flexDirection: "column",
     gap: 8,
-    padding: 10,
+    padding: 12,
   },
   input: {
     backgroundColor: "transparent",
@@ -123,22 +171,48 @@ const styles = stylex.create({
     color: "var(--text)",
     fontFamily: "inherit",
     fontSize: 15,
+    lineHeight: 1.5,
     outline: "none",
     resize: "none",
     width: "100%",
   },
+  chips: { alignItems: "center", display: "flex", gap: 6 },
+  chip: {
+    alignItems: "center",
+    backgroundColor: { default: "transparent", ":hover": "var(--hover)" },
+    borderColor: "var(--border)",
+    borderRadius: 14,
+    borderStyle: "solid",
+    borderWidth: 1,
+    color: "var(--muted)",
+    cursor: "pointer",
+    display: "flex",
+    fontFamily: "inherit",
+    fontSize: 12,
+    gap: 5,
+    paddingBlock: 3,
+    paddingInline: 10,
+  },
+  chipDot: {
+    backgroundColor: "var(--green)",
+    borderRadius: "50%",
+    height: 6,
+    width: 6,
+  },
   send: {
-    alignSelf: "flex-end",
-    backgroundColor: "var(--accent)",
-    borderRadius: 8,
+    alignItems: "center",
+    backgroundColor: "var(--blue)",
+    borderRadius: "50%",
     borderWidth: 0,
     color: "#fff",
     cursor: "pointer",
-    fontSize: 13,
-    fontWeight: 600,
-    opacity: { default: 1, ":disabled": 0.4 },
-    paddingBlock: 6,
-    paddingInline: 14,
+    display: "flex",
+    fontSize: 15,
+    height: 28,
+    justifyContent: "center",
+    marginLeft: "auto",
+    opacity: { default: 1, ":disabled": 0.35 },
+    width: 28,
   },
   stop: { backgroundColor: "var(--red)" },
 })
@@ -159,46 +233,49 @@ const Sidebar = ({ busy, onNew }: { readonly busy: boolean; readonly onNew: () =
   const select = useAtomSet(selectSessionAtom)
   return (
     <aside {...stylex.props(styles.sidebar)}>
-      <div>
-        <div {...stylex.props(styles.wordmark)}>roop{busy ? " ·" : ""}</div>
-        <div {...stylex.props(styles.modelTag)}>
+      <div {...stylex.props(styles.workspace)}>
+        <span {...stylex.props(styles.logo)}>r</span>
+        <span {...stylex.props(styles.workspaceName)}>roop{busy ? " ·" : ""}</span>
+        <span {...stylex.props(styles.workspaceModel)}>
           {modelId ?? (caps._tag === "Success" ? caps.value.defaultModelId : "")}
-        </div>
+        </span>
       </div>
-      <button {...stylex.props(styles.newSession)} onClick={onNew}>
-        New session
+      <button {...stylex.props(styles.row)} onClick={onNew}>
+        <span {...stylex.props(styles.rowIcon)}>✚</span>
+        <span {...stylex.props(styles.rowText)}>New session</span>
       </button>
-      <span {...stylex.props(styles.sectionTitle)}>Sessions</span>
-      <div {...stylex.props(styles.sessions)}>
-        {sessions._tag === "Success" &&
-          sessions.value.map((session) => (
-            <button
-              key={session.id}
-              {...stylex.props(styles.session, session.id === active && styles.sessionActive)}
-              onClick={() => select(session.id)}
-            >
-              <span {...stylex.props(styles.sessionTitle)}>
-                {session.title === "" ? "untitled" : session.title}
-              </span>
-              <span {...stylex.props(styles.sessionTime)}>{ago(session.updatedAt)}</span>
-            </button>
-          ))}
-      </div>
-      <span {...stylex.props(styles.hint)}>
+      <div {...stylex.props(styles.sectionTitle)}>Sessions</div>
+      {sessions._tag === "Success" &&
+        sessions.value.map((session) => (
+          <button
+            key={session.id}
+            {...stylex.props(styles.row, session.id === active && styles.rowActive)}
+            onClick={() => select(session.id)}
+          >
+            <span {...stylex.props(styles.rowIcon)}>💬</span>
+            <span {...stylex.props(styles.rowText)}>
+              {session.title === "" ? "Untitled" : session.title}
+            </span>
+            <span {...stylex.props(styles.rowTime)}>{ago(session.updatedAt)}</span>
+          </button>
+        ))}
+      <div {...stylex.props(styles.hint)}>
         <span {...stylex.props(styles.key)}>/</span> or{" "}
         <span {...stylex.props(styles.key)}>⌘K</span> for commands
-      </span>
+      </div>
     </aside>
   )
 }
 
 const Composer = ({
   busy,
+  model,
   text,
   setText,
   onSlash,
 }: {
   readonly busy: boolean
+  readonly model: string
   readonly text: string
   readonly setText: (text: string) => void
   readonly onSlash: () => void
@@ -218,7 +295,7 @@ const Composer = ({
           {...stylex.props(styles.input)}
           autoFocus
           id="composer"
-          placeholder="Message the agent, / for commands…"
+          placeholder="Ask, build, or run anything…"
           rows={2}
           value={text}
           onChange={(event) => setText(event.target.value)}
@@ -234,19 +311,28 @@ const Composer = ({
             }
           }}
         />
-        {busy ? (
-          <button {...stylex.props(styles.send, styles.stop)} onClick={() => interrupt()}>
-            Stop
+        <div {...stylex.props(styles.chips)}>
+          <button {...stylex.props(styles.chip)} onClick={onSlash}>
+            <span {...stylex.props(styles.chipDot)} />
+            {model}
           </button>
-        ) : (
-          <button
-            {...stylex.props(styles.send)}
-            disabled={text.trim().length === 0}
-            onClick={submit}
-          >
-            Send
+          <button {...stylex.props(styles.chip)} onClick={onSlash}>
+            / Commands
           </button>
-        )}
+          {busy ? (
+            <button {...stylex.props(styles.send, styles.stop)} onClick={() => interrupt()}>
+              ◼
+            </button>
+          ) : (
+            <button
+              {...stylex.props(styles.send)}
+              disabled={text.trim().length === 0}
+              onClick={submit}
+            >
+              ↑
+            </button>
+          )}
+        </div>
       </div>
     </div>
   )
@@ -301,14 +387,30 @@ export const App = () => {
     }
     close()
   }
+  const model = modelId ?? (caps._tag === "Success" ? caps.value.defaultModelId : "")
+  const title = transcript.find((item) => item.kind === "user")
   return (
     <div {...stylex.props(styles.app)}>
       <Sidebar busy={busy} onNew={newSession} />
       <main {...stylex.props(styles.main)}>
         <div {...stylex.props(styles.chat)}>
           <div {...stylex.props(styles.column)}>
-            {transcript.length === 0 && (
-              <div {...stylex.props(styles.empty)}>Start a conversation</div>
+            {transcript.length === 0 ? (
+              <div {...stylex.props(styles.empty)}>
+                Ask, build, or run anything
+                <div {...stylex.props(styles.emptySub)}>
+                  Your agent has tools, skills, and subagents. Press{" "}
+                  <span {...stylex.props(styles.key)}>/</span> for commands.
+                </div>
+              </div>
+            ) : (
+              <div {...stylex.props(styles.pageTitle)}>
+                {title?.kind === "user"
+                  ? title.text.length > 60
+                    ? `${title.text.slice(0, 60)}…`
+                    : title.text
+                  : "Untitled"}
+              </div>
             )}
             {transcript.map((item, index) => {
               switch (item.kind) {
@@ -333,11 +435,17 @@ export const App = () => {
             <div ref={bottom} />
           </div>
         </div>
-        <Composer busy={busy} text={text} setText={setText} onSlash={() => setPaletteOpen(true)} />
+        <Composer
+          busy={busy}
+          model={model}
+          text={text}
+          setText={setText}
+          onSlash={() => setPaletteOpen(true)}
+        />
       </main>
       {paletteOpen && caps._tag === "Success" && (
         <Palette
-          activeModel={modelId ?? caps.value.defaultModelId}
+          activeModel={model}
           models={caps.value.models}
           skills={caps.value.skills}
           tools={caps.value.tools}
