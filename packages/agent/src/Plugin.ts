@@ -6,10 +6,12 @@ import { AgentLive, type Agent } from "./Agent.ts"
 import { AgentContext, make as makeAgentContext } from "./AgentContext.ts"
 import { AgentHooks, layerNoop } from "./AgentHooks.ts"
 import type { ModelSpec } from "./ModelCatalog.ts"
+import { PluginId } from "./PluginId.ts"
 import type { SessionStore } from "./SessionStore.ts"
 import { type Skill } from "./Skills.ts"
 
 export type Plugin<R = never, RH = never> = {
+  readonly id?: PluginId | string | undefined
   readonly name: string
   readonly toolkit?: Toolkit.Any | undefined
   readonly handlers?: Layer.Layer<never, never, R> | undefined
@@ -28,6 +30,7 @@ export type Plugin<R = never, RH = never> = {
 }
 
 export const Plugin = <Tools extends Record<string, Tool.Any>, R = never, RH = never>(options: {
+  readonly id?: PluginId | string
   readonly name: string
   readonly toolkit?: Toolkit.Toolkit<Tools>
   readonly handlers?: Layer.Layer<Tool.HandlersFor<Tools>, never, R>
@@ -38,7 +41,10 @@ export const Plugin = <Tools extends Record<string, Tool.Any>, R = never, RH = n
 }): Plugin<R, RH> => {
   /* SAFETY: The constructor erases the concrete toolkit Tools parameter; R and RH
    * stay on handlers, hooks, and models. */
-  return options as Plugin<R, RH>
+  return {
+    ...options,
+    id: options.id !== undefined ? PluginId.make(options.id) : PluginId.make(options.name),
+  } as Plugin<R, RH>
 }
 
 /** Structural view that drops `any` from plugin Layer/ModelSpec channels. */

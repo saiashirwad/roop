@@ -4,6 +4,7 @@ import type * as Tool from "effect/unstable/ai/Tool"
 
 import type { ErasedToolkit } from "./agentLoop.ts"
 import { ModelNotFound, type ModelAd, type ModelSpec } from "./ModelCatalog.ts"
+import { ModelId } from "./ModelId.ts"
 import type { Skill } from "./Skills.ts"
 
 export type Disposer = Effect.Effect<void>
@@ -45,9 +46,9 @@ export class AgentContext extends Context.Service<
     /** Sections registered after the run begins, to journal before the next request. */
     readonly promptSections: Effect.Effect<ReadonlyArray<string>>
     readonly models: Effect.Effect<ReadonlyArray<ModelAd>>
-    readonly defaultModelId: Effect.Effect<string>
+    readonly defaultModelId: Effect.Effect<ModelId | string>
     readonly resolveModel: (
-      modelId: string | undefined,
+      modelId: ModelId | string | undefined,
     ) => Effect.Effect<LanguageModel.Service, ModelNotFound>
     /**
      * Register a capability. Each call returns a disposer that removes just
@@ -186,7 +187,9 @@ export const make = (
         Effect.map((entries) => entries.map((e) => e.value)),
       ),
       models: allModels(),
-      defaultModelId: allModels().pipe(Effect.map((entries) => entries.at(-1)?.id ?? "")),
+      defaultModelId: allModels().pipe(
+        Effect.map((entries) => entries.at(-1)?.id ?? ModelId.make("")),
+      ),
       resolveModel: (modelId) =>
         Ref.get(models).pipe(
           Effect.flatMap((registrations) => {
@@ -194,12 +197,12 @@ export const make = (
             if (modelId === undefined) {
               const last = registered.at(-1)
               return last === undefined
-                ? Effect.fail(new ModelNotFound({ modelId: "" }))
+                ? Effect.fail(new ModelNotFound({ modelId: ModelId.make("") }))
                 : Effect.succeed(last.model)
             }
             const entry = registered.findLast((candidate) => candidate.ad.id === modelId)
             return entry === undefined
-              ? Effect.fail(new ModelNotFound({ modelId }))
+              ? Effect.fail(new ModelNotFound({ modelId: ModelId.make(modelId) }))
               : Effect.succeed(entry.model)
           }),
         ),
@@ -214,7 +217,7 @@ export const make = (
             const built = yield* Layer.buildWithScope(spec.layer, target)
             const entry: ModelEntry = {
               ad: {
-                id: spec.id,
+                id: ModelId.make(spec.id),
                 provider: spec.provider,
                 ...(spec.description === undefined ? undefined : { description: spec.description }),
               },

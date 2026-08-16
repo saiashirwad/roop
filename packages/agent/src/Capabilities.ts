@@ -2,6 +2,7 @@ import { Schema } from "effect"
 import { Tool } from "effect/unstable/ai"
 
 import { ModelAd } from "./ModelCatalog.ts"
+import { ModelId } from "./ModelId.ts"
 import { Skill } from "./Skills.ts"
 
 const ToolAd = Schema.Struct({
@@ -13,7 +14,7 @@ const ToolAd = Schema.Struct({
 export const Capabilities = Schema.Struct({
   tools: Schema.Array(ToolAd),
   models: Schema.Array(ModelAd),
-  defaultModelId: Schema.String,
+  defaultModelId: ModelId,
   skills: Schema.Array(Skill),
 })
 
@@ -22,7 +23,7 @@ export type Capabilities = typeof Capabilities.Type
 export const capabilitiesFrom = (options: {
   readonly tools: Record<string, Tool.Any>
   readonly models: ReadonlyArray<ModelAd>
-  readonly defaultModelId: string
+  readonly defaultModelId: ModelId | string
   readonly skills: ReadonlyArray<Skill>
 }): Capabilities => ({
   tools: Object.values(options.tools).map((tool) => ({
@@ -31,6 +32,6 @@ export const capabilitiesFrom = (options: {
     parameters: Tool.getJsonSchema(tool),
   })),
   models: [...options.models],
-  defaultModelId: options.defaultModelId,
+  defaultModelId: ModelId.make(options.defaultModelId),
   skills: [...options.skills],
 })

@@ -5,7 +5,9 @@ import type * as Tool from "effect/unstable/ai/Tool"
 import { AgentEmit } from "./AgentEmit.ts"
 import type { AgentEvent } from "./AgentEvent.ts"
 import type { AgentHooksInterface, RunContext } from "./AgentHooks.ts"
+import { resolveRunPolicy, type RunPolicy } from "./RunPolicy.ts"
 import type { SessionEvent } from "./SessionEvent.ts"
+import type { SessionId } from "./SessionId.ts"
 
 export type ErasedToolkit = Toolkit.WithHandler<Record<string, Tool.Any>>
 type ToolCallParameters = Tool.Parameters<Tool.Any>
@@ -21,13 +23,17 @@ const asClosedToolkit = (toolkit: ClosedToolkitValue): ClosedToolkit => {
 }
 
 type LoopOptions = {
-  readonly sessionId: string
+  readonly sessionId: SessionId | string
   readonly chat: Chat.Service
   readonly model: LanguageModel.Service
   /** A request-bound capability snapshot. */
   readonly toolkit: Effect.Effect<ErasedToolkit>
   readonly beforeRequest?: (() => Effect.Effect<void>) | undefined
+  /**
+   * @deprecated Use `policy.maxTotalSteps` instead.
+   */
   readonly maxTurns?: number | undefined
+  readonly policy?: Partial<RunPolicy> | undefined
   readonly interrupt: Deferred.Deferred<void>
   readonly append: (event: SessionEvent) => Effect.Effect<void>
   readonly hooks: AgentHooksInterface
@@ -238,6 +244,7 @@ export const runLoop = (options: LoopOptions): Stream.Stream<AgentEvent> =>
       const emit = (event: AgentEvent) => Queue.offer(queue, event)
       const append = options.append
       const hooks = options.hooks
+      const policy = resolveRunPolicy({ maxTurns: options.maxTurns, policy: options.policy })
       let turn = 0
       let totalSteps = 0
       let toolCallSequence = 0
@@ -245,6 +252,9 @@ export const runLoop = (options: LoopOptions): Stream.Stream<AgentEvent> =>
       // A turn is one drain of admitted input; a step is one model request
       // plus its tool calls. A `turnStopping` continuation starts a new turn.
       while (true) {
+        if (turn >= policy.maxTurns) {
+          break
+        }
         turn += 1
         let step = 0
         let context: RunContext = { sessionId: options.sessionId, turn, step: 0 }
@@ -257,7 +267,7 @@ export const runLoop = (options: LoopOptions): Stream.Stream<AgentEvent> =>
             stop = "interrupted"
             break
           }
-          if (options.maxTurns !== undefined && totalSteps >= options.maxTurns) {
+          if (totalSteps >= policy.maxTotalSteps || step >= policy.maxStepsPerTurn) {
             stop = "stopped"
             break
           }

@@ -8,7 +8,10 @@ import { AgentHooks } from "./AgentHooks.ts"
 import { runLoop } from "./agentLoop.ts"
 import { capabilitiesFrom, type Capabilities } from "./Capabilities.ts"
 import { ModelNotFound, type ModelSpec } from "./ModelCatalog.ts"
+import { ModelId } from "./ModelId.ts"
+import type { RunPolicy } from "./RunPolicy.ts"
 import type { SessionEvent } from "./SessionEvent.ts"
+import { SessionId } from "./SessionId.ts"
 import type { Skill } from "./Skills.ts"
 
 const findLastSystemMessage = (events: ReadonlyArray<SessionEvent>): string | undefined => {
@@ -29,18 +32,22 @@ import {
 } from "./SessionStore.ts"
 
 export class RunNotFound extends Schema.TaggedErrorClass<RunNotFound>()("RunNotFound", {
-  sessionId: Schema.String,
+  sessionId: SessionId,
 }) {}
 
 export class SessionBusy extends Schema.TaggedErrorClass<SessionBusy>()("SessionBusy", {
-  sessionId: Schema.String,
+  sessionId: SessionId,
 }) {}
 
-type PromptOptions = {
+export type PromptOptions = {
   readonly prompt: string
-  readonly sessionId?: string | undefined
-  readonly modelId?: string | undefined
+  readonly sessionId?: SessionId | string | undefined
+  readonly modelId?: ModelId | string | undefined
+  /**
+   * @deprecated Use `policy.maxTotalSteps` instead.
+   */
   readonly maxTurns?: number | undefined
+  readonly policy?: Partial<RunPolicy> | undefined
 }
 
 export class Agent extends Context.Service<
@@ -50,14 +57,14 @@ export class Agent extends Context.Service<
     readonly prompt: (
       options: PromptOptions,
     ) => Stream.Stream<AgentEvent, ModelNotFound | SessionBusy | SessionFormatError>
-    readonly interrupt: (sessionId: string) => Effect.Effect<void, RunNotFound>
+    readonly interrupt: (sessionId: SessionId | string) => Effect.Effect<void, RunNotFound>
     readonly history: (
-      sessionId: string,
+      sessionId: SessionId | string,
     ) => Effect.Effect<Session, SessionNotFound | SessionFormatError>
     readonly sessions: Effect.Effect<ReadonlyArray<SessionMeta>>
     readonly fork: (
-      fromSessionId: string,
-      toSessionId?: string,
+      fromSessionId: SessionId | string,
+      toSessionId?: SessionId | string,
     ) => Effect.Effect<SessionMeta, SessionNotFound | SessionFormatError | SessionAlreadyExists>
   }
 >()("roop/Agent") {}
@@ -103,7 +110,12 @@ export const AgentLive = <Tools extends Record<string, Tool.Any>>(
             (() => {
               let cleanup: Effect.Effect<void> = Effect.void
               return Effect.gen(function* () {
-                const sessionId = request.sessionId ?? (yield* Effect.orDie(crypto.randomUUIDv4))
+                const sessionId =
+                  request.sessionId !== undefined
+                    ? SessionId.make(request.sessionId)
+                    : yield* Effect.orDie(
+                        crypto.randomUUIDv4.pipe(Effect.map((id) => SessionId.make(id))),
+                      )
                 const model = yield* context.resolveModel(request.modelId)
                 const systemPrompt = yield* context.systemPrompt
 
@@ -177,6 +189,7 @@ export const AgentLive = <Tools extends Record<string, Tool.Any>>(
                       }
                     }),
                   maxTurns: request.maxTurns,
+                  policy: request.policy,
                   interrupt,
                   append,
                   hooks,
@@ -189,21 +202,29 @@ export const AgentLive = <Tools extends Record<string, Tool.Any>>(
               )
             })(),
           ),
-        interrupt: (sessionId) =>
-          Ref.get(active).pipe(
+        interrupt: (sessionId) => {
+          const sid = SessionId.make(sessionId)
+          return Ref.get(active).pipe(
             Effect.flatMap((map) => {
-              const interrupt = map.get(sessionId)
+              const interrupt = map.get(sid)
               return interrupt === undefined
-                ? Effect.fail(new RunNotFound({ sessionId }))
+                ? Effect.fail(new RunNotFound({ sessionId: sid }))
                 : Effect.asVoid(Deferred.succeed(interrupt, undefined))
             }),
-          ),
-        history: (sessionId) => store.load(sessionId),
+          )
+        },
+        history: (sessionId) => store.load(SessionId.make(sessionId)),
         sessions: store.list,
         fork: (fromSessionId, toSessionId) =>
           Effect.gen(function* () {
-            const targetId = toSessionId ?? (yield* Effect.orDie(crypto.randomUUIDv4))
-            return yield* store.fork(fromSessionId, targetId)
+            const fromId = SessionId.make(fromSessionId)
+            const targetId =
+              toSessionId !== undefined
+                ? SessionId.make(toSessionId)
+                : yield* Effect.orDie(
+                    crypto.randomUUIDv4.pipe(Effect.map((id) => SessionId.make(id))),
+                  )
+            return yield* store.fork(fromId, targetId)
           }),
       })
     }),

@@ -20,26 +20,27 @@ import {
   SessionEvent,
   SessionHeader,
 } from "./SessionEvent.ts"
+import { SessionId } from "./SessionId.ts"
 
 export class SessionNotFound extends Schema.TaggedErrorClass<SessionNotFound>()("SessionNotFound", {
-  sessionId: Schema.String,
+  sessionId: SessionId,
 }) {}
 
 export class SessionFormatError extends Schema.TaggedErrorClass<SessionFormatError>()(
   "SessionFormatError",
   {
-    sessionId: Schema.String,
+    sessionId: SessionId,
     message: Schema.String,
   },
 ) {}
 
 export class SessionAlreadyExists extends Schema.TaggedErrorClass<SessionAlreadyExists>()(
   "SessionAlreadyExists",
-  { sessionId: Schema.String },
+  { sessionId: SessionId },
 ) {}
 
 export const Session = Schema.Struct({
-  id: Schema.String,
+  id: SessionId,
   header: SessionHeader,
   events: Schema.Array(SessionEvent),
   updatedAt: Schema.Finite,
@@ -48,7 +49,7 @@ export const Session = Schema.Struct({
 export type Session = typeof Session.Type
 
 export const SessionMeta = Schema.Struct({
-  id: Schema.String,
+  id: SessionId,
   title: Schema.String,
   updatedAt: Schema.Finite,
 })
@@ -66,7 +67,7 @@ const title = (events: ReadonlyArray<SessionEvent>): string => {
 }
 
 const metaOf = (session: Session): SessionMeta => ({
-  id: session.id,
+  id: SessionId.make(session.id),
   title: title(session.events),
   updatedAt: session.updatedAt,
 })
@@ -74,7 +75,7 @@ const metaOf = (session: Session): SessionMeta => ({
 const byRecency = (a: SessionMeta, b: SessionMeta) => b.updatedAt - a.updatedAt
 
 const newSession = (sessionId: string, now: number): Session => ({
-  id: sessionId,
+  id: SessionId.make(sessionId),
   header: { version: SESSION_FORMAT_VERSION, createdAt: now },
   events: [],
   updatedAt: now,
@@ -94,7 +95,7 @@ const decodeSession = (
     Effect.mapError(
       (error) =>
         new SessionFormatError({
-          sessionId,
+          sessionId: SessionId.make(sessionId),
           message: String(error),
         }),
     ),
@@ -102,7 +103,7 @@ const decodeSession = (
       if (session.id !== sessionId) {
         return Effect.fail(
           new SessionFormatError({
-            sessionId,
+            sessionId: SessionId.make(sessionId),
             message: `session id ${JSON.stringify(session.id)} does not match requested id ${JSON.stringify(sessionId)}`,
           }),
         )
@@ -110,7 +111,7 @@ const decodeSession = (
       if (session.header.version > SESSION_FORMAT_VERSION) {
         return Effect.fail(
           new SessionFormatError({
-            sessionId,
+            sessionId: SessionId.make(sessionId),
             message: `session log version ${session.header.version} is newer than supported version ${SESSION_FORMAT_VERSION}`,
           }),
         )
@@ -122,15 +123,15 @@ const decodeSession = (
 export class SessionStore extends Context.Service<
   SessionStore,
   {
-    readonly append: (sessionId: string, event: SessionEvent) => Effect.Effect<void>
+    readonly append: (sessionId: SessionId | string, event: SessionEvent) => Effect.Effect<void>
     readonly deriveMessages: (
-      sessionId: string,
+      sessionId: SessionId | string,
     ) => Effect.Effect<ReadonlyArray<Prompt.Message>, SessionLoadError>
-    readonly load: (sessionId: string) => Effect.Effect<Session, SessionLoadError>
+    readonly load: (sessionId: SessionId | string) => Effect.Effect<Session, SessionLoadError>
     readonly list: Effect.Effect<ReadonlyArray<SessionMeta>>
     readonly fork: (
-      fromSessionId: string,
-      toSessionId: string,
+      fromSessionId: SessionId | string,
+      toSessionId: SessionId | string,
     ) => Effect.Effect<SessionMeta, SessionLoadError | SessionAlreadyExists>
   }
 >()("roop/SessionStore") {}
@@ -159,7 +160,7 @@ export const SessionStoreMemory = Layer.effect(
           Effect.flatMap((map) => {
             const session = map.get(sessionId)
             return session === undefined
-              ? Effect.fail(new SessionNotFound({ sessionId }))
+              ? Effect.fail(new SessionNotFound({ sessionId: SessionId.make(sessionId) }))
               : Effect.succeed(deriveMessages(session.events))
           }),
         ),
@@ -168,7 +169,7 @@ export const SessionStoreMemory = Layer.effect(
           Effect.flatMap((map) => {
             const session = map.get(sessionId)
             return session === undefined
-              ? Effect.fail(new SessionNotFound({ sessionId }))
+              ? Effect.fail(new SessionNotFound({ sessionId: SessionId.make(sessionId) }))
               : Effect.succeed(session)
           }),
         ),
@@ -185,7 +186,7 @@ export const SessionStoreMemory = Layer.effect(
               if (source === undefined) return [{ _tag: "missing" } as const, map]
               if (map.has(toSessionId)) return [{ _tag: "exists" } as const, map]
               const forked: Session = {
-                id: toSessionId,
+                id: SessionId.make(toSessionId),
                 header: { version: SESSION_FORMAT_VERSION, createdAt: now },
                 events: [...source.events],
                 updatedAt: now,
@@ -197,10 +198,10 @@ export const SessionStoreMemory = Layer.effect(
             },
           )
           if (result._tag === "missing") {
-            return yield* new SessionNotFound({ sessionId: fromSessionId })
+            return yield* new SessionNotFound({ sessionId: SessionId.make(fromSessionId) })
           }
           if (result._tag === "exists") {
-            return yield* new SessionAlreadyExists({ sessionId: toSessionId })
+            return yield* new SessionAlreadyExists({ sessionId: SessionId.make(toSessionId) })
           }
           return result.meta
         }),
@@ -262,7 +263,7 @@ export const SessionStoreFs = (
         fs.readFileString(file(sessionId)).pipe(
           Effect.catchTag("PlatformError", (error) =>
             isFileNotFound(error)
-              ? Effect.fail(new SessionNotFound({ sessionId }))
+              ? Effect.fail(new SessionNotFound({ sessionId: SessionId.make(sessionId) }))
               : Effect.die(error),
           ),
           Effect.flatMap((json) => decodeSession(sessionId, json)),
@@ -343,10 +344,10 @@ export const SessionStoreFs = (
               const now = yield* Clock.currentTimeMillis
               const source = yield* read(fromSessionId)
               if (yield* exists(toSessionId)) {
-                return yield* new SessionAlreadyExists({ sessionId: toSessionId })
+                return yield* new SessionAlreadyExists({ sessionId: SessionId.make(toSessionId) })
               }
               const forked: Session = {
-                id: toSessionId,
+                id: SessionId.make(toSessionId),
                 header: { version: SESSION_FORMAT_VERSION, createdAt: now },
                 events: [...source.events],
                 updatedAt: now,

@@ -5,6 +5,7 @@ import { Prompt } from "effect/unstable/ai"
 
 import { cryptoWeb } from "../src/cryptoWeb.ts"
 import { deriveMessages, SESSION_FORMAT_VERSION, type SessionEvent } from "../src/SessionEvent.ts"
+import { SessionId } from "../src/SessionId.ts"
 import { Session, SessionStore, SessionStoreFs, SessionStoreMemory } from "../src/SessionStore.ts"
 
 const scripted: ReadonlyArray<SessionEvent> = [
@@ -217,7 +218,7 @@ it.layer(StoreLive)("SessionStoreFs", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const json = yield* Schema.encodeEffect(Schema.fromJsonString(Session))({
-        id: "future",
+        id: SessionId.make("future"),
         header: { version: SESSION_FORMAT_VERSION + 1, createdAt: 0 },
         events: [{ _tag: "user/message", content: "hi" }],
         updatedAt: 0,

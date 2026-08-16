@@ -41,7 +41,7 @@ const main = Effect.gen(function* () {
   const caps = yield* client.Capabilities()
   const crypto = yield* Crypto.Crypto
   let sessionId = yield* Effect.orDie(crypto.randomUUIDv4)
-  let modelId = caps.defaultModelId
+  let modelId: string = caps.defaultModelId
   const actions = yield* Queue.unbounded<Action>()
 
   const tui = new TUI(new ProcessTerminal())
