@@ -18,6 +18,7 @@
     "./PluginId.ts": "./src/PluginId.ts",
     "./RunId.ts": "./src/RunId.ts",
     "./RunPolicy.ts": "./src/RunPolicy.ts",
+    "./RunRegistry.ts": "./src/RunRegistry.ts",
     "./SessionEvent.ts": "./src/SessionEvent.ts",
     "./SessionId.ts": "./src/SessionId.ts",
     "./SessionJournal.ts": "./src/SessionJournal.ts",

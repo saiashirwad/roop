@@ -1,4 +1,4 @@
-import { Cause, Deferred, Effect, Queue, Ref, Stream } from "effect"
+import { Cause, Effect, Queue, Ref, Stream } from "effect"
 import { Chat, LanguageModel, Prompt, Toolkit, type Response } from "effect/unstable/ai"
 import type * as Tool from "effect/unstable/ai/Tool"
 
@@ -6,6 +6,7 @@ import { AgentEmit } from "./AgentEmit.ts"
 import type { AgentEvent } from "./AgentEvent.ts"
 import type { AgentHooksInterface, RunContext } from "./AgentHooks.ts"
 import { resolveRunPolicy, type RunPolicy } from "./RunPolicy.ts"
+import type { InterruptSignal } from "./RunRegistry.ts"
 import type { SessionEvent } from "./SessionEvent.ts"
 import type { SessionId } from "./SessionId.ts"
 
@@ -30,7 +31,7 @@ type LoopOptions = {
   readonly toolkit: Effect.Effect<ErasedToolkit>
   readonly beforeRequest?: (() => Effect.Effect<void>) | undefined
   readonly policy?: RunPolicy | undefined
-  readonly interrupt: Deferred.Deferred<void>
+  readonly interrupt: InterruptSignal
   readonly append: (event: SessionEvent) => Effect.Effect<void>
   readonly hooks: AgentHooksInterface
 }
@@ -259,7 +260,7 @@ export const runLoop = (options: LoopOptions): Stream.Stream<AgentEvent> =>
 
         let stop: "completed" | "stopped" | "interrupted"
         while (true) {
-          if (yield* Deferred.isDone(options.interrupt)) {
+          if (yield* options.interrupt.isInterrupted) {
             stop = "interrupted"
             break
           }
@@ -275,7 +276,7 @@ export const runLoop = (options: LoopOptions): Stream.Stream<AgentEvent> =>
           openStep = true
           const preStep = yield* Effect.raceFirst(
             hooks.preStep(context),
-            Deferred.await(options.interrupt).pipe(Effect.map(() => null)),
+            options.interrupt.await.pipe(Effect.map(() => null)),
           )
           if (preStep === null) {
             yield* append({ _tag: "step/end", reason: "interrupted" })
@@ -340,7 +341,7 @@ export const runLoop = (options: LoopOptions): Stream.Stream<AgentEvent> =>
 
           const outcome = yield* Effect.raceFirst(
             stepStream,
-            Deferred.await(options.interrupt).pipe(Effect.map(() => null)),
+            options.interrupt.await.pipe(Effect.map(() => null)),
           )
 
           if (outcome === null) {
@@ -372,7 +373,7 @@ export const runLoop = (options: LoopOptions): Stream.Stream<AgentEvent> =>
           stop === "completed"
             ? yield* Effect.raceFirst(
                 hooks.turnStopping(context, { reason: stop, stepCount: step }),
-                Deferred.await(options.interrupt).pipe(Effect.map(() => null)),
+                options.interrupt.await.pipe(Effect.map(() => null)),
               )
             : undefined
         if (continuation === null) stop = "interrupted"

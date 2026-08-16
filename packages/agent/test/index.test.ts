@@ -16,5 +16,6 @@ it.effect("index: re-exports all root namespaces", () =>
     assert.strictEqual(typeof RoopAgent.PluginId.PluginId, "object")
     assert.strictEqual(typeof RoopAgent.ToolCallId.ToolCallId, "object")
     assert.strictEqual(typeof RoopAgent.RunPolicy.RunPolicy, "object")
+    assert.strictEqual(typeof RoopAgent.RunRegistry.RunRegistry, "function")
   }),
 )

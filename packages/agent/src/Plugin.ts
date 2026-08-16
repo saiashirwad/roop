@@ -7,6 +7,7 @@ import { AgentContext, make as makeAgentContext } from "./AgentContext.ts"
 import { AgentHooks, layerNoop } from "./AgentHooks.ts"
 import type { ModelSpec } from "./ModelCatalog.ts"
 import { PluginId } from "./PluginId.ts"
+import { RunRegistryLive } from "./RunRegistry.ts"
 import type { SessionJournal } from "./SessionJournal.ts"
 import { type Skill } from "./Skills.ts"
 
@@ -157,6 +158,7 @@ export const AgentPlugins = <const Plugins extends ReadonlyArray<Plugin<any>>>(
     Layer.unwrap(Effect.map(toolkit, (withHandler) => AgentLive(withHandler))).pipe(
       Layer.provide([
         registry,
+        RunRegistryLive,
         hooks.pipe(Layer.provide(registry)),
         ...handlers.map((handler) => handler.pipe(Layer.provide(registry))),
       ]),
