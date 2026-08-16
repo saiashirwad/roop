@@ -4,6 +4,7 @@ import { Effect, Exit, Fiber, FileSystem, Layer, Option, Queue, Schema, Stream }
 import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
 
 import { Agent, AgentLiveToolkit } from "../src/Agent.ts"
+import { layerHook, layerNoop } from "../src/AgentHooks.ts"
 import { delegation } from "../src/agentTool.ts"
 import { cryptoWeb } from "../src/cryptoWeb.ts"
 import { deriveMessages } from "../src/SessionEvent.ts"
@@ -466,3 +467,53 @@ it.layer(
     }),
   )
 })
+
+it.effect(
+  "stops the loop and emits Finish stopped when maxTurns limit is reached via continuation",
+  () =>
+    Effect.gen(function* () {
+      const agent = yield* Agent
+      const events = yield* collect(
+        agent.prompt({
+          prompt: "start",
+          sessionId: "max-turns-hook-test",
+          policy: { maxTurns: 1 },
+        }),
+      )
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
+      const finish = events.find((e: any) => e._tag === "Finish") as any
+      assert.ok(finish !== undefined)
+      assert.strictEqual(finish.reason, "stopped")
+    }).pipe(
+      Effect.provide(
+        AgentLiveToolkit(EchoToolkit, {
+          models: [
+            {
+              id: "test",
+              provider: "test",
+              layer: modelLayer(
+                scripted([
+                  [{ type: "text-delta" as const, id: "t1", delta: "turn 1" }],
+                  [{ type: "text-delta" as const, id: "t2", delta: "turn 2" }],
+                ]),
+              ),
+            },
+          ],
+        }).pipe(
+          Layer.provide(
+            layerHook("always-continue", (downstream) =>
+              Effect.succeed({
+                ...downstream,
+                turnStopping: () => Effect.succeed({ prompt: "keep going" }),
+              }),
+            ).pipe(Layer.provide(layerNoop)),
+          ),
+          Layer.provide(SessionJournalMemory),
+          Layer.provide(cryptoWeb),
+          Layer.provide(
+            EchoToolkit.toLayer({ echo: ({ note }) => Effect.succeed({ reply: note }) }),
+          ),
+        ),
+      ),
+    ),
+)
