@@ -4,6 +4,7 @@ import { Tool } from "effect/unstable/ai"
 import type { Agent } from "./Agent.ts"
 import { AgentEmit } from "./AgentEmit.ts"
 import type { AgentEvent } from "./AgentEvent.ts"
+import type { RunError } from "./RunError.ts"
 import type { RunPolicy } from "./RunPolicy.ts"
 
 export class DelegationFailed extends Schema.TaggedErrorClass<DelegationFailed>()(
@@ -79,6 +80,8 @@ export const delegation = (options: DelegationOptions) => {
             new DelegationFailed({ message: `session busy: ${error.sessionId}` }),
           SessionFormatError: (error) =>
             new DelegationFailed({ message: `corrupt session log: ${error.message}` }),
+          RunError: (error: RunError) =>
+            new DelegationFailed({ message: `delegated agent ${error.operation} failed` }),
         }),
       )
 

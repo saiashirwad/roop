@@ -9,6 +9,7 @@ import { runLoop } from "./agentLoop.ts"
 import { capabilitiesFrom, type Capabilities } from "./Capabilities.ts"
 import { ModelNotFound, type ModelSpec } from "./ModelCatalog.ts"
 import { ModelId } from "./ModelId.ts"
+import { RunError, runError } from "./RunError.ts"
 import type { RunPolicy } from "./RunPolicy.ts"
 import { RunNotFound, RunRegistry, RunRegistryLive, SessionBusy } from "./RunRegistry.ts"
 import type { SessionEvent } from "./SessionEvent.ts"
@@ -49,7 +50,7 @@ export class Agent extends Context.Service<
       options: PromptOptions,
     ) => Stream.Stream<
       AgentEvent,
-      ModelNotFound | SessionBusy | SessionFormatError | SessionIoError
+      ModelNotFound | SessionBusy | SessionFormatError | SessionIoError | RunError
     >
     readonly interrupt: (sessionId: SessionId | string) => Effect.Effect<void, RunNotFound>
     readonly history: (
@@ -108,7 +109,9 @@ export const AgentLive = <Tools extends Record<string, Tool.Any>>(
                 Stream.unwrap(
                   Effect.gen(function* () {
                     const append = (event: SessionEvent) =>
-                      store.append(sessionId, event).pipe(Effect.orDie)
+                      store
+                        .append(sessionId, event)
+                        .pipe(Effect.mapError((error) => runError(error, { sessionId })))
 
                     const stored = yield* store.load(sessionId).pipe(
                       Effect.map((session) => Option.some<Session>(session)),
@@ -129,17 +132,22 @@ export const AgentLive = <Tools extends Record<string, Tool.Any>>(
                     }
                     yield* append({ _tag: "user/message", content: request.prompt })
 
-                    const chat = yield* Effect.orDie(
-                      Chat.fromPrompt(
-                        yield* store.deriveMessages(sessionId).pipe(
-                          Effect.catchIf(
-                            (error): error is SessionNotFound => error._tag === "SessionNotFound",
-                            () =>
-                              Effect.die(new Error(`session ${sessionId} vanished after append`)),
-                          ),
+                    const chat = yield* Chat.fromPrompt(
+                      yield* store.deriveMessages(sessionId).pipe(
+                        Effect.catchIf(
+                          (error): error is SessionNotFound => error._tag === "SessionNotFound",
+                          () =>
+                            Effect.fail(
+                              new SessionIoError({
+                                operation: "deriveMessages",
+                                sessionId,
+                                message: `session ${sessionId} vanished after append`,
+                              }),
+                            ),
                         ),
+                        Effect.mapError((error) => runError(error, { sessionId })),
                       ),
-                    )
+                    ).pipe(Effect.mapError((error) => runError(error, { sessionId })))
 
                     const journaledSections = new Set<string>()
                     if (systemPrompt !== "") journaledSections.add(systemPrompt)

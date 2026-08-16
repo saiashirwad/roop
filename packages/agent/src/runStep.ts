@@ -45,9 +45,9 @@ export interface RunStepOptions {
   readonly model: LanguageModel.Service
   /** A request-bound capability snapshot. */
   readonly toolkit: Effect.Effect<ErasedToolkit>
-  readonly beforeRequest?: (() => Effect.Effect<void>) | undefined
+  readonly beforeRequest?: (() => Effect.Effect<void, any>) | undefined
   readonly interrupt: InterruptSignal
-  readonly append: (event: SessionEvent) => Effect.Effect<void>
+  readonly append: (event: SessionEvent) => Effect.Effect<void, any>
   readonly emit: (event: AgentEvent) => Effect.Effect<void>
   readonly hooks: AgentHooksInterface
   readonly scheduler: ToolScheduler
@@ -103,9 +103,9 @@ const toEvent = (
 
 /** Journal the exact assistant/tool messages produced by this model response. */
 const appendStepEvents = (
-  append: (event: SessionEvent) => Effect.Effect<void>,
+  append: (event: SessionEvent) => Effect.Effect<void, any>,
   outcome: ReadonlyArray<Response.StreamPart<Record<string, Tool.Any>>>,
-): Effect.Effect<void> => {
+): Effect.Effect<void, any> => {
   const content = Prompt.fromResponseParts(outcome).content
   const providerExecutedByResultId = new Map(
     outcome.flatMap((part) =>
@@ -159,7 +159,7 @@ const interceptModel = (
   model: LanguageModel.Service,
   hooks: AgentHooksInterface,
   context: () => RunContext,
-  append: (event: SessionEvent) => Effect.Effect<void>,
+  append: (event: SessionEvent) => Effect.Effect<void, any>,
 ): LanguageModel.Service => {
   /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
   return {
@@ -273,8 +273,8 @@ export const runStep = (
       options.interrupt.await.pipe(Effect.map(() => null)),
     )
     if (preStep === null) {
-      closed = true
       yield* options.append({ _tag: "step/end", reason: "interrupted" })
+      closed = true
       return { _tag: "Interrupted" as const }
     }
 
@@ -331,8 +331,8 @@ export const runStep = (
     )
 
     if (outcome === null) {
-      closed = true
       yield* options.append({ _tag: "step/end", reason: "interrupted" })
+      closed = true
       return { _tag: "Interrupted" as const }
     }
 
@@ -341,8 +341,8 @@ export const runStep = (
     }
 
     yield* appendStepEvents(options.append, outcome)
-    closed = true
     yield* options.append({ _tag: "step/end", reason: "completed" })
+    closed = true
 
     const toolCalls = outcome.filter((part) => part.type === "tool-call")
     if (toolCalls.length > 0) {
@@ -354,13 +354,15 @@ export const runStep = (
 
   return execution.pipe(
     Effect.tapCause((cause) => {
-      if (!started || closed || Cause.hasInterruptsOnly(cause)) return Effect.void
-      closed = true
-      return options.append({
-        _tag: "step/end",
-        reason: "failed",
-        message: Cause.pretty(cause).trim(),
-      })
+      if (!started || closed) return Effect.void
+      const interrupted = Cause.hasInterruptsOnly(cause)
+      return Effect.uninterruptible(
+        options.append(
+          interrupted
+            ? { _tag: "step/end", reason: "interrupted" }
+            : { _tag: "step/end", reason: "failed", message: Cause.pretty(cause).trim() },
+        ),
+      )
     }),
   )
 }

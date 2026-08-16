@@ -2,6 +2,7 @@ import { RunNotFound, SessionBusy } from "@roop/agent/Agent.ts"
 import { AgentEvent } from "@roop/agent/AgentEvent.ts"
 import { Capabilities } from "@roop/agent/Capabilities.ts"
 import { ModelNotFound } from "@roop/agent/ModelCatalog.ts"
+import { RunError } from "@roop/agent/RunError.ts"
 import { RunPolicy } from "@roop/agent/RunPolicy.ts"
 import {
   Session,
@@ -26,7 +27,7 @@ export const AgentRpc = RpcGroup.make(
       policy: Schema.optionalKey(RunPolicy),
     },
     success: AgentEvent,
-    error: Schema.Union([ModelNotFound, SessionBusy, SessionFormatError, SessionIoError]),
+    error: Schema.Union([ModelNotFound, SessionBusy, SessionFormatError, SessionIoError, RunError]),
     stream: true,
   }),
   Rpc.make("Interrupt", {

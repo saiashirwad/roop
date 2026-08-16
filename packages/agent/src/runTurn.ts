@@ -40,7 +40,7 @@ export interface RunTurnOptions<E = unknown> {
   readonly totalSteps: number
   readonly policy: ResolvedRunPolicy
   readonly interrupt: InterruptSignal
-  readonly append: (event: SessionEvent) => Effect.Effect<void>
+  readonly append: (event: SessionEvent) => Effect.Effect<void, any>
   readonly hooks: AgentHooksInterface
   readonly runStep: (options: {
     readonly turn: number
@@ -64,8 +64,8 @@ export const runTurn = <E = unknown>(options: RunTurnOptions<E>): Effect.Effect<
 
     while (true) {
       if (yield* options.interrupt.isInterrupted) {
-        closed = true
         yield* options.append({ _tag: "turn/end", reason: "interrupted" })
+        closed = true
         return {
           _tag: "Interrupted" as const,
           stepCount: step,
@@ -74,8 +74,8 @@ export const runTurn = <E = unknown>(options: RunTurnOptions<E>): Effect.Effect<
       }
 
       if (currentTotalSteps >= options.policy.maxTotalSteps) {
-        closed = true
         yield* options.append({ _tag: "turn/end", reason: "stopped" })
+        closed = true
         return {
           _tag: "LimitReached" as const,
           limit: "maxTotalSteps" as const,
@@ -85,8 +85,8 @@ export const runTurn = <E = unknown>(options: RunTurnOptions<E>): Effect.Effect<
       }
 
       if (step >= options.policy.maxStepsPerTurn) {
-        closed = true
         yield* options.append({ _tag: "turn/end", reason: "stopped" })
+        closed = true
         return {
           _tag: "LimitReached" as const,
           limit: "maxStepsPerTurn" as const,
@@ -104,8 +104,8 @@ export const runTurn = <E = unknown>(options: RunTurnOptions<E>): Effect.Effect<
       })
 
       if (outcome._tag === "Interrupted") {
-        closed = true
         yield* options.append({ _tag: "turn/end", reason: "interrupted" })
+        closed = true
         return {
           _tag: "Interrupted" as const,
           stepCount: step,
@@ -131,8 +131,8 @@ export const runTurn = <E = unknown>(options: RunTurnOptions<E>): Effect.Effect<
     )
 
     if (continuation === null) {
-      closed = true
       yield* options.append({ _tag: "turn/end", reason: "interrupted" })
+      closed = true
       return {
         _tag: "Interrupted" as const,
         stepCount: step,
@@ -140,8 +140,8 @@ export const runTurn = <E = unknown>(options: RunTurnOptions<E>): Effect.Effect<
       }
     }
 
-    closed = true
     yield* options.append({ _tag: "turn/end", reason: "completed" })
+    closed = true
 
     if (continuation !== undefined) {
       return {
@@ -162,13 +162,15 @@ export const runTurn = <E = unknown>(options: RunTurnOptions<E>): Effect.Effect<
 
   return execution.pipe(
     Effect.tapCause((cause) => {
-      if (!started || closed || Cause.hasInterruptsOnly(cause)) return Effect.void
-      closed = true
-      return options.append({
-        _tag: "turn/end",
-        reason: "failed",
-        message: Cause.pretty(cause).trim(),
-      })
+      if (!started || closed) return Effect.void
+      const interrupted = Cause.hasInterruptsOnly(cause)
+      return Effect.uninterruptible(
+        options.append(
+          interrupted
+            ? { _tag: "turn/end", reason: "interrupted" }
+            : { _tag: "turn/end", reason: "failed", message: Cause.pretty(cause).trim() },
+        ),
+      )
     }),
   )
 }

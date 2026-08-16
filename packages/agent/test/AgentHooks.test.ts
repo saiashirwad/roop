@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest"
-import { Effect, Layer, Ref, Schema, Stream } from "effect"
+import { Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect"
 import { LanguageModel, Prompt, Tool, Toolkit } from "effect/unstable/ai"
 
 import { Agent, AgentLiveToolkit } from "../src/Agent.ts"
@@ -404,9 +404,14 @@ it.layer(
   it.effect("closes the started step and turn as failed", () =>
     Effect.gen(function* () {
       const agent = yield* Agent
-      const events = yield* collect(agent.prompt({ prompt: "begin", sessionId: "s8" }))
-      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
-      assert.strictEqual((events[events.length - 1] as any).reason, "failed")
+      const exit = yield* Effect.exit(
+        Stream.runCollect(agent.prompt({ prompt: "begin", sessionId: "s8" })),
+      )
+      assert.ok(Exit.isFailure(exit))
+      // SAFETY: the preceding assertion proves the exit is a typed failure.
+      const error = Option.getOrThrow(Exit.findErrorOption(exit)) as any
+      assert.strictEqual(error._tag, "RunError")
+      assert.ok(error.originalCause !== undefined)
 
       const session = yield* agent.history("s8")
       assert.deepStrictEqual(tags(session.events), [
