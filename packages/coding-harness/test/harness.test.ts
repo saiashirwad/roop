@@ -6,6 +6,7 @@ import { AgentPlugins, Plugin } from "@roop/agent/Plugin.ts"
 import { SessionStoreMemory } from "@roop/agent/SessionStore.ts"
 import { scripted } from "@roop/agent/Testing.ts"
 import { CodingTools } from "@roop/coding-tools/CodingTools.ts"
+import { ExecutionWorld } from "@roop/coding-tools/ExecutionWorld.ts"
 import { Effect, FileSystem, Layer, Path, Stream } from "effect"
 import { LanguageModel, type Response } from "effect/unstable/ai"
 
@@ -21,6 +22,7 @@ const agentLayer = (model: Effect.Effect<LanguageModel.Service>, root: string) =
   ]).pipe(
     Layer.provide(SessionStoreMemory),
     Layer.provide(cryptoWeb),
+    Layer.provide(ExecutionWorld.layer),
     Layer.provide(NodeChildProcessSpawner.layer),
     Layer.provide(NodeFileSystem.layer),
     Layer.provide(NodePath.layer),

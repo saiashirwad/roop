@@ -1,16 +1,15 @@
 import { Plugin } from "@roop/agent/Plugin.ts"
-import { Effect, FileSystem, Path, Schema, Stream } from "effect"
+import { Effect, Path, Schema, Stream } from "effect"
 import { Tool, Toolkit } from "effect/unstable/ai"
 import { ChildProcess } from "effect/unstable/process"
-import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
+
+import { ExecutionWorld } from "./ExecutionWorld.ts"
 
 export class ToolFailure extends Schema.TaggedErrorClass<ToolFailure>()("ToolFailure", {
   message: Schema.String,
 }) {}
 
-export const CodingTools = (
-  root: string,
-): Plugin<FileSystem.FileSystem | ChildProcessSpawner | Path.Path> => {
+export const CodingTools = (root: string): Plugin<ExecutionWorld | Path.Path> => {
   const within = (raw: string): Effect.Effect<string, ToolFailure, Path.Path> =>
     Effect.gen(function* () {
       const path = yield* Path.Path
@@ -24,10 +23,14 @@ export const CodingTools = (
       return target
     })
 
-  const asFailure = <A, E extends { readonly message: string }>(
-    effect: Effect.Effect<A, E>,
-  ): Effect.Effect<A, ToolFailure> =>
-    effect.pipe(Effect.mapError((error) => new ToolFailure({ message: error.message })))
+  const asFailure = <A, E, R = never>(
+    effect: Effect.Effect<A, E, R>,
+  ): Effect.Effect<A, ToolFailure, R> =>
+    effect.pipe(
+      Effect.mapError(
+        (error: any) => new ToolFailure({ message: error?.message ?? String(error) }),
+      ),
+    )
 
   const toolkit = Toolkit.make(
     Tool.make("readFile", {
@@ -36,7 +39,7 @@ export const CodingTools = (
       success: Schema.Struct({ content: Schema.String }),
       failure: ToolFailure,
       failureMode: "return",
-      dependencies: [FileSystem.FileSystem, Path.Path],
+      dependencies: [ExecutionWorld, Path.Path],
     }),
     Tool.make("writeFile", {
       description: "Create or overwrite a UTF-8 text file inside the workspace",
@@ -44,7 +47,7 @@ export const CodingTools = (
       success: Schema.Struct({ path: Schema.String }),
       failure: ToolFailure,
       failureMode: "return",
-      dependencies: [FileSystem.FileSystem, Path.Path],
+      dependencies: [ExecutionWorld, Path.Path],
     }),
     Tool.make("listFiles", {
       description: "Recursively list file paths under a workspace directory",
@@ -52,7 +55,7 @@ export const CodingTools = (
       success: Schema.Struct({ files: Schema.Array(Schema.String) }),
       failure: ToolFailure,
       failureMode: "return",
-      dependencies: [FileSystem.FileSystem, Path.Path],
+      dependencies: [ExecutionWorld, Path.Path],
     }),
     Tool.make("bash", {
       description: "Run a shell command in the workspace and capture stdout, stderr, and exit code",
@@ -64,7 +67,7 @@ export const CodingTools = (
       }),
       failure: ToolFailure,
       failureMode: "return",
-      dependencies: [ChildProcessSpawner, Path.Path],
+      dependencies: [ExecutionWorld, Path.Path],
     }),
   )
 
@@ -74,33 +77,35 @@ export const CodingTools = (
     handlers: toolkit.toLayer({
       readFile: ({ path }) =>
         Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem
+          const world = yield* ExecutionWorld
           const file = yield* within(path)
           return yield* asFailure(
-            fs.readFileString(file).pipe(Effect.map((content) => ({ content }))),
+            world.filesystem.readFileString(file).pipe(Effect.map((content) => ({ content }))),
           )
         }),
       writeFile: ({ path, content }) =>
         Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem
+          const world = yield* ExecutionWorld
           const file = yield* within(path)
-          yield* asFailure(fs.writeFileString(file, content))
+          yield* asFailure(world.filesystem.writeFileString(file, content))
           return { path }
         }),
       listFiles: ({ path }) =>
         Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem
+          const world = yield* ExecutionWorld
           const dir = yield* within(path ?? ".")
           return yield* asFailure(
-            fs.readDirectory(dir, { recursive: true }).pipe(Effect.map((files) => ({ files }))),
+            world.filesystem
+              .readDirectory(dir, { recursive: true })
+              .pipe(Effect.map((files) => ({ files }))),
           )
         }),
       bash: ({ command }) =>
         Effect.scoped(
           Effect.gen(function* () {
             const path = yield* Path.Path
-            const spawner = yield* ChildProcessSpawner
-            const handle = yield* spawner.spawn(
+            const world = yield* ExecutionWorld
+            const handle = yield* world.spawner.spawn(
               ChildProcess.make(command, { shell: true, cwd: path.resolve(root) }),
             )
             const [stdout, stderr, exitCode] = yield* Effect.all(
@@ -112,7 +117,7 @@ export const CodingTools = (
               { concurrency: "unbounded" },
             )
             return { exitCode: Number(exitCode), stdout, stderr }
-          }).pipe(Effect.mapError((error) => new ToolFailure({ message: error.message }))),
+          }).pipe(Effect.mapError((error: any) => new ToolFailure({ message: error.message }))),
         ),
     }),
   })

@@ -14,6 +14,7 @@ import { AgentPlugins } from "@roop/agent/Plugin.ts"
 import { SessionStoreFs } from "@roop/agent/SessionStore.ts"
 import { subagent } from "@roop/agent/subagent.ts"
 import { CodingTools } from "@roop/coding-tools/CodingTools.ts"
+import { ExecutionWorld } from "@roop/coding-tools/ExecutionWorld.ts"
 import { Claude } from "@roop/plugin-claude/Claude.ts"
 import { Codex } from "@roop/plugin-codex/Codex.ts"
 import { OpenAiCompatible } from "@roop/plugin-openai/OpenAiCompatible.ts"
@@ -60,6 +61,7 @@ export const server = (options: {
       ]).pipe(Layer.provide(SessionStoreFs(path.join(options.root, ".roop", "sessions"))))
     }),
   ).pipe(
+    Layer.provide(ExecutionWorld.layer),
     Layer.provide(NodeChildProcessSpawner.layer),
     Layer.provide(NodeCrypto.layer),
     Layer.provide(NodeFileSystem.layer),
