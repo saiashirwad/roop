@@ -39,7 +39,7 @@ export const promptAtom = runtime.fn((text: string, ctx: Atom.FnContext) =>
     const payload = {
       prompt: text,
       sessionId,
-      maxTurns: 50,
+      policy: { maxTurns: 50 },
     }
     yield* client.Prompt(modelId === undefined ? payload : { ...payload, modelId }).pipe(
       Stream.runForEach((event) =>

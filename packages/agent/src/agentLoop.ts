@@ -29,11 +29,7 @@ type LoopOptions = {
   /** A request-bound capability snapshot. */
   readonly toolkit: Effect.Effect<ErasedToolkit>
   readonly beforeRequest?: (() => Effect.Effect<void>) | undefined
-  /**
-   * @deprecated Use `policy.maxTotalSteps` instead.
-   */
-  readonly maxTurns?: number | undefined
-  readonly policy?: Partial<RunPolicy> | undefined
+  readonly policy?: RunPolicy | undefined
   readonly interrupt: Deferred.Deferred<void>
   readonly append: (event: SessionEvent) => Effect.Effect<void>
   readonly hooks: AgentHooksInterface
@@ -244,7 +240,7 @@ export const runLoop = (options: LoopOptions): Stream.Stream<AgentEvent> =>
       const emit = (event: AgentEvent) => Queue.offer(queue, event)
       const append = options.append
       const hooks = options.hooks
-      const policy = resolveRunPolicy({ maxTurns: options.maxTurns, policy: options.policy })
+      const policy = resolveRunPolicy(options.policy)
       let turn = 0
       let totalSteps = 0
       let toolCallSequence = 0

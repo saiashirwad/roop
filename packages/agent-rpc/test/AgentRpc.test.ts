@@ -3,7 +3,7 @@ import { assert, it } from "@effect/vitest"
 import { AgentLiveToolkit } from "@roop/agent/Agent.ts"
 import { cryptoWeb } from "@roop/agent/cryptoWeb.ts"
 import { deriveMessages } from "@roop/agent/SessionEvent.ts"
-import { SessionStoreFs, SessionStoreMemory } from "@roop/agent/SessionStore.ts"
+import { SessionJournalFs, SessionJournalMemory } from "@roop/agent/SessionJournal.ts"
 import { scripted } from "@roop/agent/Testing.ts"
 import { Effect, Exit, FileSystem, Layer, Option, Schema, Stream } from "effect"
 import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
@@ -40,7 +40,7 @@ const TestLayer = AgentLiveToolkit(EchoToolkit, {
   ],
   skills: [{ id: "summarize", description: "summarize text" }],
 }).pipe(
-  Layer.provide(SessionStoreMemory),
+  Layer.provide(SessionJournalMemory),
   Layer.provide(cryptoWeb),
   Layer.provide(
     EchoToolkit.toLayer({
@@ -153,11 +153,11 @@ it.layer(AgentRpcServer.pipe(Layer.provide(TestLayer)))("AgentRpc", (it) => {
   )
 })
 
-const corruptSessionStore = Effect.gen(function* () {
+const corruptSessionJournal = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
   const dir = yield* fs.makeTempDirectory({ prefix: "agentrpc-corrupt-" })
   yield* fs.writeFileString(`${dir}/corrupt.json`, "{ not json")
-  return SessionStoreFs(dir)
+  return SessionJournalFs(dir)
 }).pipe(Effect.orDie)
 
 const FsTestLayer = AgentLiveToolkit(EchoToolkit, {
@@ -172,7 +172,7 @@ const FsTestLayer = AgentLiveToolkit(EchoToolkit, {
     },
   ],
 }).pipe(
-  Layer.provide(Layer.unwrap(corruptSessionStore)),
+  Layer.provide(Layer.unwrap(corruptSessionJournal)),
   Layer.provide(NodeFileSystem.layer),
   Layer.provide(cryptoWeb),
   Layer.provide(

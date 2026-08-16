@@ -4,7 +4,7 @@ import { LanguageModel, Response, Tool, Toolkit } from "effect/unstable/ai"
 
 import { Agent, AgentLiveToolkit } from "../src/Agent.ts"
 import { cryptoWeb } from "../src/cryptoWeb.ts"
-import { SessionStoreMemory } from "../src/SessionStore.ts"
+import { SessionJournalMemory } from "../src/SessionJournal.ts"
 
 const Ping = Tool.make("ping", {
   description: "reply with ok",
@@ -44,7 +44,7 @@ const Live = AgentLiveToolkit(PingToolkit, {
     },
   ],
 }).pipe(
-  Layer.provide(SessionStoreMemory),
+  Layer.provide(SessionJournalMemory),
   Layer.provide(cryptoWeb),
   Layer.provide(
     PingToolkit.toLayer({

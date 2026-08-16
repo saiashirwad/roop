@@ -26,8 +26,8 @@ import {
   SessionAlreadyExists,
   SessionFormatError,
   SessionIoError,
+  SessionJournal,
   SessionNotFound,
-  SessionStore,
   type Session,
   type SessionMeta,
 } from "./SessionJournal.ts"
@@ -44,11 +44,7 @@ export type PromptOptions = {
   readonly prompt: string
   readonly sessionId?: SessionId | string | undefined
   readonly modelId?: ModelId | string | undefined
-  /**
-   * @deprecated Use `policy.maxTotalSteps` instead.
-   */
-  readonly maxTurns?: number | undefined
-  readonly policy?: Partial<RunPolicy> | undefined
+  readonly policy?: RunPolicy | undefined
 }
 
 export class Agent extends Context.Service<
@@ -78,11 +74,11 @@ export class Agent extends Context.Service<
 
 export const AgentLive = <Tools extends Record<string, Tool.Any>>(
   toolkit: Toolkit.WithHandler<Tools>,
-): Layer.Layer<Agent, never, AgentContext | Crypto.Crypto | SessionStore> =>
+): Layer.Layer<Agent, never, AgentContext | Crypto.Crypto | SessionJournal> =>
   Layer.effect(
     Agent,
     Effect.gen(function* () {
-      const store = yield* SessionStore
+      const store = yield* SessionJournal
       const crypto = yield* Crypto.Crypto
       const hooks = yield* AgentHooks
       const active = yield* Ref.make(new Map<string, Deferred.Deferred<void>>())
@@ -196,7 +192,6 @@ export const AgentLive = <Tools extends Record<string, Tool.Any>>(
                         )
                       }
                     }),
-                  maxTurns: request.maxTurns,
                   policy: request.policy,
                   interrupt,
                   append,
@@ -252,7 +247,7 @@ export const AgentLiveToolkit = <Tools extends Record<string, Tool.Any>>(
     readonly models?: ReadonlyArray<ModelSpec<never, never>> | undefined
     readonly skills?: ReadonlyArray<Skill> | undefined
   },
-): Layer.Layer<Agent, never, Crypto.Crypto | Tool.HandlersFor<Tools> | SessionStore> => {
+): Layer.Layer<Agent, never, Crypto.Crypto | Tool.HandlersFor<Tools> | SessionJournal> => {
   const registry = AgentContextLive(
     options?.systemPrompt === undefined ? undefined : { systemPrompt: options.systemPrompt },
   )

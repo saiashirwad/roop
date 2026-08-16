@@ -7,7 +7,7 @@ import { AgentContext, make as makeAgentContext } from "./AgentContext.ts"
 import { AgentHooks, layerNoop } from "./AgentHooks.ts"
 import type { ModelSpec } from "./ModelCatalog.ts"
 import { PluginId } from "./PluginId.ts"
-import type { SessionStore } from "./SessionStore.ts"
+import type { SessionJournal } from "./SessionJournal.ts"
 import { type Skill } from "./Skills.ts"
 
 export type Plugin<R = never, RH = never> = {
@@ -103,7 +103,7 @@ export const AgentPlugins = <const Plugins extends ReadonlyArray<Plugin<any>>>(
 ): Layer.Layer<
   Agent,
   never,
-  SessionStore | Crypto.Crypto | Exclude<PluginRequirements<Plugins>, AgentContext>
+  SessionJournal | Crypto.Crypto | Exclude<PluginRequirements<Plugins>, AgentContext>
 > => {
   const views: ReadonlyArray<PluginView> = plugins
   const toolkit = Toolkit.merge(
@@ -150,7 +150,7 @@ export const AgentPlugins = <const Plugins extends ReadonlyArray<Plugin<any>>>(
   )
 
   /* SAFETY: Crypto stays caller-provided so platform packages can substitute it;
-   * the public type keeps SessionStore plus each plugin's R/RH. AgentContext
+   * the public type keeps SessionJournal plus each plugin's R/RH. AgentContext
    * requirements are satisfied by the provided registry, never the caller. */
   return (
     // oxlint-disable-next-line effecttsgo/unsafe-effect-type-assertion -- Crypto is supplied by the caller, not this layer
@@ -163,7 +163,7 @@ export const AgentPlugins = <const Plugins extends ReadonlyArray<Plugin<any>>>(
     ) as Layer.Layer<
       Agent,
       never,
-      SessionStore | Crypto.Crypto | Exclude<PluginRequirements<Plugins>, AgentContext>
+      SessionJournal | Crypto.Crypto | Exclude<PluginRequirements<Plugins>, AgentContext>
     >
   )
 }

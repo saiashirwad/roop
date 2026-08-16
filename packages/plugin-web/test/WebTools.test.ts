@@ -2,7 +2,7 @@ import { assert, it } from "@effect/vitest"
 import { Agent } from "@roop/agent/Agent.ts"
 import { cryptoWeb } from "@roop/agent/cryptoWeb.ts"
 import { AgentPlugins, Plugin } from "@roop/agent/Plugin.ts"
-import { SessionStoreMemory } from "@roop/agent/SessionStore.ts"
+import { SessionJournalMemory } from "@roop/agent/SessionJournal.ts"
 import { scripted } from "@roop/agent/Testing.ts"
 import { Effect, Layer, Stream } from "effect"
 import { LanguageModel } from "effect/unstable/ai"
@@ -39,7 +39,7 @@ const Main = AgentPlugins([
     ],
   }),
 ]).pipe(
-  Layer.provide(SessionStoreMemory),
+  Layer.provide(SessionJournalMemory),
   Layer.provide(cryptoWeb),
   Layer.provide(
     FetchHttpClient.layer.pipe(Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fakeFetch))),

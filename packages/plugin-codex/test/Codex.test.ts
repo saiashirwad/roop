@@ -3,7 +3,7 @@ import { assert, it } from "@effect/vitest"
 import { Agent } from "@roop/agent/Agent.ts"
 import { cryptoWeb } from "@roop/agent/cryptoWeb.ts"
 import { AgentPlugins } from "@roop/agent/Plugin.ts"
-import { SessionStoreMemory } from "@roop/agent/SessionStore.ts"
+import { SessionJournalMemory } from "@roop/agent/SessionJournal.ts"
 import { Config, Effect, Layer, Option, Stream } from "effect"
 
 import { Codex } from "../src/Codex.ts"
@@ -12,7 +12,7 @@ const live = Option.isSome(Effect.runSync(Config.option(Config.string("CODEX_SMO
 
 it.layer(
   AgentPlugins([Codex()]).pipe(
-    Layer.provide(SessionStoreMemory),
+    Layer.provide(SessionJournalMemory),
     Layer.provide(cryptoWeb),
     Layer.provide(NodeChildProcessSpawner.layer),
     Layer.provide(NodeFileSystem.layer),

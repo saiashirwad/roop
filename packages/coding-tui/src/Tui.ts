@@ -377,7 +377,7 @@ const main = Effect.gen(function* () {
           }
         }
       }
-      yield* client.Prompt({ prompt, sessionId, modelId, maxTurns: 50 }).pipe(
+      yield* client.Prompt({ prompt, sessionId, modelId, policy: { maxTurns: 50 } }).pipe(
         Stream.runForEach((event) =>
           Effect.sync(() => {
             render(event)

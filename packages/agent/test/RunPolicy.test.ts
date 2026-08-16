@@ -19,19 +19,13 @@ it.effect("RunPolicy: resolveRunPolicy resolves defaults when options omitted", 
   }),
 )
 
-it.effect("RunPolicy: resolveRunPolicy respects legacy maxTurns as maxTotalSteps", () =>
-  Effect.gen(function* () {
-    const policy = resolveRunPolicy({ maxTurns: 5 })
-    assert.strictEqual(policy.maxTotalSteps, 5)
-    assert.strictEqual(policy.maxTurns, 50)
-  }),
-)
-
-it.effect("RunPolicy: resolveRunPolicy prioritizes explicit policy over legacy maxTurns", () =>
+it.effect("RunPolicy: resolveRunPolicy overrides defaults with partial policy", () =>
   Effect.gen(function* () {
     const policy = resolveRunPolicy({
-      maxTurns: 5,
-      policy: { maxTotalSteps: 10, maxTurns: 3, maxStepsPerTurn: 2, toolConcurrency: "unbounded" },
+      maxTotalSteps: 10,
+      maxTurns: 3,
+      maxStepsPerTurn: 2,
+      toolConcurrency: "unbounded",
     })
     assert.strictEqual(policy.maxTotalSteps, 10)
     assert.strictEqual(policy.maxTurns, 3)

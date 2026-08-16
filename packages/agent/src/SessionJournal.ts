@@ -56,7 +56,7 @@ export const Session = Schema.Struct({
   header: SessionHeader,
   events: Schema.Array(SessionEvent),
   updatedAt: Schema.Finite,
-  revision: Schema.optionalKey(Schema.Finite),
+  revision: Schema.Finite,
 })
 
 export type Session = typeof Session.Type
@@ -65,7 +65,7 @@ export const SessionMeta = Schema.Struct({
   id: SessionId,
   title: Schema.String,
   updatedAt: Schema.Finite,
-  revision: Schema.optionalKey(Schema.Finite),
+  revision: Schema.Finite,
 })
 
 export type SessionMeta = typeof SessionMeta.Type
@@ -98,7 +98,7 @@ export const metaOf = (session: Session): SessionMeta => ({
   id: SessionId.make(session.id),
   title: title(session.events),
   updatedAt: session.updatedAt,
-  revision: session.revision ?? session.events.length,
+  revision: session.revision,
 })
 
 const byRecency = (a: SessionMeta, b: SessionMeta) => b.updatedAt - a.updatedAt
@@ -142,10 +142,7 @@ const decodeSession = (
           }),
         )
       }
-      return Effect.succeed({
-        ...session,
-        revision: session.revision ?? session.events.length,
-      })
+      return Effect.succeed(session)
     }),
   )
 
@@ -204,7 +201,7 @@ export const SessionJournalMemory = Layer.effect(
                     new Map(map).set(sessionId, session),
                   ]
                 }
-                const currentRevision = existing.revision ?? existing.events.length
+                const currentRevision = existing.revision
                 if (
                   options?.expectedRevision !== undefined &&
                   options.expectedRevision !== currentRevision
@@ -253,11 +250,11 @@ export const SessionJournalMemory = Layer.effect(
                   revision: events.length,
                 }
                 return [
-                  { _tag: "ok", revision: session.revision ?? events.length } as const,
+                  { _tag: "ok", revision: session.revision } as const,
                   new Map(map).set(sessionId, session),
                 ]
               }
-              const currentRevision = existing.revision ?? existing.events.length
+              const currentRevision = existing.revision
               if (
                 options?.expectedRevision !== undefined &&
                 options.expectedRevision !== currentRevision
@@ -321,7 +318,7 @@ export const SessionJournalMemory = Layer.effect(
                 header: { version: SESSION_FORMAT_VERSION, createdAt: now },
                 events: [...source.events],
                 updatedAt: now,
-                revision: source.revision ?? source.events.length,
+                revision: source.revision,
               }
               return [
                 { _tag: "ok", meta: metaOf(forked) } as const,
@@ -490,7 +487,7 @@ export const SessionJournalFs = (
                 return
               }
               const session = existing.value
-              const currentRevision = session.revision ?? session.events.length
+              const currentRevision = session.revision
               if (
                 options?.expectedRevision !== undefined &&
                 options.expectedRevision !== currentRevision
@@ -538,10 +535,10 @@ export const SessionJournalFs = (
                   revision: events.length,
                 }
                 yield* write(session)
-                return session.revision ?? events.length
+                return session.revision
               }
               const session = existing.value
-              const currentRevision = session.revision ?? session.events.length
+              const currentRevision = session.revision
               if (
                 options?.expectedRevision !== undefined &&
                 options.expectedRevision !== currentRevision
@@ -617,7 +614,7 @@ export const SessionJournalFs = (
                 header: { version: SESSION_FORMAT_VERSION, createdAt: now },
                 events: [...source.events],
                 updatedAt: now,
-                revision: source.revision ?? source.events.length,
+                revision: source.revision,
               }
               yield* write(forked)
               return metaOf(forked)
@@ -626,9 +623,3 @@ export const SessionJournalFs = (
       })
     }),
   )
-
-/** Backwards-compatibility aliases during migration to SessionJournal */
-export const SessionStore = SessionJournal
-export type SessionStore = SessionJournal
-export const SessionStoreMemory = SessionJournalMemory
-export const SessionStoreFs = SessionJournalFs

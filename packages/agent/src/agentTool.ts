@@ -4,6 +4,7 @@ import { Tool } from "effect/unstable/ai"
 import type { Agent } from "./Agent.ts"
 import { AgentEmit } from "./AgentEmit.ts"
 import type { AgentEvent } from "./AgentEvent.ts"
+import type { RunPolicy } from "./RunPolicy.ts"
 
 export class DelegationFailed extends Schema.TaggedErrorClass<DelegationFailed>()(
   "DelegationFailed",
@@ -14,7 +15,7 @@ export type DelegationOptions = {
   readonly name: string
   readonly description: string
   readonly modelId?: string | undefined
-  readonly maxTurns?: number | undefined
+  readonly policy?: RunPolicy | undefined
 }
 
 export const delegation = (options: DelegationOptions) => {
@@ -38,7 +39,7 @@ export const delegation = (options: DelegationOptions) => {
         return new DelegationFailed({ message: "delegated agent was interrupted" })
       }
       case "stopped": {
-        return new DelegationFailed({ message: "delegated agent hit its turn cap" })
+        return new DelegationFailed({ message: "delegated agent hit its step/turn limit" })
       }
     }
   }
@@ -53,7 +54,7 @@ export const delegation = (options: DelegationOptions) => {
         agent.prompt({
           prompt: params.task,
           modelId: options.modelId,
-          maxTurns: options.maxTurns,
+          policy: options.policy,
         }),
         (event) =>
           Effect.gen(function* () {

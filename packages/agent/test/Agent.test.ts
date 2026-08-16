@@ -7,7 +7,7 @@ import { Agent, AgentLiveToolkit } from "../src/Agent.ts"
 import { delegation } from "../src/agentTool.ts"
 import { cryptoWeb } from "../src/cryptoWeb.ts"
 import { deriveMessages } from "../src/SessionEvent.ts"
-import { SessionStoreFs, SessionStoreMemory } from "../src/SessionStore.ts"
+import { SessionJournalFs, SessionJournalMemory } from "../src/SessionJournal.ts"
 import { scripted } from "../src/Testing.ts"
 
 const Echo = Tool.make("echo", {
@@ -33,7 +33,7 @@ const Main = (model: Effect.Effect<LanguageModel.Service>) =>
   AgentLiveToolkit(EchoToolkit, {
     models: [{ id: "fake", provider: "test", layer: modelLayer(model) }],
   }).pipe(
-    Layer.provide(SessionStoreMemory),
+    Layer.provide(SessionJournalMemory),
     Layer.provide(cryptoWeb),
     Layer.provide(
       EchoToolkit.toLayer({
@@ -207,7 +207,7 @@ it.layer(
     models: [{ id: "fake", provider: "test", layer: modelLayer(scripted([[]])) }],
     skills: [{ id: "summarize", description: "summarize text" }],
   }).pipe(
-    Layer.provide(SessionStoreMemory),
+    Layer.provide(SessionJournalMemory),
     Layer.provide(cryptoWeb),
     Layer.provide(
       EchoToolkit.toLayer({
@@ -251,7 +251,7 @@ const withSystemPrompt = (systemPrompt: string, prompt: string, sessionId: strin
           },
         ],
       }).pipe(
-        Layer.provide(SessionStoreFs(sysPromptDir)),
+        Layer.provide(SessionJournalFs(sysPromptDir)),
         Layer.provide(NodeFileSystem.layer),
         Layer.provide(cryptoWeb),
         Layer.provide(
@@ -312,7 +312,7 @@ const FsLayer = AgentLiveToolkit(EchoToolkit, {
     },
   ],
 }).pipe(
-  Layer.provide(SessionStoreFs(corruptDir)),
+  Layer.provide(SessionJournalFs(corruptDir)),
   Layer.provide(NodeFileSystem.layer),
   Layer.provide(cryptoWeb),
   Layer.provide(
@@ -347,6 +347,7 @@ it.layer(FsLayer)("Agent kernel corrupt session", (it) => {
               header: { version: 2, createdAt: 0 },
               events: [],
               updatedAt: 0,
+              revision: 0,
             }),
           ),
         ),
@@ -409,7 +410,7 @@ it.effect("advertises and executes the latest duplicate model registration", () 
           },
         ],
       }).pipe(
-        Layer.provide(SessionStoreMemory),
+        Layer.provide(SessionJournalMemory),
         Layer.provide(cryptoWeb),
         Layer.provide(EchoToolkit.toLayer({ echo: ({ note }) => Effect.succeed({ reply: note }) })),
       ),
@@ -444,15 +445,15 @@ it.layer(
   Main(
     scripted([[{ type: "tool-call" as const, id: "c1", name: "echo", params: { note: "hi" } }]]),
   ),
-)("maxTurns", (it) => {
-  it.effect("stops the loop at maxTurns", () =>
+)("step limit", (it) => {
+  it.effect("stops the loop when maxTotalSteps is reached", () =>
     Effect.gen(function* () {
       const agent = yield* Agent
       const events = yield* collect(
         agent.prompt({
           prompt: "loop",
           sessionId: "m1",
-          maxTurns: 1,
+          policy: { maxTotalSteps: 1 },
         }),
       )
       assert.deepStrictEqual(

@@ -21,7 +21,6 @@
     "./SessionEvent.ts": "./src/SessionEvent.ts",
     "./SessionId.ts": "./src/SessionId.ts",
     "./SessionJournal.ts": "./src/SessionJournal.ts",
-    "./SessionStore.ts": "./src/SessionStore.ts",
     "./Skills.ts": "./src/Skills.ts",
     "./Testing.ts": "./src/Testing.ts",
     "./ToolCallId.ts": "./src/ToolCallId.ts",

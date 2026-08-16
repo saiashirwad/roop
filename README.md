@@ -52,13 +52,13 @@ flowchart LR
     Client["Clients\n(TUI / Web / Headless)"] -->|Effect RPC| Agent["@roop/agent"]
     Agent --> Models["Models\n(DeepSeek / Claude / Codex)"]
     Agent --> Plugins["Plugins & Tools"]
-    Agent --> Store["SessionStore\n(fs / memory)"]
+    Agent --> Store["SessionJournal\n(fs / memory)"]
     Plugins --> World["ExecutionWorld\n(local / worktree / memory)"]
 ```
 
 Capabilities follow a three-role service pattern:
 
-1. **Definition**: Service tag (`ExecutionWorld`, `SessionStore`).
+1. **Definition**: Service tag (`ExecutionWorld`, `SessionJournal`).
 2. **Consumer**: Tools and plugins declare requirements in their environment.
 3. **Provider**: Application layers provide the implementation (e.g. local directory vs. ephemeral
    Git worktree vs. in-memory virtual filesystem).
@@ -73,7 +73,7 @@ import {
   NodePath,
 } from "@effect/platform-node"
 import { AgentPlugins } from "@roop/agent/Plugin.ts"
-import { SessionStoreFs } from "@roop/agent/SessionStore.ts"
+import { SessionJournalFs } from "@roop/agent/SessionJournal.ts"
 import { subagent } from "@roop/agent/subagent.ts"
 import { CodingTools } from "@roop/coding-tools/CodingTools.ts"
 import { ExecutionWorld } from "@roop/coding-tools/ExecutionWorld.ts"
@@ -93,10 +93,10 @@ export const agentLayer = AgentPlugins([
     description: "Delegate an isolated task to a subagent.",
     plugins: [coding, claude],
     layer: ExecutionWorld.worktreeFromParent(),
-    maxTurns: 25,
+    policy: { maxTotalSteps: 25 },
   }),
 ]).pipe(
-  Layer.provide(SessionStoreFs(".roop/sessions")),
+  Layer.provide(SessionJournalFs(".roop/sessions")),
   Layer.provide(ExecutionWorld.local(process.cwd())),
   Layer.provide(NodeChildProcessSpawner.layer),
   Layer.provide(NodeCrypto.layer),

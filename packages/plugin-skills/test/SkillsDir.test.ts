@@ -4,7 +4,7 @@ import { Agent } from "@roop/agent/Agent.ts"
 import { cryptoWeb } from "@roop/agent/cryptoWeb.ts"
 import { AgentPlugins, Plugin } from "@roop/agent/Plugin.ts"
 import { deriveMessages } from "@roop/agent/SessionEvent.ts"
-import { SessionStoreMemory } from "@roop/agent/SessionStore.ts"
+import { SessionJournalMemory } from "@roop/agent/SessionJournal.ts"
 import { scripted } from "@roop/agent/Testing.ts"
 import { Effect, Exit, FileSystem, Layer, Option, Path, PlatformError, Stream } from "effect"
 import { LanguageModel } from "effect/unstable/ai"
@@ -53,7 +53,7 @@ const Main = Layer.unwrap(
       }),
     ])
   }).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, Path.layer))),
-).pipe(Layer.provide(SessionStoreMemory), Layer.provide(cryptoWeb))
+).pipe(Layer.provide(SessionJournalMemory), Layer.provide(cryptoWeb))
 
 it.layer(Main)("SkillsDir", (it) => {
   it.effect("advertises skills and serves their content", () =>

@@ -3,7 +3,7 @@ import { Agent } from "@roop/agent/Agent.ts"
 import { cryptoWeb } from "@roop/agent/cryptoWeb.ts"
 import { AgentPlugins, Plugin } from "@roop/agent/Plugin.ts"
 import { deriveMessages } from "@roop/agent/SessionEvent.ts"
-import { SessionStoreMemory } from "@roop/agent/SessionStore.ts"
+import { SessionJournalMemory } from "@roop/agent/SessionJournal.ts"
 import { scripted } from "@roop/agent/Testing.ts"
 import { Effect, Layer, Stream } from "effect"
 import { LanguageModel } from "effect/unstable/ai"
@@ -33,7 +33,7 @@ const Main = AgentPlugins([
       },
     ],
   }),
-]).pipe(Layer.provide(SessionStoreMemory), Layer.provide(cryptoWeb))
+]).pipe(Layer.provide(SessionJournalMemory), Layer.provide(cryptoWeb))
 
 it.layer(Main)("Todos", (it) => {
   it.effect("stores the plan and instructs the model", () =>

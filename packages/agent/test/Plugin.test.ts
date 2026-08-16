@@ -8,7 +8,7 @@ import { layerHook } from "../src/AgentHooks.ts"
 import { cryptoWeb } from "../src/cryptoWeb.ts"
 import { AgentPlugins, Plugin } from "../src/Plugin.ts"
 import { deriveMessages } from "../src/SessionEvent.ts"
-import { SessionStoreMemory } from "../src/SessionStore.ts"
+import { SessionJournalMemory } from "../src/SessionJournal.ts"
 import { subagent } from "../src/subagent.ts"
 import { scripted, scriptedPlugin } from "../src/Testing.ts"
 
@@ -56,7 +56,7 @@ const Composed = AgentPlugins([
     ],
     [{ type: "text-delta", id: "t1", delta: "done" }],
   ]),
-]).pipe(Layer.provide(SessionStoreMemory), Layer.provide(cryptoWeb))
+]).pipe(Layer.provide(SessionJournalMemory), Layer.provide(cryptoWeb))
 
 it.layer(Composed)("AgentPlugins", (it) => {
   it.effect("merges tools, models, skills, and prompts from plugins", () =>
@@ -141,7 +141,7 @@ const Hooked = AgentPlugins([
   outerHook,
   innerHook,
   scriptedPlugin("fake", [[{ type: "text-delta", id: "t1", delta: "done" }]]),
-]).pipe(Layer.provide(SessionStoreMemory), Layer.provide(cryptoWeb))
+]).pipe(Layer.provide(SessionJournalMemory), Layer.provide(cryptoWeb))
 
 it.layer(Hooked)("plugin hooks", (it) => {
   it.effect("composes plugin hook waterfalls outermost-first", () =>
@@ -168,7 +168,7 @@ const Parent = AgentPlugins([
     [{ type: "tool-call", id: "p1", name: "worker", params: { task: "do the thing" } }],
     [{ type: "text-delta", id: "p2", delta: "delegated" }],
   ]),
-]).pipe(Layer.provide(SessionStoreMemory), Layer.provide(cryptoWeb))
+]).pipe(Layer.provide(SessionJournalMemory), Layer.provide(cryptoWeb))
 
 it.layer(Parent)("subagent", (it) => {
   it.effect("delegates a task to a composed child agent", () =>
@@ -219,7 +219,7 @@ const ConcurrentParent = AgentPlugins([
     ],
     [{ type: "text-delta", id: "cp", delta: "done" }],
   ]),
-]).pipe(Layer.provide(SessionStoreMemory), Layer.provide(cryptoWeb))
+]).pipe(Layer.provide(SessionJournalMemory), Layer.provide(cryptoWeb))
 
 it.layer(ConcurrentParent)("concurrent subagents", (it) => {
   it.effect("correlates identical concurrent calls with their provider ids", () =>
@@ -332,7 +332,7 @@ const Registered = AgentPlugins([
   echo,
   registrar,
   scriptedPlugin("fake", [[{ type: "text-delta", id: "t1", delta: "done" }]]),
-]).pipe(Layer.provide(SessionStoreMemory), Layer.provide(cryptoWeb))
+]).pipe(Layer.provide(SessionJournalMemory), Layer.provide(cryptoWeb))
 
 it.layer(Registered)("runtime registration", (it) => {
   it.effect("reflects handler-registered tools, models, skills, and sections in capabilities", () =>
@@ -414,7 +414,7 @@ it.effect("unwinds every registration when the agent layer's scope closes", () =
         scriptedPlugin("fake", [[{ type: "text-delta", id: "t1", delta: "done" }]]),
       ]),
       scope,
-    ).pipe(Effect.provide([SessionStoreMemory, cryptoWeb]))
+    ).pipe(Effect.provide([SessionJournalMemory, cryptoWeb]))
     const context = yield* registryOf
     assert.deepStrictEqual(Object.keys(yield* context.tools), ["later", "echo"])
 
@@ -433,7 +433,7 @@ const MidRun = AgentPlugins([
     [{ type: "tool-call", id: "c2", name: "later", params: {} }],
     [{ type: "text-delta", id: "t1", delta: "done" }],
   ]),
-]).pipe(Layer.provide(SessionStoreMemory), Layer.provide(cryptoWeb))
+]).pipe(Layer.provide(SessionJournalMemory), Layer.provide(cryptoWeb))
 
 it.layer(MidRun)("mid-run registration", (it) => {
   it.effect("a tool handler can register a tool that the next step executes", () =>

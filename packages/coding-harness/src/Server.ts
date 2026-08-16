@@ -11,7 +11,7 @@ import {
 import { AgentRpcServerHttp } from "@roop/agent-rpc/AgentRpcHttp.ts"
 import { delegationToolName } from "@roop/agent-rpc/Transcript.ts"
 import { AgentPlugins } from "@roop/agent/Plugin.ts"
-import { SessionStoreFs } from "@roop/agent/SessionStore.ts"
+import { SessionJournalFs } from "@roop/agent/SessionJournal.ts"
 import { subagent } from "@roop/agent/subagent.ts"
 import { CodingTools } from "@roop/coding-tools/CodingTools.ts"
 import { ExecutionWorld } from "@roop/coding-tools/ExecutionWorld.ts"
@@ -59,9 +59,9 @@ export const server = (options: {
             "Delegate a self-contained coding task to a subagent in an isolated Git worktree. Give it one complete task and receive a summary.",
           plugins: [codingTools, webTools, codex, deepseek],
           layer: ExecutionWorld.worktreeFromParent(),
-          maxTurns: 25,
+          policy: { maxTotalSteps: 25 },
         }),
-      ]).pipe(Layer.provide(SessionStoreFs(path.join(options.root, ".roop", "sessions"))))
+      ]).pipe(Layer.provide(SessionJournalFs(path.join(options.root, ".roop", "sessions"))))
     }),
   ).pipe(
     Layer.provide(ExecutionWorld.local(options.root)),

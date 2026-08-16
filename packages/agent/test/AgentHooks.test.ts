@@ -15,7 +15,7 @@ import {
 } from "../src/AgentHooks.ts"
 import { AgentHooks } from "../src/AgentHooks.ts"
 import { cryptoWeb } from "../src/cryptoWeb.ts"
-import { SessionStoreMemory } from "../src/SessionStore.ts"
+import { SessionJournalMemory } from "../src/SessionJournal.ts"
 import { scripted } from "../src/Testing.ts"
 
 const Echo = Tool.make("echo", {
@@ -36,7 +36,7 @@ const Main = (
   const base = AgentLiveToolkit(EchoToolkit, {
     models: [{ id: "fake", provider: "test", layer: modelLayer(model) }],
   }).pipe(
-    Layer.provide(SessionStoreMemory),
+    Layer.provide(SessionJournalMemory),
     Layer.provide(cryptoWeb),
     Layer.provide(
       EchoToolkit.toLayer({
@@ -154,7 +154,9 @@ it.layer(
   it.effect("marks the turn stopped when the step cap is hit", () =>
     Effect.gen(function* () {
       const agent = yield* Agent
-      const events = yield* collect(agent.prompt({ prompt: "go", sessionId: "s2", maxTurns: 2 }))
+      const events = yield* collect(
+        agent.prompt({ prompt: "go", sessionId: "s2", policy: { maxTotalSteps: 2 } }),
+      )
       /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
       assert.strictEqual((events[events.length - 1] as any).reason, "stopped")
 

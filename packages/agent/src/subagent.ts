@@ -4,7 +4,8 @@ import { Toolkit } from "effect/unstable/ai"
 import { Agent } from "./Agent.ts"
 import { delegation } from "./agentTool.ts"
 import { AgentPlugins, Plugin, type PluginRequirements } from "./Plugin.ts"
-import { SessionStoreMemory } from "./SessionStore.ts"
+import type { RunPolicy } from "./RunPolicy.ts"
+import { SessionJournalMemory } from "./SessionJournal.ts"
 
 export const subagent = <
   const Plugins extends ReadonlyArray<Plugin<any>>,
@@ -15,7 +16,7 @@ export const subagent = <
   readonly plugins: Plugins
   readonly systemPrompt?: string | undefined
   readonly modelId?: string | undefined
-  readonly maxTurns?: number | undefined
+  readonly policy?: RunPolicy | undefined
   readonly layer?:
     | Layer.Layer<any, any, LayerIn>
     | ((params: { readonly task: string }) => Layer.Layer<any, any, LayerIn>)
@@ -25,7 +26,7 @@ export const subagent = <
   const toolkit = Toolkit.make(tool)
   const makeChild = (crypto: Crypto.Crypto) =>
     AgentPlugins(options.plugins, { systemPrompt: options.systemPrompt }).pipe(
-      Layer.provide(SessionStoreMemory),
+      Layer.provide(SessionJournalMemory),
       Layer.provide(Layer.succeed(Crypto.Crypto, crypto)),
     )
   const handlers = toolkit.toLayer(

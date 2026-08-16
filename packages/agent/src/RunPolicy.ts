@@ -1,6 +1,16 @@
 import { Duration, Schema } from "effect"
 
 export interface RunPolicy {
+  readonly maxTurns?: number | undefined
+  readonly maxStepsPerTurn?: number | undefined
+  readonly maxTotalSteps?: number | undefined
+  readonly toolConcurrency?: number | "unbounded" | undefined
+  readonly modelTimeout?: Duration.Duration | undefined
+  readonly toolTimeout?: Duration.Duration | undefined
+  readonly maxToolOutputBytes?: number | undefined
+}
+
+export interface ResolvedRunPolicy {
   readonly maxTurns: number
   readonly maxStepsPerTurn: number
   readonly maxTotalSteps: number
@@ -10,7 +20,7 @@ export interface RunPolicy {
   readonly maxToolOutputBytes?: number | undefined
 }
 
-export const defaultRunPolicy: RunPolicy = {
+export const defaultRunPolicy: ResolvedRunPolicy = {
   maxTurns: 50,
   maxStepsPerTurn: 20,
   maxTotalSteps: 100,
@@ -18,28 +28,23 @@ export const defaultRunPolicy: RunPolicy = {
 }
 
 export const RunPolicy = Schema.Struct({
-  maxTurns: Schema.Finite,
-  maxStepsPerTurn: Schema.Finite,
-  maxTotalSteps: Schema.Finite,
-  toolConcurrency: Schema.Union([Schema.Finite, Schema.Literal("unbounded")]),
+  maxTurns: Schema.optionalKey(Schema.Finite),
+  maxStepsPerTurn: Schema.optionalKey(Schema.Finite),
+  maxTotalSteps: Schema.optionalKey(Schema.Finite),
+  toolConcurrency: Schema.optionalKey(Schema.Union([Schema.Finite, Schema.Literal("unbounded")])),
   modelTimeout: Schema.optionalKey(Schema.Duration),
   toolTimeout: Schema.optionalKey(Schema.Duration),
   maxToolOutputBytes: Schema.optionalKey(Schema.Finite),
 })
 
 /**
- * Resolves effective RunPolicy, respecting legacy `maxTurns` (which historically capped total steps).
+ * Resolves effective RunPolicy against default values.
  */
-export const resolveRunPolicy = (options?: {
-  readonly maxTurns?: number | undefined
-  readonly policy?: Partial<RunPolicy> | undefined
-}): RunPolicy => {
-  const policy = options?.policy
-  const legacyMaxTurns = options?.maxTurns
-  let resolved: RunPolicy = {
+export const resolveRunPolicy = (policy?: RunPolicy): ResolvedRunPolicy => {
+  let resolved: ResolvedRunPolicy = {
     maxTurns: policy?.maxTurns ?? defaultRunPolicy.maxTurns,
     maxStepsPerTurn: policy?.maxStepsPerTurn ?? defaultRunPolicy.maxStepsPerTurn,
-    maxTotalSteps: policy?.maxTotalSteps ?? legacyMaxTurns ?? defaultRunPolicy.maxTotalSteps,
+    maxTotalSteps: policy?.maxTotalSteps ?? defaultRunPolicy.maxTotalSteps,
     toolConcurrency: policy?.toolConcurrency ?? defaultRunPolicy.toolConcurrency,
   }
   if (policy?.modelTimeout !== undefined) {

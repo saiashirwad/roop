@@ -3,7 +3,7 @@ import { assert, it } from "@effect/vitest"
 import { Agent } from "@roop/agent/Agent.ts"
 import { cryptoWeb } from "@roop/agent/cryptoWeb.ts"
 import { AgentPlugins, Plugin } from "@roop/agent/Plugin.ts"
-import { SessionStoreMemory } from "@roop/agent/SessionStore.ts"
+import { SessionJournalMemory } from "@roop/agent/SessionJournal.ts"
 import { subagent } from "@roop/agent/subagent.ts"
 import { scripted, scriptedPlugin } from "@roop/agent/Testing.ts"
 import { Effect, FileSystem, Layer, Path, Stream } from "effect"
@@ -106,7 +106,7 @@ it.effect("CodingTools.edit: applies targeted replacements and validates uniquen
           ],
         }),
       ]).pipe(
-        Layer.provide(SessionStoreMemory),
+        Layer.provide(SessionJournalMemory),
         Layer.provide(cryptoWeb),
         Layer.provide(
           ExecutionWorld.memory({
@@ -210,7 +210,7 @@ it.effect("CodingTools.find and grep: searches workspace file paths and line con
           ],
         }),
       ]).pipe(
-        Layer.provide(SessionStoreMemory),
+        Layer.provide(SessionJournalMemory),
         Layer.provide(cryptoWeb),
         Layer.provide(
           ExecutionWorld.memory({
@@ -293,7 +293,7 @@ it.effect("ExecutionWorld.local: Node-backed ExecutionWorld executes file and ba
               ],
             }),
           ]).pipe(
-            Layer.provide(SessionStoreMemory),
+            Layer.provide(SessionJournalMemory),
             Layer.provide(cryptoWeb),
             Layer.provide(ExecutionWorld.local(root)),
           )
@@ -348,7 +348,7 @@ it.effect("ExecutionWorld: prevents path escaping outside workspace root", () =>
               ],
             }),
           ]).pipe(
-            Layer.provide(SessionStoreMemory),
+            Layer.provide(SessionJournalMemory),
             Layer.provide(cryptoWeb),
             Layer.provide(ExecutionWorld.local(root)),
           )
@@ -453,7 +453,7 @@ it.effect("ExecutionWorld: rejects symlink escapes for file and search tools", (
               ],
             }),
           ]).pipe(
-            Layer.provide(SessionStoreMemory),
+            Layer.provide(SessionJournalMemory),
             Layer.provide(cryptoWeb),
             Layer.provide(ExecutionWorld.local(root)),
           )
@@ -520,7 +520,7 @@ it.effect("ExecutionWorld.memory: runs in-memory without host disk access", () =
           ],
         }),
       ]).pipe(
-        Layer.provide(SessionStoreMemory),
+        Layer.provide(SessionJournalMemory),
         Layer.provide(cryptoWeb),
         Layer.provide(
           ExecutionWorld.memory({
@@ -576,7 +576,7 @@ it.effect("ExecutionWorld.memory: fails missing files through error channel as T
           ],
         }),
       ]).pipe(
-        Layer.provide(SessionStoreMemory),
+        Layer.provide(SessionJournalMemory),
         Layer.provide(cryptoWeb),
         Layer.provide(
           ExecutionWorld.memory({
@@ -653,7 +653,7 @@ it.effect(
               ],
             }),
           ]).pipe(
-            Layer.provide(SessionStoreMemory),
+            Layer.provide(SessionJournalMemory),
             Layer.provide(cryptoWeb),
             Layer.provide(
               ExecutionWorld.worktree({
@@ -780,7 +780,7 @@ it.effect(
           ],
         }),
       ]).pipe(
-        Layer.provide(SessionStoreMemory),
+        Layer.provide(SessionJournalMemory),
         Layer.provide(cryptoWeb),
         Layer.provide(ExecutionWorld.local(baseRepo)),
         Layer.provide(nodePlatform),

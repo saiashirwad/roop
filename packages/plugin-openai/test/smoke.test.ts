@@ -3,7 +3,7 @@ import { assert, it } from "@effect/vitest"
 import { Agent } from "@roop/agent/Agent.ts"
 import { cryptoWeb } from "@roop/agent/cryptoWeb.ts"
 import { AgentPlugins } from "@roop/agent/Plugin.ts"
-import { SessionStoreMemory } from "@roop/agent/SessionStore.ts"
+import { SessionJournalMemory } from "@roop/agent/SessionJournal.ts"
 import { Config, Effect, Layer, Option, Stream } from "effect"
 
 import { OpenAiCompatible } from "../src/OpenAiCompatible.ts"
@@ -19,7 +19,7 @@ const deepseek = OpenAiCompatible({
 
 it.layer(
   AgentPlugins([deepseek]).pipe(
-    Layer.provide(SessionStoreMemory),
+    Layer.provide(SessionJournalMemory),
     Layer.provide(cryptoWeb),
     Layer.provide(NodeHttpClient.layerUndici),
   ),
