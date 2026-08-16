@@ -23,24 +23,37 @@ ROOP is an agent runtime built on [Effect](https://effect.website). It decouples
 
 ## Architecture
 
-```text
-┌─────────────────────────────────────────────────────────────┐
-│                       Clients / UIs                         │
-│       Terminal (TUI)   │   Web (Vite)   │   Headless RPC    │
-└──────────────────────────────┬──────────────────────────────┘
-                               │ Effect RPC (Streaming)
-┌──────────────────────────────▼──────────────────────────────┐
-│                    ROOP Agent Kernel                        │
-│   • Loop Orchestration         • Structured Concurrency     │
-│   • Typed Lifecycle Hooks      • Session Stream Store       │
-└──────────────┬───────────────────────────────┬──────────────┘
-               │                               │
-┌──────────────▼──────────────┐ ┌──────────────▼──────────────┐
-│       Plugins & Tools       │ │    Pluggable Capabilities   │
-│ • Coding Tools (fs, bash)   │ │ • ExecutionWorld (Node/Box) │
-│ • Web, Todos, Skills        │ │ • SessionStore (Memory/Fs)  │
-│ • Subagents & Prompts       │ │ • Model Adapters (Claude/OAI│
-└─────────────────────────────┘ └─────────────────────────────┘
+```mermaid
+flowchart TD
+    subgraph Clients["Clients & Interfaces"]
+        TUI["Terminal TUI (Ink)"]
+        Web["Web Interface (Vite)"]
+        RPCClient["Headless / CI (Effect RPC)"]
+    end
+
+    subgraph Kernel["ROOP Agent Kernel (@roop/agent)"]
+        Loop["Agent Loop & Turn Orchestrator"]
+        Hooks["Lifecycle Hooks (onTurnStart, onToolStart...)"]
+        Concurrency["Structured Concurrency & Interruption"]
+    end
+
+    subgraph Plugins["Plugins & Extensibility"]
+        CodingTools["Coding Tools (read, write, edit, bash)"]
+        PluginWeb["Web & Search Tools"]
+        PluginTodo["Todo & Task Tracking"]
+        Subagents["Subagents (Delegation)"]
+    end
+
+    subgraph Capabilities["Pluggable Capability Seams (Layers)"]
+        ExecutionWorld["ExecutionWorld<br/>(Local Node / Worktree / Memory)"]
+        SessionStore["SessionStore<br/>(Filesystem / Memory / SQLite)"]
+        ModelCatalog["ModelCatalog<br/>(Claude / Codex / OpenAI-Compatible)"]
+    end
+
+    Clients -->|"Effect RPC (Streaming Transcripts & Events)"| Kernel
+    Kernel -->|"Executes & Intercepts"| Plugins
+    Kernel -->|"Resolves Dependencies"| Capabilities
+    CodingTools -.->|"Runs inside Sandbox"| ExecutionWorld
 ```
 
 ---
