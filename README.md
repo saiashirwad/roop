@@ -50,7 +50,7 @@ flowchart TD
     end
 
     subgraph Plugins["Plugins & Extensibility"]
-        CodingTools["Coding Tools (read, write, edit, bash)"]
+        CodingTools["Coding Tools (read, write, edit, find, grep, bash)"]
         PluginWeb["Web & Search Tools"]
         PluginTodo["Todo & Task Tracking"]
         Subagents["Subagents (Delegation)"]

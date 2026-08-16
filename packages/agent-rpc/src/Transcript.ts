@@ -144,8 +144,40 @@ const bytes = (count: number) => (count < 1024 ? `${count}b` : `${(count / 1024)
 const ReadFileParams = Schema.Struct({ path: Schema.String })
 const ReadFileResult = Schema.Struct({ content: Schema.optionalKey(Schema.String) })
 const WriteFileParams = Schema.Struct({ path: Schema.String, content: Schema.String })
+const EditParams = Schema.Struct({
+  path: Schema.String,
+  edits: Schema.optionalKey(
+    Schema.Array(Schema.Struct({ oldText: Schema.String, newText: Schema.String })),
+  ),
+  oldText: Schema.optionalKey(Schema.String),
+  newText: Schema.optionalKey(Schema.String),
+})
+const EditResult = Schema.Struct({
+  path: Schema.optionalKey(Schema.String),
+  appliedEdits: Schema.optionalKey(Schema.Finite),
+})
 const ListFilesParams = Schema.Struct({ path: Schema.optionalKey(Schema.String) })
 const ListFilesResult = Schema.Struct({ files: Schema.optionalKey(Schema.Array(Schema.String)) })
+const FindParams = Schema.Struct({
+  pattern: Schema.optionalKey(Schema.String),
+  path: Schema.optionalKey(Schema.String),
+})
+const FindResult = Schema.Struct({
+  files: Schema.optionalKey(Schema.Array(Schema.String)),
+  totalFiles: Schema.optionalKey(Schema.Finite),
+})
+const GrepParams = Schema.Struct({
+  pattern: Schema.String,
+  path: Schema.optionalKey(Schema.String),
+})
+const GrepResult = Schema.Struct({
+  matches: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({ file: Schema.String, line: Schema.Finite, content: Schema.String }),
+    ),
+  ),
+  totalMatches: Schema.optionalKey(Schema.Finite),
+})
 const BashParams = Schema.Struct({ command: Schema.String })
 const BashResult = Schema.Struct({ exitCode: Schema.optionalKey(Schema.Finite) })
 const WebFetchParams = Schema.Struct({ url: Schema.String })
@@ -196,6 +228,16 @@ const summaryOf = {
     if (decoded === undefined) return fallback(call)
     return { label: "write", summary: `${decoded.path} · ${bytes(decoded.content.length)}` }
   },
+  edit: (call: ToolCall): ToolSummary => {
+    const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(EditParams)(call.params))
+    if (decoded === undefined) return fallback(call)
+    const result = Option.getOrUndefined(Schema.decodeUnknownOption(EditResult)(call.result))
+    const editCount = result?.appliedEdits ?? (decoded.edits ? decoded.edits.length : 1)
+    return {
+      label: "edit",
+      summary: `${decoded.path} · ${editCount} edit${editCount === 1 ? "" : "s"}`,
+    }
+  },
   listFiles: (call: ToolCall): ToolSummary => {
     const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(ListFilesParams)(call.params))
     if (decoded === undefined) return fallback(call)
@@ -206,6 +248,26 @@ const summaryOf = {
     return {
       label: "list",
       summary: `${decoded.path ?? "."}${files === undefined ? "" : ` · ${files.length} files`}`,
+    }
+  },
+  find: (call: ToolCall): ToolSummary => {
+    const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(FindParams)(call.params))
+    if (decoded === undefined) return fallback(call)
+    const result = Option.getOrUndefined(Schema.decodeUnknownOption(FindResult)(call.result))
+    const countStr = result?.totalFiles !== undefined ? ` · ${result.totalFiles} files` : ""
+    return {
+      label: "find",
+      summary: `${decoded.pattern ?? "*"}${decoded.path ? ` in ${decoded.path}` : ""}${countStr}`,
+    }
+  },
+  grep: (call: ToolCall): ToolSummary => {
+    const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(GrepParams)(call.params))
+    if (decoded === undefined) return fallback(call)
+    const result = Option.getOrUndefined(Schema.decodeUnknownOption(GrepResult)(call.result))
+    const countStr = result?.totalMatches !== undefined ? ` · ${result.totalMatches} matches` : ""
+    return {
+      label: "grep",
+      summary: `/${decoded.pattern}/${decoded.path ? ` in ${decoded.path}` : ""}${countStr}`,
     }
   },
   bash: (call: ToolCall): ToolSummary => {
@@ -255,7 +317,10 @@ export const summarizeTool = (call: ToolCall): ToolSummary => {
   switch (call.name) {
     case "readFile":
     case "writeFile":
+    case "edit":
     case "listFiles":
+    case "find":
+    case "grep":
     case "bash":
     case "webFetch":
     case "skill":

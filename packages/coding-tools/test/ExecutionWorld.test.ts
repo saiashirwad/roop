@@ -22,6 +22,198 @@ const nodePlatform = Layer.mergeAll(
   NodePath.layer,
 )
 
+it.effect("CodingTools.edit: applies targeted replacements and validates uniqueness", () =>
+  Effect.gen(function* () {
+    const agent = yield* Agent
+    const events = yield* Stream.runCollect(
+      agent.prompt({ prompt: "edit test", sessionId: "s-edit" }),
+    ).pipe(Effect.map((chunk) => [...chunk]))
+
+    const toolResults = events.filter((e: any) => e._tag === "ToolResult") as ReadonlyArray<any>
+    assert.strictEqual(toolResults.length, 4)
+
+    // Edit 1: single edit succeeds
+    assert.strictEqual(toolResults[0].isFailure, false)
+    assert.deepStrictEqual(toolResults[0].result, { path: "code.ts", appliedEdits: 1 })
+
+    // Edit 2: multiple edits succeed
+    assert.strictEqual(toolResults[1].isFailure, false)
+    assert.deepStrictEqual(toolResults[1].result, { path: "code.ts", appliedEdits: 2 })
+
+    // Edit 3: non-existent oldText fails with ToolFailure
+    assert.strictEqual(toolResults[2].isFailure, true)
+    assert.match(toolResults[2].result.message, /oldText not found/)
+
+    // Edit 4: ambiguous (non-unique) oldText fails with ToolFailure
+    assert.strictEqual(toolResults[3].isFailure, true)
+    assert.match(toolResults[3].result.message, /matches 2 times/)
+  }).pipe(
+    Effect.provide(
+      AgentPlugins([
+        CodingTools(),
+        Plugin({
+          name: "model",
+          models: [
+            {
+              id: "fake",
+              provider: "test",
+              layer: Layer.effect(
+                LanguageModel.LanguageModel,
+                scripted([
+                  [
+                    {
+                      type: "tool-call",
+                      id: "e1",
+                      name: "edit",
+                      params: { path: "code.ts", oldText: "const x = 1", newText: "const x = 10" },
+                    },
+                  ],
+                  [
+                    {
+                      type: "tool-call",
+                      id: "e2",
+                      name: "edit",
+                      params: {
+                        path: "code.ts",
+                        edits: [
+                          { oldText: "const y = 2", newText: "const y = 20" },
+                          { oldText: "const z = 3", newText: "const z = 30" },
+                        ],
+                      },
+                    },
+                  ],
+                  [
+                    {
+                      type: "tool-call",
+                      id: "e3",
+                      name: "edit",
+                      params: { path: "code.ts", oldText: "nonExistent", newText: "replaced" },
+                    },
+                  ],
+                  [
+                    {
+                      type: "tool-call",
+                      id: "e4",
+                      name: "edit",
+                      params: { path: "code.ts", oldText: "dup", newText: "fixed" },
+                    },
+                  ],
+                  [{ type: "text-delta", id: "t1", delta: "done" }],
+                ]),
+              ),
+            },
+          ],
+        }),
+      ]).pipe(
+        Layer.provide(SessionStoreMemory),
+        Layer.provide(cryptoWeb),
+        Layer.provide(
+          ExecutionWorld.memory({
+            root: "/virtual",
+            files: {
+              "/virtual/code.ts": "const x = 1\nconst y = 2\nconst z = 3\ndup\ndup\n",
+            },
+          }),
+        ),
+        Layer.provide(NodePath.layer),
+      ),
+    ),
+  ),
+)
+
+it.effect("CodingTools.find and grep: searches workspace file paths and line contents", () =>
+  Effect.gen(function* () {
+    const agent = yield* Agent
+    const events = yield* Stream.runCollect(
+      agent.prompt({ prompt: "search test", sessionId: "s-search" }),
+    ).pipe(Effect.map((chunk) => [...chunk]))
+
+    const toolResults = events.filter((e: any) => e._tag === "ToolResult") as ReadonlyArray<any>
+    assert.strictEqual(toolResults.length, 3)
+
+    // Find 1: glob find
+    assert.strictEqual(toolResults[0].isFailure, false)
+    assert.deepStrictEqual(toolResults[0].result.files, ["src/index.ts", "src/util.ts"])
+
+    // Find 2: substring find
+    assert.strictEqual(toolResults[1].isFailure, false)
+    assert.deepStrictEqual(toolResults[1].result.files, ["src/util.ts"])
+
+    // Grep: content grep with line numbers
+    assert.strictEqual(toolResults[2].isFailure, false)
+    assert.strictEqual(toolResults[2].result.totalMatches, 2)
+    assert.deepStrictEqual(toolResults[2].result.matches[0], {
+      file: "src/index.ts",
+      line: 1,
+      content: "export const hello = 'world'",
+    })
+    assert.deepStrictEqual(toolResults[2].result.matches[1], {
+      file: "src/util.ts",
+      line: 2,
+      content: "export const world = 'hello'",
+    })
+  }).pipe(
+    Effect.provide(
+      AgentPlugins([
+        CodingTools(),
+        Plugin({
+          name: "model",
+          models: [
+            {
+              id: "fake",
+              provider: "test",
+              layer: Layer.effect(
+                LanguageModel.LanguageModel,
+                scripted([
+                  [
+                    {
+                      type: "tool-call",
+                      id: "f1",
+                      name: "find",
+                      params: { pattern: "*.ts" },
+                    },
+                  ],
+                  [
+                    {
+                      type: "tool-call",
+                      id: "f2",
+                      name: "find",
+                      params: { pattern: "util" },
+                    },
+                  ],
+                  [
+                    {
+                      type: "tool-call",
+                      id: "g1",
+                      name: "grep",
+                      params: { pattern: "export const" },
+                    },
+                  ],
+                  [{ type: "text-delta", id: "t1", delta: "done" }],
+                ]),
+              ),
+            },
+          ],
+        }),
+      ]).pipe(
+        Layer.provide(SessionStoreMemory),
+        Layer.provide(cryptoWeb),
+        Layer.provide(
+          ExecutionWorld.memory({
+            root: "/workspace",
+            files: {
+              "/workspace/src/index.ts": "export const hello = 'world'\nconsole.log('hi')",
+              "/workspace/src/util.ts": "// helper\nexport const world = 'hello'",
+              "/workspace/README.md": "# Readme",
+            },
+          }),
+        ),
+        Layer.provide(NodePath.layer),
+      ),
+    ),
+  ),
+)
+
 it.effect("ExecutionWorld.local: Node-backed ExecutionWorld executes file and bash tools", () =>
   Effect.gen(function* () {
     const agent = yield* Agent

@@ -9,6 +9,15 @@ export class ToolFailure extends Schema.TaggedErrorClass<ToolFailure>()("ToolFai
   message: Schema.String,
 }) {}
 
+const makeGrepRegex = (pattern: string, caseSensitive?: boolean): RegExp => {
+  try {
+    return new RegExp(pattern, caseSensitive ? "g" : "gi")
+  } catch {
+    const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    return new RegExp(escaped, caseSensitive ? "g" : "gi")
+  }
+}
+
 export const CodingTools = (_root?: string): Plugin<ExecutionWorld> => {
   const asFailure = <A, E, R = never>(
     effect: Effect.Effect<A, E, R>,
@@ -36,10 +45,75 @@ export const CodingTools = (_root?: string): Plugin<ExecutionWorld> => {
       failureMode: "return",
       dependencies: [ExecutionWorld],
     }),
+    Tool.make("edit", {
+      description:
+        "Apply one or more targeted string replacements to a file inside the workspace. Each oldText must match uniquely in the file.",
+      parameters: Schema.Struct({
+        path: Schema.String,
+        edits: Schema.optionalKey(
+          Schema.Array(
+            Schema.Struct({
+              oldText: Schema.String,
+              newText: Schema.String,
+            }),
+          ),
+        ),
+        oldText: Schema.optionalKey(Schema.String),
+        newText: Schema.optionalKey(Schema.String),
+      }),
+      success: Schema.Struct({
+        path: Schema.String,
+        appliedEdits: Schema.Finite,
+      }),
+      failure: ToolFailure,
+      failureMode: "return",
+      dependencies: [ExecutionWorld],
+    }),
     Tool.make("listFiles", {
       description: "Recursively list file paths under a workspace directory",
       parameters: Schema.Struct({ path: Schema.optionalKey(Schema.String) }),
       success: Schema.Struct({ files: Schema.Array(Schema.String) }),
+      failure: ToolFailure,
+      failureMode: "return",
+      dependencies: [ExecutionWorld],
+    }),
+    Tool.make("find", {
+      description:
+        "Find file paths in the workspace matching an optional substring or glob wildcard pattern (e.g. *.ts)",
+      parameters: Schema.Struct({
+        pattern: Schema.optionalKey(Schema.String),
+        path: Schema.optionalKey(Schema.String),
+        limit: Schema.optionalKey(Schema.Finite),
+      }),
+      success: Schema.Struct({
+        files: Schema.Array(Schema.String),
+        totalFiles: Schema.Finite,
+        truncated: Schema.Boolean,
+      }),
+      failure: ToolFailure,
+      failureMode: "return",
+      dependencies: [ExecutionWorld],
+    }),
+    Tool.make("grep", {
+      description:
+        "Search file contents in the workspace for lines matching a regex pattern or literal text",
+      parameters: Schema.Struct({
+        pattern: Schema.String,
+        path: Schema.optionalKey(Schema.String),
+        caseSensitive: Schema.optionalKey(Schema.Boolean),
+        limit: Schema.optionalKey(Schema.Finite),
+      }),
+      success: Schema.Struct({
+        matches: Schema.Array(
+          Schema.Struct({
+            file: Schema.String,
+            line: Schema.Finite,
+            content: Schema.String,
+          }),
+        ),
+        totalMatches: Schema.Finite,
+        truncated: Schema.Boolean,
+      }),
       failure: ToolFailure,
       failureMode: "return",
       dependencies: [ExecutionWorld],
@@ -77,6 +151,50 @@ export const CodingTools = (_root?: string): Plugin<ExecutionWorld> => {
           yield* asFailure(world.filesystem.writeFileString(file, content))
           return { path }
         }),
+      edit: ({ path, edits, oldText, newText }) =>
+        Effect.gen(function* () {
+          const world = yield* ExecutionWorld
+          const file = yield* asFailure(world.resolvePath(path))
+          const rawEdits =
+            edits ??
+            (oldText !== undefined && newText !== undefined ? [{ oldText, newText }] : [])
+          if (rawEdits.length === 0) {
+            return yield* new ToolFailure({
+              message:
+                "No edits specified: provide either an 'edits' array or 'oldText' and 'newText'",
+            })
+          }
+          let content = yield* asFailure(world.filesystem.readFileString(file))
+          let appliedEdits = 0
+          for (const editItem of rawEdits) {
+            if (editItem.oldText === "") {
+              return yield* new ToolFailure({ message: "oldText cannot be empty" })
+            }
+            const count = content.split(editItem.oldText).length - 1
+            if (count === 0) {
+              const preview =
+                editItem.oldText.length > 60
+                  ? `${editItem.oldText.slice(0, 60)}…`
+                  : editItem.oldText
+              return yield* new ToolFailure({
+                message: `oldText not found in ${path}: "${preview}"`,
+              })
+            }
+            if (count > 1) {
+              const preview =
+                editItem.oldText.length > 60
+                  ? `${editItem.oldText.slice(0, 60)}…`
+                  : editItem.oldText
+              return yield* new ToolFailure({
+                message: `oldText matches ${count} times in ${path}; provide more surrounding context to disambiguate: "${preview}"`,
+              })
+            }
+            content = content.replace(editItem.oldText, editItem.newText)
+            appliedEdits += 1
+          }
+          yield* asFailure(world.filesystem.writeFileString(file, content))
+          return { path, appliedEdits }
+        }),
       listFiles: ({ path }) =>
         Effect.gen(function* () {
           const world = yield* ExecutionWorld
@@ -86,6 +204,113 @@ export const CodingTools = (_root?: string): Plugin<ExecutionWorld> => {
               .readDirectory(dir, { recursive: true })
               .pipe(Effect.map((files) => ({ files }))),
           )
+        }),
+      find: ({ pattern, path: searchPath, limit }) =>
+        Effect.gen(function* () {
+          const maxLimit = limit ?? 100
+          const world = yield* ExecutionWorld
+          const targetDir = yield* asFailure(world.resolvePath(searchPath ?? "."))
+          const rawFiles = yield* asFailure(
+            world.filesystem.readDirectory(targetDir, { recursive: true }),
+          )
+
+          const ignoredSubstrings = [
+            ".git/",
+            ".git\\",
+            "node_modules/",
+            "node_modules\\",
+            ".roop/",
+          ]
+          const filtered = rawFiles.filter(
+            (file) =>
+              !ignoredSubstrings.some(
+                (ignored) => file.startsWith(ignored) || file.includes(ignored),
+              ),
+          )
+
+          let matched = filtered
+          if (pattern && pattern.trim() !== "") {
+            const p = pattern.trim().toLowerCase()
+            if (p.includes("*")) {
+              const regex = new RegExp(
+                "^" +
+                  p
+                    .split("*")
+                    .map((s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
+                    .join(".*") +
+                  "$",
+                "i",
+              )
+              matched = filtered.filter((file) => regex.test(file))
+            } else {
+              matched = filtered.filter((file) => file.toLowerCase().includes(p))
+            }
+          }
+
+          const totalFiles = matched.length
+          const files = matched.slice(0, maxLimit)
+          return {
+            files,
+            totalFiles,
+            truncated: totalFiles > files.length,
+          }
+        }),
+      grep: ({ pattern, path: searchPath, caseSensitive, limit }) =>
+        Effect.gen(function* () {
+          const maxLimit = limit ?? 100
+          const world = yield* ExecutionWorld
+          const targetDir = yield* asFailure(world.resolvePath(searchPath ?? "."))
+          const allFiles = yield* asFailure(
+            world.filesystem.readDirectory(targetDir, { recursive: true }),
+          )
+
+          const regex = makeGrepRegex(pattern, caseSensitive)
+          const matches: Array<{ file: string; line: number; content: string }> = []
+          let totalMatches = 0
+          const ignoredSubstrings = [
+            ".git/",
+            ".git\\",
+            "node_modules/",
+            "node_modules\\",
+            ".roop/",
+          ]
+
+          for (const relFile of allFiles) {
+            if (
+              ignoredSubstrings.some(
+                (ignored) => relFile.startsWith(ignored) || relFile.includes(ignored),
+              )
+            ) {
+              continue
+            }
+            const fullPath = yield* asFailure(world.resolvePath(relFile))
+            const contentOption = yield* world.filesystem
+              .readFileString(fullPath)
+              .pipe(Effect.option)
+            if (contentOption._tag === "None") continue
+
+            const lines = contentOption.value.split(/\r?\n/)
+            for (let i = 0; i < lines.length; i++) {
+              const lineText = lines[i]!
+              regex.lastIndex = 0
+              if (regex.test(lineText)) {
+                totalMatches += 1
+                if (matches.length < maxLimit) {
+                  matches.push({
+                    file: relFile,
+                    line: i + 1,
+                    content: lineText.length > 200 ? `${lineText.slice(0, 200)}…` : lineText,
+                  })
+                }
+              }
+            }
+          }
+
+          return {
+            matches,
+            totalMatches,
+            truncated: totalMatches > matches.length,
+          }
         }),
       bash: ({ command }) =>
         Effect.scoped(

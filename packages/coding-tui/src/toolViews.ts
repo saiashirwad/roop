@@ -38,7 +38,10 @@ const todoView = (call: ToolCall): string => {
 const iconOf = {
   readFile: `${cyan("\uf15b")} ${bold("read")}`,
   writeFile: `${cyan("\uf040")} ${bold("write")}`,
+  edit: `${cyan("\uf044")} ${bold("edit")}`,
   listFiles: `${cyan("\uf115")} ${bold("list")}`,
+  find: `${cyan("\uf0b0")} ${bold("find")}`,
+  grep: `${cyan("\uf002")} ${bold("grep")}`,
   bash: `${cyan("\uf120")} ${bold("$")}`,
   webFetch: `${cyan("\uf0ac")} ${bold("fetch")}`,
   skill: `${cyan("\uf0c3")} ${bold("skill")}`,
@@ -50,7 +53,10 @@ const iconFor = (name: string): string => {
   switch (name) {
     case "readFile":
     case "writeFile":
+    case "edit":
     case "listFiles":
+    case "find":
+    case "grep":
     case "bash":
     case "webFetch":
     case "skill":
