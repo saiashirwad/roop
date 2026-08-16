@@ -26,16 +26,20 @@ export type Model = { readonly id: string; readonly description?: string | undef
 
 export type PaletteAction =
   | { readonly kind: "new" }
+  | { readonly kind: "resume"; readonly id: string }
+  | { readonly kind: "fork" }
   | { readonly kind: "model"; readonly id: string }
 
 export const Palette = ({
   activeModel,
   models,
+  sessions = [],
   onAction,
   onClose,
 }: {
   readonly activeModel: string
   readonly models: ReadonlyArray<Model>
+  readonly sessions?: ReadonlyArray<{ readonly id: string; readonly title: string }>
   readonly onAction: (action: PaletteAction) => void
   readonly onClose: () => void
 }) => (
@@ -53,6 +57,16 @@ export const Palette = ({
           <Command.Empty>No results</Command.Empty>
           <Command.Group heading="Session">
             <Command.Item onSelect={() => onAction({ kind: "new" })}>New session</Command.Item>
+            <Command.Item onSelect={() => onAction({ kind: "fork" })}>Fork current session</Command.Item>
+            {sessions.map((session) => (
+              <Command.Item
+                key={session.id}
+                value={`resume ${session.id} ${session.title}`}
+                onSelect={() => onAction({ kind: "resume", id: session.id })}
+              >
+                Resume: {session.title === "" ? "Untitled" : session.title}
+              </Command.Item>
+            ))}
           </Command.Group>
           <Command.Group heading="Models">
             {models.map((model) => (

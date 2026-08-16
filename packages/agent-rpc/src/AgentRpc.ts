@@ -43,4 +43,12 @@ export const AgentRpc = RpcGroup.make(
   Rpc.make("ListSessions", {
     success: Schema.Array(SessionMeta),
   }),
+  Rpc.make("ForkSession", {
+    payload: {
+      fromSessionId: Schema.String,
+      toSessionId: Schema.optionalKey(Schema.String),
+    },
+    success: SessionMeta,
+    error: Schema.Union([SessionNotFound, SessionFormatError]),
+  }),
 )

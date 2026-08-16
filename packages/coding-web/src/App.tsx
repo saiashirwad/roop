@@ -8,6 +8,7 @@ import { Markdown } from "./Markdown.tsx"
 import { Palette, type PaletteAction } from "./Palette.tsx"
 import {
   capsAtom,
+  forkSessionAtom,
   interruptAtom,
   modelAtom,
   nextSessionId,
@@ -210,7 +211,10 @@ const Sidebar = ({ busy, onNew }: { readonly busy: boolean; readonly onNew: () =
 
 export const App = () => {
   const transcript = useAtomValue(transcriptAtom)
+  const sessions = useAtomValue(sessionsAtom)
   const setTranscript = useAtomSet(transcriptAtom)
+  const forkSession = useAtomSet(forkSessionAtom)
+  const selectSession = useAtomSet(selectSessionAtom)
   const setSession = useAtomSet(sessionAtom)
   const [modelId, setModelId] = useAtom(modelAtom)
   const caps = useAtomValue(capsAtom)
@@ -243,6 +247,14 @@ export const App = () => {
     switch (action.kind) {
       case "new": {
         newSession()
+        break
+      }
+      case "resume": {
+        selectSession(action.id)
+        break
+      }
+      case "fork": {
+        forkSession(undefined)
         break
       }
       case "model": {
@@ -356,6 +368,7 @@ export const App = () => {
         <Palette
           activeModel={model}
           models={caps.value.models}
+          sessions={sessions._tag === "Success" ? sessions.value : []}
           onAction={onAction}
           onClose={close}
         />

@@ -1,8 +1,7 @@
 import { AgentRpc } from "@roop/agent-rpc/AgentRpc.ts"
 import { AgentRpcClientHttp } from "@roop/agent-rpc/AgentRpcHttp.ts"
-import { apply, type Item, fromMessages } from "@roop/agent-rpc/Transcript.ts"
+import { apply, type Item, fromSessionEvents } from "@roop/agent-rpc/Transcript.ts"
 import { cryptoWeb } from "@roop/agent/cryptoWeb.ts"
-import { deriveMessages } from "@roop/agent/SessionEvent.ts"
 import { Context, Crypto, Effect, Layer, Stream } from "effect"
 import { Atom } from "effect/unstable/reactivity"
 import { RpcClient } from "effect/unstable/rpc"
@@ -65,7 +64,22 @@ export const selectSessionAtom = runtime.fn((sessionId: string, ctx: Atom.FnCont
     const client = yield* RpcClient.make(AgentRpc)
     const session = yield* client.GetHistory({ sessionId })
     ctx.set(sessionAtom, sessionId)
-    ctx.set(transcriptAtom, fromMessages(deriveMessages(session.events)))
+    ctx.set(transcriptAtom, fromSessionEvents(session.events))
+  }),
+)
+
+export const forkSessionAtom = runtime.fn((toSessionId: string | undefined, ctx: Atom.FnContext) =>
+  Effect.gen(function* () {
+    const client = yield* RpcClient.make(AgentRpc)
+    const current = ctx(sessionAtom)
+    const result =
+      toSessionId === undefined || toSessionId === ""
+        ? yield* client.ForkSession({ fromSessionId: current })
+        : yield* client.ForkSession({ fromSessionId: current, toSessionId })
+    const session = yield* client.GetHistory({ sessionId: result.id })
+    ctx.set(sessionAtom, result.id)
+    ctx.set(transcriptAtom, fromSessionEvents(session.events))
+    ctx.refresh(sessionsAtom)
   }),
 )
 

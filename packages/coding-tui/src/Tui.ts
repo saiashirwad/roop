@@ -12,9 +12,10 @@ import {
 } from "@mariozechner/pi-tui"
 import { AgentRpc } from "@roop/agent-rpc/AgentRpc.ts"
 import { AgentRpcClientHttp } from "@roop/agent-rpc/AgentRpcHttp.ts"
+import { fromSessionEvents } from "@roop/agent-rpc/Transcript.ts"
 import type { AgentEvent } from "@roop/agent/AgentEvent.ts"
 import { cryptoWeb } from "@roop/agent/cryptoWeb.ts"
-import { Crypto, Effect, Queue, Stream } from "effect"
+import { Clock, Crypto, Effect, Queue, Stream } from "effect"
 import { RpcClient } from "effect/unstable/rpc"
 
 import { bold, cyan, dim, editorTheme, markdownTheme, red } from "./theme.ts"
@@ -24,6 +25,14 @@ type Action =
   | { readonly _tag: "Submit"; readonly text: string }
   | { readonly _tag: "Interrupt" }
   | { readonly _tag: "Quit" }
+
+const formatAgo = (timestamp: number, now: number): string => {
+  const minutes = Math.round((now - timestamp) / 60_000)
+  if (minutes < 1) return "just now"
+  if (minutes < 60) return `${minutes}m ago`
+  if (minutes < 1_440) return `${Math.round(minutes / 60)}h ago`
+  return `${Math.round(minutes / 1_440)}d ago`
+}
 
 const main = Effect.gen(function* () {
   const url = process.argv[2] ?? "http://localhost:8787/rpc"
@@ -56,7 +65,7 @@ const main = Effect.gen(function* () {
     return undefined
   })
   const headerText = () =>
-    `${bold("roop")} ${dim(`— ${url}`)}\n${dim(
+    `${bold("roop")} ${dim(`— ${url}`)} ${cyan(`[${sessionId.slice(0, 8)}]`)}\n${dim(
       `model ${modelId} · tools ${caps.tools.map((tool) => tool.name).join(", ")} · enter to send · esc to interrupt · ctrl+c to quit`,
     )}`
   const header = new Text(headerText(), 0, 1)
@@ -71,6 +80,39 @@ const main = Effect.gen(function* () {
     chat.addChild(new Text(text, 0, 1))
     tui.requestRender()
   }
+
+  const replaySession = (events: ReadonlyArray<any>) => {
+    chat.clear()
+    const items = fromSessionEvents(events)
+    for (const item of items) {
+      switch (item.kind) {
+        case "user":
+          chat.addChild(new Text(`${cyan("❯")} ${bold(item.text)}`, 0, 1))
+          break
+        case "assistant":
+          chat.addChild(new Markdown(item.text, 0, 0, markdownTheme))
+          break
+        case "tool":
+          chat.addChild(
+            new Text(
+              renderToolCall({
+                name: item.name,
+                params: item.params,
+                result: item.result,
+                ...(item.isFailure === undefined ? {} : { isFailure: item.isFailure }),
+              }),
+              0,
+              0,
+            ),
+          )
+          break
+        case "notice":
+          chat.addChild(new Text(dim(item.text), 0, 0))
+          break
+      }
+    }
+  }
+
   const commands: Array<SlashCommand> = [
     {
       name: "models",
@@ -87,6 +129,35 @@ const main = Effect.gen(function* () {
     },
     { name: "skills", description: "list the agent's skills" },
     { name: "tools", description: "list the agent's tools" },
+    { name: "sessions", description: "list saved sessions" },
+    {
+      name: "resume",
+      description: "resume/switch to a session by ID (/resume <id>)",
+      argumentHint: "<id>",
+      getArgumentCompletions: async (prefix) => {
+        try {
+          const sessions = await Effect.runPromise(client.ListSessions())
+          return sessions
+            .filter(
+              (s) =>
+                s.id.startsWith(prefix) ||
+                s.title.toLowerCase().includes(prefix.toLowerCase()),
+            )
+            .map((s) => ({
+              value: s.id,
+              label: s.id.slice(0, 8),
+              description: s.title === "" ? "Untitled" : s.title,
+            }))
+        } catch {
+          return []
+        }
+      },
+    },
+    {
+      name: "fork",
+      description: "fork current session into a new session (/fork [newId])",
+      argumentHint: "[id]",
+    },
     { name: "new", description: "start a new session" },
     { name: "help", description: "list commands" },
   ]
@@ -130,9 +201,73 @@ const main = Effect.gen(function* () {
           info(caps.tools.map((tool) => `${bold(tool.name)} ${dim(tool.description)}`).join("\n"))
           return
         }
+        case "sessions": {
+          const sessionsExit = yield* Effect.exit(client.ListSessions())
+          const sessions =
+            sessionsExit._tag === "Success"
+              ? sessionsExit.value
+              : (info(red("failed to list sessions")), [])
+          if (sessions.length === 0) {
+            info(dim("no saved sessions"))
+            return
+          }
+          const now = yield* Clock.currentTimeMillis
+          info(
+            sessions
+              .map((s) => {
+                const marker = s.id === sessionId ? cyan("●") : dim("○")
+                const time = dim(formatAgo(s.updatedAt, now))
+                const titleText = s.title === "" ? dim("Untitled") : s.title
+                return `${marker} ${bold(s.id.slice(0, 8))} ${dim(`(${s.id})`)} · ${time}\n  ${titleText}`
+              })
+              .join("\n"),
+          )
+          return
+        }
+        case "resume":
+        case "switch": {
+          if (arg === undefined || arg.trim() === "") {
+            info(red("usage: /resume <session-id>"))
+            return
+          }
+          const targetPrefix = arg.trim()
+          const sessionsExit = yield* Effect.exit(client.ListSessions())
+          const sessions = sessionsExit._tag === "Success" ? sessionsExit.value : []
+          const matched = sessions.find(
+            (s) => s.id === targetPrefix || s.id.startsWith(targetPrefix),
+          )
+          const targetId = matched !== undefined ? matched.id : targetPrefix
+          const historyResult = yield* Effect.exit(client.GetHistory({ sessionId: targetId }))
+          if (historyResult._tag === "Failure") {
+            info(red(`session not found: ${targetId}`))
+            return
+          }
+          sessionId = targetId
+          header.setText(headerText())
+          replaySession(historyResult.value.events)
+          info(dim(`resumed session ${targetId}`))
+          tui.requestRender()
+          return
+        }
+        case "fork": {
+          const forkResult = yield* Effect.exit(
+            arg !== undefined && arg.trim() !== ""
+              ? client.ForkSession({ fromSessionId: sessionId, toSessionId: arg.trim() })
+              : client.ForkSession({ fromSessionId: sessionId }),
+          )
+          if (forkResult._tag === "Failure") {
+            info(red(`failed to fork session: ${String(forkResult.cause)}`))
+            return
+          }
+          sessionId = forkResult.value.id
+          header.setText(headerText())
+          info(dim(`forked session to ${forkResult.value.id}`))
+          return
+        }
         case "new": {
           sessionId = yield* Effect.orDie(crypto.randomUUIDv4)
           chat.clear()
+          header.setText(headerText())
           info(dim("new session"))
           return
         }

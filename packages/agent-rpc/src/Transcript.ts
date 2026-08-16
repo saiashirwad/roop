@@ -1,5 +1,6 @@
 import type { AgentEvent } from "@roop/agent/AgentEvent.ts"
 import { deriveMessages } from "@roop/agent/SessionEvent.ts"
+import type { SessionEvent } from "@roop/agent/SessionEvent.ts"
 import { Option, Schema } from "effect"
 
 /**
@@ -69,6 +70,10 @@ export const apply = (items: ReadonlyArray<Item>, event: AgentEvent): ReadonlyAr
     }
   }
 }
+
+/** Rebuild a transcript from persisted session events. */
+export const fromSessionEvents = (events: ReadonlyArray<SessionEvent>): ReadonlyArray<Item> =>
+  fromMessages(deriveMessages(events))
 
 /** Rebuild a transcript from a persisted session's derived messages. */
 export const fromMessages = (messages: ReturnType<typeof deriveMessages>): ReadonlyArray<Item> => {

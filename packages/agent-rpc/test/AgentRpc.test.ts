@@ -94,6 +94,16 @@ it.layer(AgentRpcServer.pipe(Layer.provide(TestLayer)))("AgentRpc", (it) => {
         sessions.map((meta) => [meta.id, meta.title]),
         [["s1", "say hi"]],
       )
+
+      const forkedMeta = yield* client.ForkSession({ fromSessionId: "s1", toSessionId: "s1-fork" })
+      assert.strictEqual(forkedMeta.id, "s1-fork")
+      assert.strictEqual(forkedMeta.title, "say hi")
+
+      const forkedHistory = yield* client.GetHistory({ sessionId: "s1-fork" })
+      assert.deepStrictEqual(
+        deriveMessages(forkedHistory.events).map((message) => message.role),
+        ["user", "assistant", "tool"],
+      )
     }),
   )
 

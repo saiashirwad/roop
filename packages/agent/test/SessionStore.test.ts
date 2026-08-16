@@ -266,4 +266,26 @@ it.layer(StoreLive)("SessionStoreFs", (it) => {
       assert.strictEqual(failure._tag, "SessionFormatError")
     }),
   )
+
+  it.effect("fork copies history into a new session", () =>
+    Effect.gen(function* () {
+      const store = yield* SessionStore
+      yield* appendAll("orig")
+
+      const forkedMeta = yield* store.fork("orig", "forked")
+      assert.strictEqual(forkedMeta.id, "forked")
+      assert.strictEqual(forkedMeta.title, "first question")
+
+      const forkedSession = yield* store.load("forked")
+      assert.strictEqual(forkedSession.events.length, scripted.length)
+      assert.strictEqual(forkedSession.id, "forked")
+
+      // Appending to forked doesn't affect original
+      yield* store.append("forked", { _tag: "user/message", content: "forked question" })
+      const origAfter = yield* store.load("orig")
+      const forkedAfter = yield* store.load("forked")
+      assert.strictEqual(origAfter.events.length, scripted.length)
+      assert.strictEqual(forkedAfter.events.length, scripted.length + 1)
+    }),
+  )
 })

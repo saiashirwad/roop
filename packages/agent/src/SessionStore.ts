@@ -108,6 +108,10 @@ export class SessionStore extends Context.Service<
     ) => Effect.Effect<ReadonlyArray<Prompt.Message>, SessionLoadError>
     readonly load: (sessionId: string) => Effect.Effect<Session, SessionLoadError>
     readonly list: Effect.Effect<ReadonlyArray<SessionMeta>>
+    readonly fork: (
+      fromSessionId: string,
+      toSessionId: string,
+    ) => Effect.Effect<SessionMeta, SessionLoadError>
   }
 >()("roop/SessionStore") {}
 
@@ -151,6 +155,23 @@ export const SessionStoreMemory = Layer.effect(
       list: Ref.get(sessions).pipe(
         Effect.map((map) => [...map.values()].map(metaOf).sort(byRecency)),
       ),
+      fork: (fromSessionId, toSessionId) =>
+        Effect.gen(function* () {
+          const now = yield* Clock.currentTimeMillis
+          const map = yield* Ref.get(sessions)
+          const source = map.get(fromSessionId)
+          if (source === undefined) {
+            return yield* new SessionNotFound({ sessionId: fromSessionId })
+          }
+          const forked: Session = {
+            id: toSessionId,
+            header: { version: SESSION_FORMAT_VERSION, createdAt: now },
+            events: [...source.events],
+            updatedAt: now,
+          }
+          yield* Ref.update(sessions, (m) => new Map(m).set(toSessionId, forked))
+          return metaOf(forked)
+        }),
     })
   }),
 )
@@ -259,6 +280,19 @@ export const SessionStoreFs = (
           ),
           Effect.orDie,
         ),
+        fork: (fromSessionId, toSessionId) =>
+          Effect.gen(function* () {
+            const now = yield* Clock.currentTimeMillis
+            const source = yield* read(fromSessionId)
+            const forked: Session = {
+              id: toSessionId,
+              header: { version: SESSION_FORMAT_VERSION, createdAt: now },
+              events: [...source.events],
+              updatedAt: now,
+            }
+            yield* write(forked)
+            return metaOf(forked)
+          }),
       })
     }),
   )

@@ -54,6 +54,10 @@ export class Agent extends Context.Service<
       sessionId: string,
     ) => Effect.Effect<Session, SessionNotFound | SessionFormatError>
     readonly sessions: Effect.Effect<ReadonlyArray<SessionMeta>>
+    readonly fork: (
+      fromSessionId: string,
+      toSessionId?: string,
+    ) => Effect.Effect<SessionMeta, SessionNotFound | SessionFormatError>
   }
 >()("roop/Agent") {}
 
@@ -181,6 +185,11 @@ export const AgentLive = <Tools extends Record<string, Tool.Any>>(
           ),
         history: (sessionId) => store.load(sessionId),
         sessions: store.list,
+        fork: (fromSessionId, toSessionId) =>
+          Effect.gen(function* () {
+            const targetId = toSessionId ?? (yield* Effect.orDie(crypto.randomUUIDv4))
+            return yield* store.fork(fromSessionId, targetId)
+          }),
       })
     }),
   )
