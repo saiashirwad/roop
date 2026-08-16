@@ -2,13 +2,14 @@ import { Context, Crypto, Effect, Layer, Scope } from "effect"
 import { Toolkit } from "effect/unstable/ai"
 
 import { Agent } from "./Agent.ts"
+import { AgentContext } from "./AgentContext.ts"
 import { delegation } from "./agentTool.ts"
 import { AgentPlugins, Plugin, type PluginRequirements } from "./Plugin.ts"
 import type { RunPolicy } from "./RunPolicy.ts"
 import { SessionJournalMemory } from "./SessionJournal.ts"
 
 export const subagent = <
-  const Plugins extends ReadonlyArray<Plugin<any>>,
+  Plugins extends ReadonlyArray<Plugin<any, any, any>>,
   LayerIn = never,
 >(options: {
   readonly name: string
@@ -29,10 +30,13 @@ export const subagent = <
       Layer.provide(SessionJournalMemory),
       Layer.provide(Layer.succeed(Crypto.Crypto, crypto)),
     )
+  /* SAFETY: The dynamic handler generator provides the delegation tool implementation. */
   const handlers = toolkit.toLayer(
     Effect.gen(function* () {
-      const context = yield* Effect.context<PluginRequirements<Plugins> | LayerIn>()
+      const ambientContext = yield* Effect.context<PluginRequirements<Plugins> | LayerIn>()
       const crypto = yield* Crypto.Crypto
+      /* SAFETY: Omit parent AgentContext tag to isolate child agent context. */
+      const context = ambientContext.pipe(Context.omit(AgentContext as any))
       return {
         [options.name]: (params: { readonly task: string }) =>
           Effect.scoped(
@@ -44,23 +48,27 @@ export const subagent = <
                 custom !== undefined
                   ? yield* Layer.buildWithScope(custom, scope).pipe(
                       Effect.provide(contextLayer),
-                      Effect.map((customCtx) => Context.merge(context, customCtx)),
+                      Effect.map((customCtx) => {
+                        /* SAFETY: Omit parent AgentContext tag to isolate child agent context. */
+                        const isolated = customCtx.pipe(Context.omit(AgentContext as any))
+                        return Context.merge(context, isolated)
+                      }),
                     )
                   : context
               const baseChild = makeChild(crypto)
-              const child = baseChild.pipe(Layer.provide(Layer.succeedContext(childContext)))
-              const run = Effect.gen(function* () {
-                const agent = yield* Agent
-                return yield* handler(agent)(params)
-              })
-              return yield* run.pipe(
-                Effect.provide(Layer.merge(child, Layer.succeedContext(childContext))),
+              const childEnv = yield* Layer.buildWithScope(baseChild, scope).pipe(
+                Effect.provide(childContext),
               )
+              const agent = Context.get(childEnv, Agent)
+              return yield* handler(agent)(params).pipe(Effect.provide(childContext))
             }),
           ),
       }
-    }),
+    }) as any,
   )
 
-  return Plugin({ name: options.name, toolkit, handlers })
+  /* SAFETY: The delegation subagent exposes the tool and requirements for child layers. */
+  return Plugin({ name: options.name, toolkit, handlers }) as Plugin<
+    PluginRequirements<Plugins> | LayerIn | Crypto.Crypto
+  >
 }

@@ -1,6 +1,7 @@
 import { Cause, Effect } from "effect"
 
 import type { AgentHooksInterface, RunContext } from "./AgentHooks.ts"
+import { RunError } from "./RunError.ts"
 import type { ResolvedRunPolicy } from "./RunPolicy.ts"
 import type { InterruptSignal } from "./RunRegistry.ts"
 import type { StepOutcome } from "./runStep.ts"
@@ -34,13 +35,13 @@ export type TurnOutcome =
       readonly totalSteps: number
     }
 
-export interface RunTurnOptions<E = unknown> {
+export interface RunTurnOptions<E = never> {
   readonly sessionId: SessionId | string
   readonly turn: number
   readonly totalSteps: number
   readonly policy: ResolvedRunPolicy
   readonly interrupt: InterruptSignal
-  readonly append: (event: SessionEvent) => Effect.Effect<void, any>
+  readonly append: (event: SessionEvent) => Effect.Effect<void, RunError>
   readonly hooks: AgentHooksInterface
   readonly runStep: (options: {
     readonly turn: number
@@ -51,7 +52,7 @@ export interface RunTurnOptions<E = unknown> {
 /**
  * Coordinates multiple steps within a single turn under turn and total step limits.
  */
-export const runTurn = <E = unknown>(options: RunTurnOptions<E>): Effect.Effect<TurnOutcome, E> => {
+export const runTurn = <E = never>(options: RunTurnOptions<E>): Effect.Effect<TurnOutcome, E | RunError> => {
   let started = false
   let closed = false
 

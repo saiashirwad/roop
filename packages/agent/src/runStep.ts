@@ -5,6 +5,7 @@ import type * as Tool from "effect/unstable/ai/Tool"
 import { AgentEmit } from "./AgentEmit.ts"
 import type { AgentEvent } from "./AgentEvent.ts"
 import { StepRejected, type AgentHooksInterface, type RunContext } from "./AgentHooks.ts"
+import { RunError } from "./RunError.ts"
 import type { InterruptSignal } from "./RunRegistry.ts"
 import type { SessionEvent } from "./SessionEvent.ts"
 import type { SessionId } from "./SessionId.ts"
@@ -13,6 +14,19 @@ import type { ToolScheduler } from "./toolScheduler.ts"
 
 export type ErasedToolkit = Toolkit.WithHandler<Record<string, Tool.Any>>
 export type ToolCallParameters = Tool.Parameters<Tool.Any>
+
+/**
+ * Erase a toolkit's name-to-parameter relationship after its handlers have
+ * been built. AgentContext restores that relationship by looking up the
+ * registered tool before dispatching a call.
+ */
+export const eraseToolkit = <Tools extends Record<string, Tool.Any>>(
+  toolkit: Toolkit.WithHandler<Tools>,
+): ErasedToolkit => {
+  /* SAFETY: Tool names originate from `toolkit.tools`; Toolkit validates the
+   * corresponding parameters before invoking the handler. */
+  return { tools: toolkit.tools, handle: toolkit.handle } as ErasedToolkit
+}
 
 /** Toolkit shape used only to keep `Tool.Any` handler services off Effect channels. */
 type ClosedToolkit = Toolkit.WithHandler<Record<string, never>>
@@ -45,9 +59,9 @@ export interface RunStepOptions {
   readonly model: LanguageModel.Service
   /** A request-bound capability snapshot. */
   readonly toolkit: Effect.Effect<ErasedToolkit>
-  readonly beforeRequest?: (() => Effect.Effect<void, any>) | undefined
+  readonly beforeRequest?: (() => Effect.Effect<void, RunError>) | undefined
   readonly interrupt: InterruptSignal
-  readonly append: (event: SessionEvent) => Effect.Effect<void, any>
+  readonly append: (event: SessionEvent) => Effect.Effect<void, RunError>
   readonly emit: (event: AgentEvent) => Effect.Effect<void>
   readonly hooks: AgentHooksInterface
   readonly scheduler: ToolScheduler
@@ -103,9 +117,9 @@ const toEvent = (
 
 /** Journal the exact assistant/tool messages produced by this model response. */
 const appendStepEvents = (
-  append: (event: SessionEvent) => Effect.Effect<void, any>,
+  append: (event: SessionEvent) => Effect.Effect<void, RunError>,
   outcome: ReadonlyArray<Response.StreamPart<Record<string, Tool.Any>>>,
-): Effect.Effect<void, any> => {
+): Effect.Effect<void, RunError> => {
   const content = Prompt.fromResponseParts(outcome).content
   const providerExecutedByResultId = new Map(
     outcome.flatMap((part) =>
@@ -159,7 +173,7 @@ const interceptModel = (
   model: LanguageModel.Service,
   hooks: AgentHooksInterface,
   context: () => RunContext,
-  append: (event: SessionEvent) => Effect.Effect<void, any>,
+  append: (event: SessionEvent) => Effect.Effect<void, RunError>,
 ): LanguageModel.Service => {
   /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
   return {
@@ -171,7 +185,7 @@ const interceptModel = (
             prompt: request.prompt,
             toolChoice: request.toolChoice,
           })
-          yield* append({ _tag: "model/request", request: admitted })
+          yield* Effect.orDie(append({ _tag: "model/request", request: admitted }))
           /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
           return model.streamText({
             prompt: admitted.prompt,
@@ -254,7 +268,7 @@ const interceptToolkit = (
  */
 export const runStep = (
   options: RunStepOptions,
-): Effect.Effect<StepOutcome, AiError.AiError | StepRejected> => {
+): Effect.Effect<StepOutcome, AiError.AiError | StepRejected | RunError> => {
   const context: RunContext = {
     sessionId: options.sessionId,
     turn: options.turn,

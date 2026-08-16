@@ -141,24 +141,26 @@ const runJournalConformance = (name: string, makeLayer: () => Layer.Layer<Sessio
           journal.appendBatch(sid, [scripted[2]!], { expectedRevision: 1 }),
         )
         assert.ok(Exit.isFailure(exit))
-        /* SAFETY: The test explicitly triggers a conflict failure on stale expected revision. */
-        const error = Option.getOrThrow(Exit.findErrorOption(exit)) as SessionConflict
-        assert.strictEqual(error._tag, "SessionConflict")
-        assert.strictEqual(error.sessionId, sid)
-        assert.strictEqual(error.expectedRevision, 1)
-        assert.strictEqual(error.actualRevision, 2)
+        const error = Option.getOrThrow(Exit.findErrorOption(exit))
+        assert.ok(Schema.is(SessionConflict)(error))
+        /* SAFETY: Schema.is above confirms error is a SessionConflict instance. */
+        const conflict = error as SessionConflict
+        assert.strictEqual(conflict._tag, "SessionConflict")
+        assert.strictEqual(conflict.sessionId, sid)
+        assert.strictEqual(conflict.expectedRevision, 1)
+        assert.strictEqual(conflict.actualRevision, 2)
 
         // append() also checks expectedRevision
         const appendConflict = yield* Effect.exit(
           journal.append(sid, scripted[2]!, { expectedRevision: 1 }),
         )
         assert.ok(Exit.isFailure(appendConflict))
-        /* SAFETY: The test explicitly triggers a conflict failure on stale expected revision. */
-        const appendError = Option.getOrThrow(
-          Exit.findErrorOption(appendConflict),
-        ) as SessionConflict
-        assert.strictEqual(appendError._tag, "SessionConflict")
-        assert.strictEqual(appendError.actualRevision, 2)
+        const appendError = Option.getOrThrow(Exit.findErrorOption(appendConflict))
+        assert.ok(Schema.is(SessionConflict)(appendError))
+        /* SAFETY: Schema.is above confirms error is a SessionConflict instance. */
+        const appendConflictError = appendError as SessionConflict
+        assert.strictEqual(appendConflictError._tag, "SessionConflict")
+        assert.strictEqual(appendConflictError.actualRevision, 2)
       }),
     )
 

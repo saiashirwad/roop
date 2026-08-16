@@ -285,28 +285,34 @@ const registryOf = Effect.map(Ref.get(registries), (all) => {
 })
 
 /** A plugin whose handler layer registers every kind of capability at build. */
-const registrar: Plugin<AgentContext> = {
+const registrar = Plugin({
   name: "registrar",
-  handlers: Layer.effectDiscard(
+  install: Layer.effectDiscard(
     Effect.gen(function* () {
       const context = yield* AgentContext
       yield* Ref.update(registries, (all) => [...all, context])
       /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
-      yield* Effect.asVoid(context.registerTool(LaterTool, (yield* laterHandle) as any))
       yield* Effect.asVoid(
-        context.registerModel({
-          id: "late-model",
-          provider: "test",
-          layer: Layer.effect(LanguageModel.LanguageModel, scripted([[]])),
-        }),
+        Effect.orDie(context.registerTool(LaterTool, (yield* laterHandle) as any)),
       )
       yield* Effect.asVoid(
-        context.registerSkill({ id: "late-skill", description: "registered at runtime" }),
+        Effect.orDie(
+          context.registerModel({
+            id: "late-model",
+            provider: "test",
+            layer: Layer.effect(LanguageModel.LanguageModel, scripted([[]])),
+          }),
+        ),
       )
-      yield* Effect.asVoid(context.registerPromptSection("late section"))
+      yield* Effect.asVoid(
+        Effect.orDie(
+          context.registerSkill({ id: "late-skill", description: "registered at runtime" }),
+        ),
+      )
+      yield* Effect.asVoid(Effect.orDie(context.registerPromptSection("late section")))
     }),
   ),
-}
+})
 
 /** A plugin whose tool handler registers mid-run, with no ambient scope. */
 const prober = Plugin({
@@ -319,8 +325,10 @@ const prober = Plugin({
         probe: () =>
           Effect.gen(function* () {
             /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
-            yield* Effect.asVoid(context.registerTool(LaterTool, (yield* laterHandle) as any))
-            yield* Effect.asVoid(context.registerPromptSection("mid-run section"))
+            yield* Effect.asVoid(
+              Effect.orDie(context.registerTool(LaterTool, (yield* laterHandle) as any)),
+            )
+            yield* Effect.asVoid(Effect.orDie(context.registerPromptSection("mid-run section")))
             return { ok: true }
           }),
       }
@@ -340,11 +348,11 @@ it.layer(Registered)("runtime registration", (it) => {
       const caps = yield* (yield* Agent).capabilities
       assert.deepStrictEqual(
         caps.tools.map((tool) => tool.name),
-        ["later", "echo"],
+        ["echo", "later"],
       )
       assert.deepStrictEqual(
         caps.models.map((entry) => entry.id),
-        ["fake", "late-model"],
+        ["late-model", "fake"],
       )
       assert.deepStrictEqual(
         caps.skills.map((skill) => skill.id),
@@ -373,7 +381,14 @@ it.layer(Registered)("runtime registration", (it) => {
 
       const target = yield* Scope.make()
       /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
-      yield* Effect.asVoid(context.registerTool(ShadowTool, shadow as any, { scope: target }))
+      yield* Effect.asVoid(
+        Effect.orDie(
+          context.registerTool(ShadowTool, shadow as any, {
+            scope: target,
+            conflictPolicy: "replace",
+          }),
+        ),
+      )
       const during = yield* agent.capabilities
       assert.strictEqual(
         during.tools.find((tool) => tool.name === "echo")?.description,
@@ -393,7 +408,7 @@ it.layer(Registered)("runtime registration", (it) => {
         Effect.provide(EphemeralToolkit.toLayer({ ephemeral: () => Effect.succeed("gone") })),
       )
       /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
-      const dispose = yield* context.registerTool(EphemeralTool, ephemeral as any)
+      const dispose = yield* Effect.orDie(context.registerTool(EphemeralTool, ephemeral as any))
       assert.ok((yield* context.tools).ephemeral !== undefined)
 
       yield* dispose
@@ -416,7 +431,7 @@ it.effect("unwinds every registration when the agent layer's scope closes", () =
       scope,
     ).pipe(Effect.provide([SessionJournalMemory, cryptoWeb]))
     const context = yield* registryOf
-    assert.deepStrictEqual(Object.keys(yield* context.tools), ["later", "echo"])
+    assert.deepStrictEqual(Object.keys(yield* context.tools), ["echo", "later"])
 
     yield* Scope.close(scope, Exit.succeed(undefined))
     assert.deepStrictEqual(Object.keys(yield* context.tools), [])
