@@ -4,7 +4,8 @@ import { Agent } from "@roop/agent/Agent.ts"
 import { cryptoWeb } from "@roop/agent/cryptoWeb.ts"
 import { AgentPlugins, Plugin } from "@roop/agent/Plugin.ts"
 import { SessionStoreMemory } from "@roop/agent/SessionStore.ts"
-import { scripted } from "@roop/agent/Testing.ts"
+import { subagent } from "@roop/agent/subagent.ts"
+import { scripted, scriptedPlugin } from "@roop/agent/Testing.ts"
 import { Effect, FileSystem, Layer, Path, Stream } from "effect"
 import { LanguageModel } from "effect/unstable/ai"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
@@ -393,4 +394,104 @@ it.effect(
       assert.match(result.message, /Failed to create git worktree/)
     }).pipe(Effect.scoped, Effect.provide(nodePlatform)),
 )
+
+it.effect(
+  "subagent with ExecutionWorld.worktreeFromParent runs in an isolated worktree and cleans up on finish",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+      const baseRepo = yield* fs.makeTempDirectoryScoped({ prefix: "roop-subagent-base-" })
+
+      const exec = (args: ReadonlyArray<string>) =>
+        Effect.gen(function* () {
+          const handle = yield* spawner.spawn(ChildProcess.make("git", args, { cwd: baseRepo }))
+          const exitCode = yield* handle.exitCode
+          assert.strictEqual(Number(exitCode), 0)
+        })
+
+      yield* exec(["init"])
+      yield* exec(["config", "user.name", "Roop Test"])
+      yield* exec(["config", "user.email", "roop@test.local"])
+      yield* fs.writeFileString(path.join(baseRepo, "README.md"), "# Base Repo")
+      yield* exec(["add", "README.md"])
+      yield* exec(["commit", "-m", "initial commit"])
+
+      const worker = subagent({
+        name: "Subagent",
+        description: "delegate to subagent in worktree",
+        plugins: [
+          CodingTools(),
+          scriptedPlugin("child-fake", [
+            [
+              {
+                type: "tool-call",
+                id: "w1",
+                name: "writeFile",
+                params: { path: "isolated-worktree.txt", content: "from isolated subagent" },
+              },
+            ],
+            [{ type: "text-delta", id: "w2", delta: "subagent finished task" }],
+          ]),
+        ],
+        layer: ExecutionWorld.worktreeFromParent(),
+      })
+
+      const parentLayer = AgentPlugins([
+        CodingTools(),
+        worker,
+        Plugin({
+          name: "parent-model",
+          models: [
+            {
+              id: "parent-fake",
+              provider: "test",
+              layer: Layer.effect(
+                LanguageModel.LanguageModel,
+                scripted([
+                  [
+                    {
+                      type: "tool-call",
+                      id: "p1",
+                      name: "Subagent",
+                      params: { task: "write file in worktree" },
+                    },
+                  ],
+                  [{ type: "text-delta", id: "p2", delta: "parent completed" }],
+                ]),
+              ),
+            },
+          ],
+        }),
+      ]).pipe(
+        Layer.provide(SessionStoreMemory),
+        Layer.provide(cryptoWeb),
+        Layer.provide(ExecutionWorld.local(baseRepo)),
+        Layer.provide(nodePlatform),
+      )
+
+      const events = yield* Effect.gen(function* () {
+        const agent = yield* Agent
+        return yield* Stream.runCollect(
+          agent.prompt({ prompt: "run subagent", sessionId: "s-parent-subagent" }),
+        ).pipe(Effect.map((chunk) => [...chunk]))
+      }).pipe(Effect.provide(parentLayer))
+
+      const toolResults = events.filter((e: any) => e._tag === "ToolResult") as ReadonlyArray<any>
+      assert.strictEqual(toolResults.length, 1)
+      assert.deepStrictEqual(toolResults[0].result, { summary: "subagent finished task" })
+
+      // File created in worktree should not exist in parent base repo
+      assert.strictEqual(yield* fs.exists(path.join(baseRepo, "isolated-worktree.txt")), false)
+
+      // No leaked worktrees
+      const worktreeDir = path.join(baseRepo, ".roop", "worktrees")
+      if (yield* fs.exists(worktreeDir)) {
+        const remaining = yield* fs.readDirectory(worktreeDir)
+        assert.strictEqual(remaining.length, 0)
+      }
+    }).pipe(Effect.scoped, Effect.provide(nodePlatform)),
+)
+
 

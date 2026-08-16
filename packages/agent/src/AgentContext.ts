@@ -95,7 +95,7 @@ const latestBy = <A>(entries: ReadonlyArray<A>, key: (entry: A) => string): Read
  * the same `register*` calls; there is no parallel static path.
  */
 
-const make = (
+export const make = (
   options?: AgentContextOptions,
 ): Effect.Effect<AgentContext["Service"], never, Scope.Scope> =>
   Effect.gen(function* () {

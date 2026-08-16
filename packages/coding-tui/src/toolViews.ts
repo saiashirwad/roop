@@ -42,7 +42,8 @@ const iconOf = {
   bash: `${cyan("\uf120")} ${bold("$")}`,
   webFetch: `${cyan("\uf0ac")} ${bold("fetch")}`,
   skill: `${cyan("\uf0c3")} ${bold("skill")}`,
-  task: `${cyan("\uf126")} ${bold("task")}`,
+  Subagent: `${cyan("\uf126")} ${bold("Subagent")}`,
+  task: `${cyan("\uf126")} ${bold("Subagent")}`,
 } satisfies Record<string, string>
 
 const iconFor = (name: string): string => {
@@ -53,6 +54,7 @@ const iconFor = (name: string): string => {
     case "bash":
     case "webFetch":
     case "skill":
+    case "Subagent":
     case "task":
       return iconOf[name]
     default:

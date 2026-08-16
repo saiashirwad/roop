@@ -3,7 +3,7 @@ import { Toolkit } from "effect/unstable/ai"
 import type * as Tool from "effect/unstable/ai/Tool"
 
 import { AgentLive, type Agent } from "./Agent.ts"
-import { AgentContext, AgentContextLive, registerStatics } from "./AgentContext.ts"
+import { AgentContext, make as makeAgentContext } from "./AgentContext.ts"
 import { AgentHooks, layerNoop } from "./AgentHooks.ts"
 import type { ModelSpec } from "./ModelCatalog.ts"
 import type { SessionStore } from "./SessionStore.ts"
@@ -116,12 +116,29 @@ export const AgentPlugins = <const Plugins extends ReadonlyArray<Plugin<any>>>(
     layerNoop,
   )
 
-  // The registry is built first and provided INTO the handler, hook, and
-  // static-contribution layers: merged siblings cannot see each other's
-  // services, so plugin code that yields* AgentContext (to register
-  // capabilities at build time) would otherwise never resolve. Layer
-  // memoization keys on the layer reference, so the registry is shared.
-  const registry = AgentContextLive()
+  // The registry is built with static contributions (prompt, models, skills)
+  // registered upon acquisition, and provided into the handlers, hooks, and
+  // agent live layer.
+  const registry = Layer.effect(
+    AgentContext,
+    Effect.gen(function* () {
+      const context = yield* makeAgentContext()
+      if (systemPrompt !== "") {
+        yield* Effect.asVoid(context.registerPromptSection(systemPrompt))
+      }
+      yield* Effect.forEach(
+        models,
+        (spec) => Effect.asVoid(context.registerModel(spec)),
+        { discard: true },
+      )
+      yield* Effect.forEach(
+        skills,
+        (skill) => Effect.asVoid(context.registerSkill(skill)),
+        { discard: true },
+      )
+      return context
+    }),
+  )
 
   /* SAFETY: Crypto stays caller-provided so platform packages can substitute it;
    * the public type keeps SessionStore plus each plugin's R/RH. AgentContext
@@ -131,7 +148,6 @@ export const AgentPlugins = <const Plugins extends ReadonlyArray<Plugin<any>>>(
     Layer.unwrap(Effect.map(toolkit, (withHandler) => AgentLive(withHandler))).pipe(
       Layer.provide([
         registry,
-        registerStatics({ systemPrompt, models, skills }).pipe(Layer.provide(registry)),
         hooks.pipe(Layer.provide(registry)),
         ...handlers.map((handler) => handler.pipe(Layer.provide(registry))),
       ]),

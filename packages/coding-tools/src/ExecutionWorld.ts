@@ -209,9 +209,9 @@ export class ExecutionWorld extends Context.Service<ExecutionWorld, ExecutionWor
    */
   static readonly worktree = (options: {
     readonly baseRepo: string
-    readonly branch?: string
-    readonly env?: Record<string, string | undefined>
-    readonly worktreeDir?: string
+    readonly branch?: string | undefined
+    readonly env?: Record<string, string | undefined> | undefined
+    readonly worktreeDir?: string | undefined
   }): Layer.Layer<
     ExecutionWorld,
     WorktreeError,
@@ -293,6 +293,30 @@ export class ExecutionWorld extends Context.Service<ExecutionWorld, ExecutionWor
           filesystem,
           spawner,
           resolvePath: makePathResolver(worktreePath, path),
+        })
+      }),
+    )
+
+  /**
+   * Scoped layer that derives an isolated Git worktree ExecutionWorld from the ambient parent ExecutionWorld.
+   */
+  static readonly worktreeFromParent = (options?: {
+    readonly branch?: string | undefined
+    readonly env?: Record<string, string | undefined> | undefined
+    readonly worktreeDir?: string | undefined
+  }): Layer.Layer<
+    ExecutionWorld,
+    WorktreeError,
+    ExecutionWorld | FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner | Path.Path
+  > =>
+    Layer.unwrap(
+      Effect.gen(function* () {
+        const parentWorld = yield* ExecutionWorld
+        return ExecutionWorld.worktree({
+          baseRepo: parentWorld.root,
+          branch: options?.branch,
+          env: options?.env ?? parentWorld.env,
+          worktreeDir: options?.worktreeDir,
         })
       }),
     )

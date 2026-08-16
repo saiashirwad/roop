@@ -113,7 +113,7 @@ export const fromMessages = (messages: ReturnType<typeof deriveMessages>): Reado
 }
 
 /** The delegation tool the coding harness exposes; subagent calls render as nested pages. */
-export const delegationToolName = "task"
+export const delegationToolName = "Subagent"
 
 export const isDelegation = (name: string): boolean => name === delegationToolName
 
@@ -238,10 +238,15 @@ const summaryOf = {
     if (decoded === undefined) return fallback(call)
     return { label: "skill", summary: decoded.id }
   },
+  Subagent: (call: ToolCall): ToolSummary => {
+    const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(TaskParams)(call.params))
+    if (decoded === undefined) return fallback(call)
+    return { label: "Subagent", summary: line(decoded.task) }
+  },
   task: (call: ToolCall): ToolSummary => {
     const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(TaskParams)(call.params))
     if (decoded === undefined) return fallback(call)
-    return { label: "task", summary: line(decoded.task) }
+    return { label: "Subagent", summary: line(decoded.task) }
   },
 } satisfies { readonly [name: string]: (call: ToolCall) => ToolSummary }
 
@@ -254,6 +259,7 @@ export const summarizeTool = (call: ToolCall): ToolSummary => {
     case "bash":
     case "webFetch":
     case "skill":
+    case "Subagent":
     case "task":
       return summaryOf[call.name](call)
     default:

@@ -54,8 +54,9 @@ export const server = (options: {
         subagent({
           name: delegationToolName,
           description:
-            "Delegate a self-contained coding task to a subagent with its own coding tools. Give it one complete task and receive a summary.",
+            "Delegate a self-contained coding task to a subagent in an isolated Git worktree. Give it one complete task and receive a summary.",
           plugins: [codingTools, webTools, codex, deepseek],
+          layer: ExecutionWorld.worktreeFromParent(),
           maxTurns: 25,
         }),
       ]).pipe(Layer.provide(SessionStoreFs(path.join(options.root, ".roop", "sessions"))))
