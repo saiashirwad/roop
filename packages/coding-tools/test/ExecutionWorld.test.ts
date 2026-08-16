@@ -221,8 +221,61 @@ it.effect("ExecutionWorld.memory: runs in-memory without host disk access", () =
   ),
 )
 
+it.effect("ExecutionWorld.memory: fails missing files through error channel as ToolFailure", () =>
+  Effect.gen(function* () {
+    const agent = yield* Agent
+    const events = yield* Stream.runCollect(
+      agent.prompt({ prompt: "read missing file", sessionId: "s-memory-missing" }),
+    ).pipe(Effect.map((chunk) => [...chunk]))
+
+    const toolResults = events.filter((e: any) => e._tag === "ToolResult") as ReadonlyArray<any>
+    assert.strictEqual(toolResults.length, 1)
+    assert.strictEqual(toolResults[0].isFailure, true)
+    assert.match(toolResults[0].result.message, /NotFound/)
+  }).pipe(
+    Effect.provide(
+      AgentPlugins([
+        CodingTools(),
+        Plugin({
+          name: "model",
+          models: [
+            {
+              id: "fake",
+              provider: "test",
+              layer: Layer.effect(
+                LanguageModel.LanguageModel,
+                scripted([
+                  [
+                    {
+                      type: "tool-call",
+                      id: "c1",
+                      name: "readFile",
+                      params: { path: "nonexistent.txt" },
+                    },
+                  ],
+                  [{ type: "text-delta", id: "t1", delta: "done" }],
+                ]),
+              ),
+            },
+          ],
+        }),
+      ]).pipe(
+        Layer.provide(SessionStoreMemory),
+        Layer.provide(cryptoWeb),
+        Layer.provide(
+          ExecutionWorld.memory({
+            root: "/virtual-workspace",
+            files: {},
+          }),
+        ),
+        Layer.provide(NodePath.layer),
+      ),
+    ),
+  ),
+)
+
 it.effect(
-  "ExecutionWorld.homestead: Git worktree isolated ExecutionWorld creates and removes worktree on scope close",
+  "ExecutionWorld.worktree: Git worktree isolated ExecutionWorld creates and removes worktree on scope close",
   () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
@@ -247,7 +300,7 @@ it.effect(
 
       const worktreeDir = path.join(baseRepo, ".roop", "worktrees", "wt-test")
 
-      // Run agent inside homestead worktree scoped to this block
+      // Run agent inside worktree scoped to this block
       yield* Effect.scoped(
         Effect.gen(function* () {
           const agentLayer = AgentPlugins([
@@ -287,7 +340,7 @@ it.effect(
             Layer.provide(SessionStoreMemory),
             Layer.provide(cryptoWeb),
             Layer.provide(
-              ExecutionWorld.homestead({
+              ExecutionWorld.worktree({
                 baseRepo,
                 worktreeDir,
               }),
@@ -323,3 +376,21 @@ it.effect(
       assert.strictEqual(yield* fs.exists(worktreeDir), false)
     }).pipe(Effect.scoped, Effect.provide(nodePlatform)),
 )
+
+it.effect(
+  "ExecutionWorld.worktree: fails with WorktreeError containing git error output when creation fails",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const emptyDir = yield* fs.makeTempDirectoryScoped({ prefix: "roop-not-git-" })
+
+      const layer = ExecutionWorld.worktree({
+        baseRepo: emptyDir,
+      }).pipe(Layer.provide(nodePlatform))
+
+      const result = yield* Layer.build(layer).pipe(Effect.scoped, Effect.flip)
+      assert.strictEqual(result._tag, "WorktreeError")
+      assert.match(result.message, /Failed to create git worktree/)
+    }).pipe(Effect.scoped, Effect.provide(nodePlatform)),
+)
+

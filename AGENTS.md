@@ -13,7 +13,7 @@ Capability seams follow a strict three-role discipline:
 2. Consumer: Tools and handlers declare the service in `dependencies` and yield it at runtime (e.g.
    `CodingTools` depends on `ExecutionWorld`).
 3. Provider: Composition layers provide the capability (e.g. `ExecutionWorld.layer` + Node platform
-   layers, Homestead worktree layers, or in-memory test mocks). This guarantees that swapping
+   layers, Git worktree layers, or in-memory test mocks). This guarantees that swapping
    execution environments (Node, subagent worktrees, remote sandboxes) is an atomic 1-line layer
    swap. packages/coding-harness is the example: coding tools + a CLI that talks to the agent over
    Effect RPC (server + client modes).

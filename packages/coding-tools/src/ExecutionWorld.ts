@@ -4,9 +4,9 @@ import {
   FileSystem,
   Layer,
   Path,
+  PlatformError,
   Random,
   Schema,
-  Scope,
   Sink,
   Stream,
 } from "effect"
@@ -21,7 +21,7 @@ export class PathEscapesError extends Schema.TaggedErrorClass<PathEscapesError>(
   },
 ) {}
 
-export class HomesteadError extends Schema.TaggedErrorClass<HomesteadError>()("HomesteadError", {
+export class WorktreeError extends Schema.TaggedErrorClass<WorktreeError>()("WorktreeError", {
   message: Schema.String,
   exitCode: Schema.Finite,
 }) {}
@@ -131,14 +131,21 @@ export class ExecutionWorld extends Context.Service<ExecutionWorld, ExecutionWor
         }
 
         const mockFileSystem = FileSystem.makeNoop({
-          readFileString: (target: string) =>
-            Effect.sync(() => {
-              const content = files.get(target)
-              if (content === undefined) {
-                throw new Error(`file not found: ${target}`)
-              }
-              return content
-            }),
+          readFileString: (target: string) => {
+            const content = files.get(target)
+            if (content === undefined) {
+              return Effect.fail(
+                PlatformError.systemError({
+                  _tag: "NotFound",
+                  module: "FileSystem",
+                  method: "readFileString",
+                  pathOrDescriptor: target,
+                  description: `file not found: ${target}`,
+                }),
+              )
+            }
+            return Effect.succeed(content)
+          },
           writeFileString: (target: string, content: string) =>
             Effect.sync(() => {
               files.set(target, content)
@@ -197,17 +204,17 @@ export class ExecutionWorld extends Context.Service<ExecutionWorld, ExecutionWor
     )
 
   /**
-   * Homestead Git worktree isolated ExecutionWorld.
+   * Git worktree isolated ExecutionWorld.
    * Acquires a detached or branched git worktree on scope entry and cleans it up on scope exit.
    */
-  static readonly homestead = (options: {
+  static readonly worktree = (options: {
     readonly baseRepo: string
     readonly branch?: string
     readonly env?: Record<string, string | undefined>
     readonly worktreeDir?: string
   }): Layer.Layer<
     ExecutionWorld,
-    HomesteadError,
+    WorktreeError,
     FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner | Path.Path
   > =>
     Layer.effect(
@@ -216,7 +223,6 @@ export class ExecutionWorld extends Context.Service<ExecutionWorld, ExecutionWor
         const filesystem = yield* FileSystem.FileSystem
         const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
         const path = yield* Path.Path
-        const scope = yield* Scope.Scope
 
         const baseRepo = path.resolve(options.baseRepo)
         const randId = yield* Random.nextIntBetween(100000, 999999)
@@ -234,41 +240,52 @@ export class ExecutionWorld extends Context.Service<ExecutionWorld, ExecutionWor
             : ["worktree", "add", "--detach", worktreePath, "HEAD"]
 
           const handle = yield* spawner.spawn(ChildProcess.make("git", args, { cwd: baseRepo }))
-          const exitCode = yield* handle.exitCode
+          const [_stdout, stderr, exitCode] = yield* Effect.all(
+            [
+              Stream.mkString(Stream.decodeText(handle.stdout)),
+              Stream.mkString(Stream.decodeText(handle.stderr)),
+              handle.exitCode,
+            ],
+            { concurrency: "unbounded" },
+          )
           if (Number(exitCode) !== 0) {
-            const stderr = yield* Stream.mkString(Stream.decodeText(handle.stderr))
-            return yield* new HomesteadError({
+            return yield* new WorktreeError({
               exitCode: Number(exitCode),
               message: `Failed to create git worktree at ${worktreePath}: ${stderr}`,
             })
           }
+          return worktreePath
         }).pipe(
           Effect.mapError((error) =>
-            Schema.is(HomesteadError)(error)
+            Schema.is(WorktreeError)(error)
               ? error
-              : new HomesteadError({
+              : new WorktreeError({
                   exitCode: -1,
                   message: `Failed to create git worktree at ${worktreePath}: ${error instanceof Error ? error.message : String(error)}`,
                 }),
           ),
         )
 
-        yield* createWorktree
+        const cleanupWorktree = Effect.scoped(
+          Effect.gen(function* () {
+            const cleanupHandle = yield* spawner.spawn(
+              ChildProcess.make("git", ["worktree", "remove", "--force", worktreePath], {
+                cwd: baseRepo,
+              }),
+            )
+            yield* Effect.all(
+              [
+                Stream.runDrain(cleanupHandle.stdout),
+                Stream.runDrain(cleanupHandle.stderr),
+                cleanupHandle.exitCode,
+              ],
+              { concurrency: "unbounded" },
+            )
+            yield* filesystem.remove(worktreePath, { recursive: true }).pipe(Effect.ignore)
+          }),
+        ).pipe(Effect.ignore)
 
-        yield* Scope.addFinalizer(
-          scope,
-          Effect.scoped(
-            Effect.gen(function* () {
-              const cleanupHandle = yield* spawner.spawn(
-                ChildProcess.make("git", ["worktree", "remove", "--force", worktreePath], {
-                  cwd: baseRepo,
-                }),
-              )
-              yield* cleanupHandle.exitCode
-              yield* filesystem.remove(worktreePath, { recursive: true }).pipe(Effect.ignore)
-            }),
-          ).pipe(Effect.ignore),
-        )
+        yield* Effect.acquireRelease(createWorktree, () => cleanupWorktree)
 
         return ExecutionWorld.of({
           root: worktreePath,
