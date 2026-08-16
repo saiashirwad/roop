@@ -23,13 +23,14 @@ const findLastSystemMessage = (events: ReadonlyArray<SessionEvent>): string | un
 }
 
 import {
-  SessionFormatError,
   SessionAlreadyExists,
+  SessionFormatError,
+  SessionIoError,
   SessionNotFound,
   SessionStore,
   type Session,
   type SessionMeta,
-} from "./SessionStore.ts"
+} from "./SessionJournal.ts"
 
 export class RunNotFound extends Schema.TaggedErrorClass<RunNotFound>()("RunNotFound", {
   sessionId: SessionId,
@@ -56,16 +57,22 @@ export class Agent extends Context.Service<
     readonly capabilities: Effect.Effect<Capabilities>
     readonly prompt: (
       options: PromptOptions,
-    ) => Stream.Stream<AgentEvent, ModelNotFound | SessionBusy | SessionFormatError>
+    ) => Stream.Stream<
+      AgentEvent,
+      ModelNotFound | SessionBusy | SessionFormatError | SessionIoError
+    >
     readonly interrupt: (sessionId: SessionId | string) => Effect.Effect<void, RunNotFound>
     readonly history: (
       sessionId: SessionId | string,
-    ) => Effect.Effect<Session, SessionNotFound | SessionFormatError>
-    readonly sessions: Effect.Effect<ReadonlyArray<SessionMeta>>
+    ) => Effect.Effect<Session, SessionNotFound | SessionFormatError | SessionIoError>
+    readonly sessions: Effect.Effect<ReadonlyArray<SessionMeta>, SessionIoError>
     readonly fork: (
       fromSessionId: SessionId | string,
       toSessionId?: SessionId | string,
-    ) => Effect.Effect<SessionMeta, SessionNotFound | SessionFormatError | SessionAlreadyExists>
+    ) => Effect.Effect<
+      SessionMeta,
+      SessionNotFound | SessionFormatError | SessionAlreadyExists | SessionIoError
+    >
   }
 >()("roop/Agent") {}
 
@@ -130,7 +137,8 @@ export const AgentLive = <Tools extends Record<string, Tool.Any>>(
                 }
                 cleanup = clearActive(sessionId, interrupt)
 
-                const append = (event: SessionEvent) => store.append(sessionId, event)
+                const append = (event: SessionEvent) =>
+                  store.append(sessionId, event).pipe(Effect.orDie)
 
                 const stored = yield* store.load(sessionId).pipe(
                   Effect.map((session) => Option.some<Session>(session)),

@@ -1,6 +1,6 @@
 import { NodeFileSystem } from "@effect/platform-node"
 import { assert, it } from "@effect/vitest"
-import { Cause, Effect, Exit, FileSystem, Layer, Option, Schema } from "effect"
+import { Effect, Exit, FileSystem, Layer, Option, Schema } from "effect"
 import { Prompt } from "effect/unstable/ai"
 
 import { cryptoWeb } from "../src/cryptoWeb.ts"
@@ -184,12 +184,12 @@ it.layer(StoreLive)("SessionStoreFs", (it) => {
     }).pipe(Effect.provide([NodeFileSystem.layer, cryptoWeb])),
   )
 
-  // A read permission error (EACCES) on append must die as a defect, not be
+  // A read permission error (EACCES) on append fails with SessionIoError, not
   // misread as SessionNotFound and silently reset the log. No-op when
   // permission bits are not enforced (root, Windows).
   const uid = process.getuid?.()
   const permissionEnforced = uid !== undefined && uid !== 0 && process.platform !== "win32"
-  it.effect("append dies (does not reset) when the log is unreadable", () => {
+  it.effect("append fails with SessionIoError (does not reset) when the log is unreadable", () => {
     const lockedDir = `${dir}/locked`
     const LockedStore = SessionStoreFs(lockedDir).pipe(
       Layer.provideMerge(NodeFileSystem.layer),
@@ -208,7 +208,9 @@ it.layer(StoreLive)("SessionStoreFs", (it) => {
           }),
         ).pipe(Effect.onExit(() => fs.chmod(lockedDir, 0o700)))
         assert.ok(Exit.isFailure(exit))
-        assert.ok(exit.cause.reasons.some(Cause.isDieReason))
+        /* SAFETY: The exit is guaranteed to be a failure with SessionIoError when permissions are revoked. */
+        const error = Option.getOrThrow(Exit.findErrorOption(exit)) as { _tag: string }
+        assert.strictEqual(error._tag, "SessionIoError")
       }),
       LockedStore,
     )

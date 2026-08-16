@@ -7,9 +7,10 @@ import {
   Session,
   SessionAlreadyExists,
   SessionFormatError,
+  SessionIoError,
   SessionMeta,
   SessionNotFound,
-} from "@roop/agent/SessionStore.ts"
+} from "@roop/agent/SessionJournal.ts"
 import { Schema } from "effect"
 import { Rpc, RpcGroup } from "effect/unstable/rpc"
 
@@ -26,7 +27,7 @@ export const AgentRpc = RpcGroup.make(
       policy: Schema.optionalKey(RunPolicy),
     },
     success: AgentEvent,
-    error: Schema.Union([ModelNotFound, SessionBusy, SessionFormatError]),
+    error: Schema.Union([ModelNotFound, SessionBusy, SessionFormatError, SessionIoError]),
     stream: true,
   }),
   Rpc.make("Interrupt", {
@@ -41,10 +42,11 @@ export const AgentRpc = RpcGroup.make(
       sessionId: Schema.String,
     },
     success: Session,
-    error: Schema.Union([SessionNotFound, SessionFormatError]),
+    error: Schema.Union([SessionNotFound, SessionFormatError, SessionIoError]),
   }),
   Rpc.make("ListSessions", {
     success: Schema.Array(SessionMeta),
+    error: SessionIoError,
   }),
   Rpc.make("ForkSession", {
     payload: {
@@ -52,6 +54,11 @@ export const AgentRpc = RpcGroup.make(
       toSessionId: Schema.optionalKey(Schema.String),
     },
     success: SessionMeta,
-    error: Schema.Union([SessionNotFound, SessionFormatError, SessionAlreadyExists]),
+    error: Schema.Union([
+      SessionNotFound,
+      SessionFormatError,
+      SessionAlreadyExists,
+      SessionIoError,
+    ]),
   }),
 )

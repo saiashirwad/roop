@@ -20,6 +20,7 @@
     "./RunPolicy.ts": "./src/RunPolicy.ts",
     "./SessionEvent.ts": "./src/SessionEvent.ts",
     "./SessionId.ts": "./src/SessionId.ts",
+    "./SessionJournal.ts": "./src/SessionJournal.ts",
     "./SessionStore.ts": "./src/SessionStore.ts",
     "./Skills.ts": "./src/Skills.ts",
     "./Testing.ts": "./src/Testing.ts",
