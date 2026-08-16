@@ -6,9 +6,11 @@ import {
   Effect,
   FileSystem,
   Layer,
+  Option,
   PlatformError,
   Ref,
   Schema,
+  Semaphore,
 } from "effect"
 import { Prompt } from "effect/unstable/ai"
 
@@ -29,6 +31,11 @@ export class SessionFormatError extends Schema.TaggedErrorClass<SessionFormatErr
     sessionId: Schema.String,
     message: Schema.String,
   },
+) {}
+
+export class SessionAlreadyExists extends Schema.TaggedErrorClass<SessionAlreadyExists>()(
+  "SessionAlreadyExists",
+  { sessionId: Schema.String },
 ) {}
 
 export const Session = Schema.Struct({
@@ -73,6 +80,11 @@ const newSession = (sessionId: string, now: number): Session => ({
   updatedAt: now,
 })
 
+type MemoryForkResult =
+  | { readonly _tag: "missing" }
+  | { readonly _tag: "exists" }
+  | { readonly _tag: "ok"; readonly meta: SessionMeta }
+
 /** Decode a serialized session and reject anything this reader cannot trust. */
 const decodeSession = (
   sessionId: string,
@@ -87,6 +99,14 @@ const decodeSession = (
         }),
     ),
     Effect.flatMap((session) => {
+      if (session.id !== sessionId) {
+        return Effect.fail(
+          new SessionFormatError({
+            sessionId,
+            message: `session id ${JSON.stringify(session.id)} does not match requested id ${JSON.stringify(sessionId)}`,
+          }),
+        )
+      }
       if (session.header.version > SESSION_FORMAT_VERSION) {
         return Effect.fail(
           new SessionFormatError({
@@ -111,7 +131,7 @@ export class SessionStore extends Context.Service<
     readonly fork: (
       fromSessionId: string,
       toSessionId: string,
-    ) => Effect.Effect<SessionMeta, SessionLoadError>
+    ) => Effect.Effect<SessionMeta, SessionLoadError | SessionAlreadyExists>
   }
 >()("roop/SessionStore") {}
 
@@ -158,19 +178,31 @@ export const SessionStoreMemory = Layer.effect(
       fork: (fromSessionId, toSessionId) =>
         Effect.gen(function* () {
           const now = yield* Clock.currentTimeMillis
-          const map = yield* Ref.get(sessions)
-          const source = map.get(fromSessionId)
-          if (source === undefined) {
+          const result = yield* Ref.modify(
+            sessions,
+            (map): readonly [MemoryForkResult, Map<string, Session>] => {
+              const source = map.get(fromSessionId)
+              if (source === undefined) return [{ _tag: "missing" } as const, map]
+              if (map.has(toSessionId)) return [{ _tag: "exists" } as const, map]
+              const forked: Session = {
+                id: toSessionId,
+                header: { version: SESSION_FORMAT_VERSION, createdAt: now },
+                events: [...source.events],
+                updatedAt: now,
+              }
+              return [
+                { _tag: "ok", meta: metaOf(forked) } as const,
+                new Map(map).set(toSessionId, forked),
+              ]
+            },
+          )
+          if (result._tag === "missing") {
             return yield* new SessionNotFound({ sessionId: fromSessionId })
           }
-          const forked: Session = {
-            id: toSessionId,
-            header: { version: SESSION_FORMAT_VERSION, createdAt: now },
-            events: [...source.events],
-            updatedAt: now,
+          if (result._tag === "exists") {
+            return yield* new SessionAlreadyExists({ sessionId: toSessionId })
           }
-          yield* Ref.update(sessions, (m) => new Map(m).set(toSessionId, forked))
-          return metaOf(forked)
+          return result.meta
         }),
     })
   }),
@@ -184,6 +216,16 @@ export const SessionStoreFs = (
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const crypto = yield* Crypto.Crypto
+      // This lock is intentionally runtime-local. Writers in another runtime still
+      // need an external transactional store or file locking primitive.
+      const appendLocks = new Map<string, Semaphore.Semaphore>()
+      const lockFor = (sessionId: string) => {
+        const existing = appendLocks.get(sessionId)
+        if (existing !== undefined) return existing
+        const lock = Semaphore.makeUnsafe(1)
+        appendLocks.set(sessionId, lock)
+        return lock
+      }
       yield* fs.makeDirectory(dir, { recursive: true }).pipe(Effect.orDie)
       const file = (sessionId: string) => `${dir}/${encodeURIComponent(sessionId)}.json`
 
@@ -226,28 +268,38 @@ export const SessionStoreFs = (
           Effect.flatMap((json) => decodeSession(sessionId, json)),
         )
 
+      const exists = (sessionId: string): Effect.Effect<boolean> =>
+        fs.readFileString(file(sessionId)).pipe(
+          Effect.map(() => true),
+          Effect.catchTag("PlatformError", (error) =>
+            isFileNotFound(error) ? Effect.succeed(false) : Effect.die(error),
+          ),
+        )
+
       return SessionStore.of({
         append: (sessionId, event) =>
-          Effect.gen(function* () {
-            // Only a genuinely missing log starts a new session; a corrupt log
-            // (SessionFormatError) or IO trouble dies rather than being
-            // mistaken for "no such session" and silently resetting the log.
-            const session = yield* read(sessionId).pipe(
-              Effect.catchIf(
-                (error): error is SessionNotFound => error._tag === "SessionNotFound",
-                () => Effect.map(Clock.currentTimeMillis, (now) => newSession(sessionId, now)),
-              ),
-              Effect.orDie,
-            )
-            yield* write({
-              ...session,
-              // Appending v2 events upgrades a readable v1 log before writing;
-              // otherwise its header would falsely describe the contents.
-              header: { ...session.header, version: SESSION_FORMAT_VERSION },
-              events: [...session.events, event],
-              updatedAt: yield* Clock.currentTimeMillis,
-            })
-          }),
+          lockFor(sessionId).withPermit(
+            Effect.gen(function* () {
+              // Only a genuinely missing log starts a new session; a corrupt log
+              // (SessionFormatError) or IO trouble dies rather than being
+              // mistaken for "no such session" and silently resetting the log.
+              const session = yield* read(sessionId).pipe(
+                Effect.catchIf(
+                  (error): error is SessionNotFound => error._tag === "SessionNotFound",
+                  () => Effect.map(Clock.currentTimeMillis, (now) => newSession(sessionId, now)),
+                ),
+                Effect.orDie,
+              )
+              yield* write({
+                ...session,
+                // Appending v2 events upgrades a readable v1 log before writing;
+                // otherwise its header would falsely describe the contents.
+                header: { ...session.header, version: SESSION_FORMAT_VERSION },
+                events: [...session.events, event],
+                updatedAt: yield* Clock.currentTimeMillis,
+              })
+            }),
+          ),
         deriveMessages: (sessionId) =>
           Effect.map(read(sessionId), (session) => deriveMessages(session.events)),
         load: read,
@@ -256,7 +308,12 @@ export const SessionStoreFs = (
             Effect.forEach(
               entries.filter((entry) => entry.endsWith(".json")),
               (entry) => {
-                const sessionId = decodeURIComponent(entry.replace(/\.json$/, ""))
+                let sessionId: string
+                try {
+                  sessionId = decodeURIComponent(entry.replace(/\.json$/, ""))
+                } catch {
+                  return Effect.succeed(Option.none<Session>())
+                }
                 return read(sessionId).pipe(
                   // A missing file is normal (deleted mid-listing) and stays
                   // silent; anything else (e.g. a newer format version)
@@ -281,18 +338,23 @@ export const SessionStoreFs = (
           Effect.orDie,
         ),
         fork: (fromSessionId, toSessionId) =>
-          Effect.gen(function* () {
-            const now = yield* Clock.currentTimeMillis
-            const source = yield* read(fromSessionId)
-            const forked: Session = {
-              id: toSessionId,
-              header: { version: SESSION_FORMAT_VERSION, createdAt: now },
-              events: [...source.events],
-              updatedAt: now,
-            }
-            yield* write(forked)
-            return metaOf(forked)
-          }),
+          lockFor(toSessionId).withPermit(
+            Effect.gen(function* () {
+              const now = yield* Clock.currentTimeMillis
+              const source = yield* read(fromSessionId)
+              if (yield* exists(toSessionId)) {
+                return yield* new SessionAlreadyExists({ sessionId: toSessionId })
+              }
+              const forked: Session = {
+                id: toSessionId,
+                header: { version: SESSION_FORMAT_VERSION, createdAt: now },
+                events: [...source.events],
+                updatedAt: now,
+              }
+              yield* write(forked)
+              return metaOf(forked)
+            }),
+          ),
       })
     }),
   )

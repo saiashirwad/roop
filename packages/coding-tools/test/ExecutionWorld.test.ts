@@ -29,6 +29,7 @@ it.effect("CodingTools.edit: applies targeted replacements and validates uniquen
       agent.prompt({ prompt: "edit test", sessionId: "s-edit" }),
     ).pipe(Effect.map((chunk) => [...chunk]))
 
+    /* SAFETY: the filter checks the discriminant before narrowing this test fixture. */
     const toolResults = events.filter((e: any) => e._tag === "ToolResult") as ReadonlyArray<any>
     assert.strictEqual(toolResults.length, 4)
 
@@ -95,7 +96,7 @@ it.effect("CodingTools.edit: applies targeted replacements and validates uniquen
                       type: "tool-call",
                       id: "e4",
                       name: "edit",
-                      params: { path: "code.ts", oldText: "dup", newText: "fixed" },
+                      params: { path: "code.ts", oldText: "aba", newText: "fixed" },
                     },
                   ],
                   [{ type: "text-delta", id: "t1", delta: "done" }],
@@ -111,7 +112,7 @@ it.effect("CodingTools.edit: applies targeted replacements and validates uniquen
           ExecutionWorld.memory({
             root: "/virtual",
             files: {
-              "/virtual/code.ts": "const x = 1\nconst y = 2\nconst z = 3\ndup\ndup\n",
+              "/virtual/code.ts": "const x = 1\nconst y = 2\nconst z = 3\nababa\n",
             },
           }),
         ),
@@ -128,26 +129,31 @@ it.effect("CodingTools.find and grep: searches workspace file paths and line con
       agent.prompt({ prompt: "search test", sessionId: "s-search" }),
     ).pipe(Effect.map((chunk) => [...chunk]))
 
+    /* SAFETY: the filter checks the discriminant before narrowing this test fixture. */
     const toolResults = events.filter((e: any) => e._tag === "ToolResult") as ReadonlyArray<any>
-    assert.strictEqual(toolResults.length, 3)
+    assert.strictEqual(toolResults.length, 4)
 
-    // Find 1: glob find
+    // listFiles resolves entries relative to its nested target and omits ignored trees.
     assert.strictEqual(toolResults[0].isFailure, false)
     assert.deepStrictEqual(toolResults[0].result.files, ["src/index.ts", "src/util.ts"])
 
-    // Find 2: substring find
+    // Find 1: glob find
     assert.strictEqual(toolResults[1].isFailure, false)
-    assert.deepStrictEqual(toolResults[1].result.files, ["src/util.ts"])
+    assert.deepStrictEqual(toolResults[1].result.files, ["src/index.ts", "src/util.ts"])
+
+    // Find 2: substring find
+    assert.strictEqual(toolResults[2].isFailure, false)
+    assert.deepStrictEqual(toolResults[2].result.files, ["src/util.ts"])
 
     // Grep: content grep with line numbers
-    assert.strictEqual(toolResults[2].isFailure, false)
-    assert.strictEqual(toolResults[2].result.totalMatches, 2)
-    assert.deepStrictEqual(toolResults[2].result.matches[0], {
+    assert.strictEqual(toolResults[3].isFailure, false)
+    assert.strictEqual(toolResults[3].result.totalMatches, 2)
+    assert.deepStrictEqual(toolResults[3].result.matches[0], {
       file: "src/index.ts",
       line: 1,
       content: "export const hello = 'world'",
     })
-    assert.deepStrictEqual(toolResults[2].result.matches[1], {
+    assert.deepStrictEqual(toolResults[3].result.matches[1], {
       file: "src/util.ts",
       line: 2,
       content: "export const world = 'hello'",
@@ -168,9 +174,17 @@ it.effect("CodingTools.find and grep: searches workspace file paths and line con
                   [
                     {
                       type: "tool-call",
+                      id: "l1",
+                      name: "listFiles",
+                      params: { path: "src" },
+                    },
+                  ],
+                  [
+                    {
+                      type: "tool-call",
                       id: "f1",
                       name: "find",
-                      params: { pattern: "*.ts" },
+                      params: { pattern: "*.ts", path: "src" },
                     },
                   ],
                   [
@@ -178,7 +192,7 @@ it.effect("CodingTools.find and grep: searches workspace file paths and line con
                       type: "tool-call",
                       id: "f2",
                       name: "find",
-                      params: { pattern: "util" },
+                      params: { pattern: "util", path: "src" },
                     },
                   ],
                   [
@@ -186,7 +200,7 @@ it.effect("CodingTools.find and grep: searches workspace file paths and line con
                       type: "tool-call",
                       id: "g1",
                       name: "grep",
-                      params: { pattern: "export const" },
+                      params: { pattern: "export const", path: "src" },
                     },
                   ],
                   [{ type: "text-delta", id: "t1", delta: "done" }],
@@ -204,6 +218,8 @@ it.effect("CodingTools.find and grep: searches workspace file paths and line con
             files: {
               "/workspace/src/index.ts": "export const hello = 'world'\nconsole.log('hi')",
               "/workspace/src/util.ts": "// helper\nexport const world = 'hello'",
+              "/workspace/src/node_modules/ignored.ts": "export const ignored = true",
+              "/workspace/src/.roop/cache.ts": "export const ignored = true",
               "/workspace/README.md": "# Readme",
             },
           }),
@@ -222,6 +238,7 @@ it.effect("ExecutionWorld.local: Node-backed ExecutionWorld executes file and ba
     ).pipe(Effect.map((chunk) => [...chunk]))
 
     /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
+    /* SAFETY: the filter checks the discriminant before narrowing this test fixture. */
     const toolResults = events.filter((e: any) => e._tag === "ToolResult") as ReadonlyArray<any>
     assert.strictEqual(toolResults.length, 3)
     assert.deepStrictEqual(toolResults[0].result, { path: "test.txt" })
@@ -341,6 +358,111 @@ it.effect("ExecutionWorld: prevents path escaping outside workspace root", () =>
   ),
 )
 
+it.effect("ExecutionWorld: rejects symlink escapes for file and search tools", () =>
+  Effect.gen(function* () {
+    const agent = yield* Agent
+    const events = yield* Stream.runCollect(
+      agent.prompt({ prompt: "symlink escape", sessionId: "s-symlink-escape" }),
+    ).pipe(Effect.map((chunk) => [...chunk]))
+
+    /* SAFETY: the filter checks the discriminant before narrowing this test fixture. */
+    const toolResults = events.filter((e: any) => e._tag === "ToolResult") as ReadonlyArray<any>
+    assert.strictEqual(toolResults.length, 6)
+    for (const result of toolResults) {
+      assert.strictEqual(result.isFailure, true)
+      assert.match(result.result.message, /path escapes the workspace root/)
+    }
+  }).pipe(
+    Effect.scoped,
+    Effect.provide(
+      Layer.unwrap(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const path = yield* Path.Path
+          const root = yield* fs.makeTempDirectoryScoped({ prefix: "roop-symlink-root-" })
+          const outside = yield* fs.makeTempDirectoryScoped({ prefix: "roop-symlink-outside-" })
+          yield* fs.writeFileString(path.join(outside, "secret.txt"), "outside")
+          yield* fs.symlink(outside, path.join(root, "link"))
+          return AgentPlugins([
+            CodingTools(),
+            Plugin({
+              name: "model",
+              models: [
+                {
+                  id: "fake",
+                  provider: "test",
+                  layer: Layer.effect(
+                    LanguageModel.LanguageModel,
+                    scripted([
+                      [
+                        {
+                          type: "tool-call",
+                          id: "s1",
+                          name: "readFile",
+                          params: { path: "link/secret.txt" },
+                        },
+                      ],
+                      [
+                        {
+                          type: "tool-call",
+                          id: "s2",
+                          name: "writeFile",
+                          params: { path: "link/new.txt", content: "escape" },
+                        },
+                      ],
+                      [
+                        {
+                          type: "tool-call",
+                          id: "s3",
+                          name: "edit",
+                          params: {
+                            path: "link/secret.txt",
+                            oldText: "outside",
+                            newText: "changed",
+                          },
+                        },
+                      ],
+                      [
+                        {
+                          type: "tool-call",
+                          id: "s4",
+                          name: "listFiles",
+                          params: { path: "link" },
+                        },
+                      ],
+                      [
+                        {
+                          type: "tool-call",
+                          id: "s5",
+                          name: "find",
+                          params: { path: "link", pattern: "*.txt" },
+                        },
+                      ],
+                      [
+                        {
+                          type: "tool-call",
+                          id: "s6",
+                          name: "grep",
+                          params: { path: "link", pattern: "outside" },
+                        },
+                      ],
+                      [{ type: "text-delta", id: "t1", delta: "done" }],
+                    ]),
+                  ),
+                },
+              ],
+            }),
+          ]).pipe(
+            Layer.provide(SessionStoreMemory),
+            Layer.provide(cryptoWeb),
+            Layer.provide(ExecutionWorld.local(root)),
+          )
+        }),
+      ).pipe(Layer.provideMerge(nodePlatform)),
+    ),
+  ),
+)
+
 it.effect("ExecutionWorld.memory: runs in-memory without host disk access", () =>
   Effect.gen(function* () {
     const agent = yield* Agent
@@ -421,6 +543,7 @@ it.effect("ExecutionWorld.memory: fails missing files through error channel as T
       agent.prompt({ prompt: "read missing file", sessionId: "s-memory-missing" }),
     ).pipe(Effect.map((chunk) => [...chunk]))
 
+    /* SAFETY: the filter checks the discriminant before narrowing this test fixture. */
     const toolResults = events.filter((e: any) => e._tag === "ToolResult") as ReadonlyArray<any>
     assert.strictEqual(toolResults.length, 1)
     assert.strictEqual(toolResults[0].isFailure, true)
@@ -670,9 +793,18 @@ it.effect(
         ).pipe(Effect.map((chunk) => [...chunk]))
       }).pipe(Effect.provide(parentLayer))
 
+      /* SAFETY: the filter checks the discriminant before narrowing this test fixture. */
       const toolResults = events.filter((e: any) => e._tag === "ToolResult") as ReadonlyArray<any>
       assert.strictEqual(toolResults.length, 1)
       assert.deepStrictEqual(toolResults[0].result, { summary: "subagent finished task" })
+
+      const childWrites = events
+        .filter((e: any) => e._tag === "Subagent")
+        .map((e: any) => e.event)
+        .filter((e: any) => e._tag === "ToolResult" && e.name === "writeFile")
+      assert.strictEqual(childWrites.length, 1)
+      assert.strictEqual(childWrites[0].isFailure, false)
+      assert.deepStrictEqual(childWrites[0].result, { path: "isolated-worktree.txt" })
 
       // File created in worktree should not exist in parent base repo
       assert.strictEqual(yield* fs.exists(path.join(baseRepo, "isolated-worktree.txt")), false)
@@ -685,5 +817,3 @@ it.effect(
       }
     }).pipe(Effect.scoped, Effect.provide(nodePlatform)),
 )
-
-

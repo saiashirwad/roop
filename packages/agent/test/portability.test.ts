@@ -3,7 +3,10 @@ import { assert, it } from "@effect/vitest"
 import { Effect, FileSystem, Path } from "effect"
 
 const allowed = (specifier: string) =>
-  specifier === "effect" || specifier.startsWith("effect/unstable/ai") || specifier.startsWith(".")
+  specifier === "effect" ||
+  specifier === "effect/unstable/ai" ||
+  specifier.startsWith("effect/unstable/ai/") ||
+  specifier.startsWith(".")
 
 it.effect("portability: agent core imports only effect and effect/unstable/ai", () =>
   Effect.gen(function* () {

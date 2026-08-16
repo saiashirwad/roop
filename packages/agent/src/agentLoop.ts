@@ -8,6 +8,7 @@ import type { AgentHooksInterface, RunContext } from "./AgentHooks.ts"
 import type { SessionEvent } from "./SessionEvent.ts"
 
 export type ErasedToolkit = Toolkit.WithHandler<Record<string, Tool.Any>>
+type ToolCallParameters = Tool.Parameters<Tool.Any>
 
 /** Toolkit shape used only to keep `Tool.Any` handler services off Effect channels. */
 type ClosedToolkit = Toolkit.WithHandler<Record<string, never>>
@@ -32,7 +33,15 @@ type LoopOptions = {
   readonly hooks: AgentHooksInterface
 }
 
-const toEvent = (part: Response.StreamPart<Record<string, Tool.Any>>): AgentEvent | undefined => {
+const toEvent = (
+  part: Response.StreamPart<Record<string, Tool.Any>>,
+  onToolCall?: (
+    name: string,
+    params: ToolCallParameters,
+    id: string,
+    providerExecuted: boolean,
+  ) => void,
+): AgentEvent | undefined => {
   switch (part.type) {
     case "text-delta": {
       return { _tag: "TextDelta", delta: part.delta }
@@ -41,16 +50,29 @@ const toEvent = (part: Response.StreamPart<Record<string, Tool.Any>>): AgentEven
       return { _tag: "ReasoningDelta", delta: part.delta }
     }
     case "tool-call": {
-      return { _tag: "ToolCall", id: part.id, name: part.name, params: part.params }
+      /* SAFETY: Every tool-call part is decoded against the toolkit's parameter schema. */
+      onToolCall?.(part.name, part.params as ToolCallParameters, part.id, part.providerExecuted)
+      return {
+        _tag: "ToolCall",
+        id: part.id,
+        name: part.name,
+        params: part.params,
+        providerExecuted: part.providerExecuted,
+      }
     }
     case "tool-result": {
       if (part.preliminary === true) return undefined
+      const providerExecuted =
+        "providerExecuted" in part && typeof part.providerExecuted === "boolean"
+          ? part.providerExecuted
+          : undefined
       return {
         _tag: "ToolResult",
         id: part.id,
         name: part.name,
         isFailure: part.isFailure,
         result: part.encodedResult,
+        ...(providerExecuted === undefined ? undefined : { providerExecuted }),
       }
     }
     default: {
@@ -65,6 +87,15 @@ const appendStepEvents = (
   outcome: ReadonlyArray<Response.StreamPart<Record<string, Tool.Any>>>,
 ): Effect.Effect<void> => {
   const content = Prompt.fromResponseParts(outcome).content
+  const providerExecutedByResultId = new Map(
+    outcome.flatMap((part) =>
+      part.type === "tool-result" &&
+      "providerExecuted" in part &&
+      typeof part.providerExecuted === "boolean"
+        ? [[part.id, part.providerExecuted] as const]
+        : [],
+    ),
+  )
   const events: Array<SessionEvent> = []
   for (const message of content) {
     if (message.role === "assistant") {
@@ -74,18 +105,29 @@ const appendStepEvents = (
       if (parts.length > 0) events.push({ _tag: "assistant/message", parts })
       for (const part of message.content) {
         if (part.type === "tool-call")
-          events.push({ _tag: "tool/call", id: part.id, name: part.name, params: part.params })
+          events.push({
+            _tag: "tool/call",
+            id: part.id,
+            name: part.name,
+            params: part.params,
+            providerExecuted: part.providerExecuted,
+          })
       }
     } else if (message.role === "tool") {
       for (const part of message.content) {
-        if (part.type === "tool-result")
+        if (part.type === "tool-result") {
+          const providerExecuted = providerExecutedByResultId.get(part.id)
+          /* Response's decoded result carries this field; preserve it even
+           * though Prompt's model-facing result part does not in beta.97. */
           events.push({
             _tag: "tool/result",
             id: part.id,
             name: part.name,
             isFailure: part.isFailure,
             result: part.result,
+            ...(providerExecuted === undefined ? undefined : { providerExecuted }),
           })
+        }
       }
     }
   }
@@ -98,29 +140,31 @@ const interceptModel = (
   hooks: AgentHooksInterface,
   context: () => RunContext,
   append: (event: SessionEvent) => Effect.Effect<void>,
-): LanguageModel.Service => ({
-  ...model,
+): LanguageModel.Service => {
   /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
-  streamText: ((request: LanguageModel.GenerateTextOptions<Record<string, Tool.Any>>) =>
-    Stream.unwrap(
-      Effect.gen(function* () {
-        const admitted = yield* hooks.beforeRequest(context(), {
-          prompt: request.prompt,
-          toolChoice: request.toolChoice,
-        })
-        yield* append({ _tag: "model/request", request: admitted })
-        /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
-        return model.streamText({
-          prompt: admitted.prompt,
-          toolChoice: admitted.toolChoice,
-          // Tool execution and concurrency are loop-owned; hook output cannot
-          // disable or replace either control.
-          toolkit: request.toolkit,
-          concurrency: request.concurrency,
-        } as never)
-      }),
-    )) as LanguageModel.Service["streamText"],
-})
+  return {
+    ...model,
+    streamText: ((request: LanguageModel.GenerateTextOptions<Record<string, Tool.Any>>) =>
+      Stream.unwrap(
+        Effect.gen(function* () {
+          const admitted = yield* hooks.beforeRequest(context(), {
+            prompt: request.prompt,
+            toolChoice: request.toolChoice,
+          })
+          yield* append({ _tag: "model/request", request: admitted })
+          /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
+          return model.streamText({
+            prompt: admitted.prompt,
+            toolChoice: admitted.toolChoice,
+            // Tool execution and concurrency are loop-owned; hook output cannot
+            // disable or replace either control.
+            toolkit: request.toolkit,
+            concurrency: request.concurrency,
+          } as never)
+        }),
+      )) as LanguageModel.Service["streamText"],
+  }
+}
 
 /**
  * The denial envelope effect/unstable/ai itself uses for refused tool calls;
@@ -136,32 +180,52 @@ const interceptToolkit = (
   toolkit: ErasedToolkit,
   hooks: AgentHooksInterface,
   context: () => RunContext,
-): ErasedToolkit => ({
-  tools: toolkit.tools,
+  emit: (event: AgentEvent) => Effect.Effect<void>,
+  nextToolCallToken: (name: string, params: ToolCallParameters) => string,
+  bufferSubagent: (token: string, event: Extract<AgentEvent, { _tag: "Subagent" }>) => void,
+): ErasedToolkit => {
   /* SAFETY: The intercept preserves ErasedToolkit.handle while inserting hook seams. */
-  handle: ((name: string, params: Tool.Parameters<Tool.Any>) =>
-    Effect.gen(function* () {
-      const admitted = yield* hooks.beforeToolExecute(context(), { name, params })
-      const results = yield* toolkit.handle(name, admitted.params)
-      return Stream.tap(results, (result) =>
-        result.preliminary === true
-          ? Effect.void
-          : hooks.afterToolExecute(
-              context(),
-              { name, params: admitted.params },
-              result.isFailure === true,
+  return {
+    tools: toolkit.tools,
+    handle: ((name: string, params: ToolCallParameters) =>
+      Effect.gen(function* () {
+        // Allocate the token before hooks run. LanguageModel starts concurrent
+        // handlers in provider-part order, but hook effects may complete out of
+        // order; the token must represent invocation order, not hook timing.
+        const token = nextToolCallToken(name, params)
+        const admitted = yield* hooks.beforeToolExecute(context(), { name, params })
+        const results = yield* toolkit.handle(name, admitted.params).pipe(
+          Effect.provideService(AgentEmit, {
+            emit: (event) => {
+              if (event._tag === "Subagent") {
+                bufferSubagent(token, event)
+                return Effect.void
+              }
+              return emit(event)
+            },
+            toolCallId: token,
+          }),
+        )
+        return Stream.tap(results, (result) =>
+          result.preliminary === true
+            ? Effect.void
+            : hooks.afterToolExecute(
+                context(),
+                { name, params: admitted.params },
+                result.isFailure === true,
+              ),
+        )
+      }).pipe(
+        Effect.catchTag("ToolRejected", (rejection) =>
+          Effect.succeed(
+            Stream.make(executionDenied(rejection.reason)).pipe(
+              Stream.tap(() => hooks.afterToolExecute(context(), { name, params }, true)),
             ),
-      )
-    }).pipe(
-      Effect.catchTag("ToolRejected", (rejection) =>
-        Effect.succeed(
-          Stream.make(executionDenied(rejection.reason)).pipe(
-            Stream.tap(() => hooks.afterToolExecute(context(), { name, params }, true)),
           ),
         ),
-      ),
-    )) as ErasedToolkit["handle"],
-})
+      )) as ErasedToolkit["handle"],
+  }
+}
 
 export const runLoop = (options: LoopOptions): Stream.Stream<AgentEvent> =>
   Stream.callback<AgentEvent>((queue) => {
@@ -176,6 +240,7 @@ export const runLoop = (options: LoopOptions): Stream.Stream<AgentEvent> =>
       const hooks = options.hooks
       let turn = 0
       let totalSteps = 0
+      let toolCallSequence = 0
 
       // A turn is one drain of admitted input; a step is one model request
       // plus its tool calls. A `turnStopping` continuation starts a new turn.
@@ -217,11 +282,29 @@ export const runLoop = (options: LoopOptions): Stream.Stream<AgentEvent> =>
             yield* options.beforeRequest()
           }
 
+          const toolCallBindings: Array<{ readonly token: string; id?: string | undefined }> = []
+          const providerToolCallIds: Array<string> = []
+          const bufferedSubagents: Array<{
+            readonly token: string
+            readonly event: Extract<AgentEvent, { _tag: "Subagent" }>
+          }> = []
+          const toolkit = yield* options.toolkit
           const stepStream = options.chat
             .streamText({
               prompt: [],
               toolkit: asClosedToolkit(
-                interceptToolkit(yield* options.toolkit, hooks, () => context),
+                interceptToolkit(
+                  toolkit,
+                  hooks,
+                  () => context,
+                  emit,
+                  (name, _params) => {
+                    const token = `${options.sessionId}:${turn}:${step}:${name}:${++toolCallSequence}`
+                    toolCallBindings.push({ token, id: providerToolCallIds.shift() })
+                    return token
+                  },
+                  (token, event) => bufferedSubagents.push({ token, event }),
+                ),
               ),
               concurrency: "unbounded",
             })
@@ -232,7 +315,17 @@ export const runLoop = (options: LoopOptions): Stream.Stream<AgentEvent> =>
               ),
               Stream.provideService(AgentEmit, { emit }),
               Stream.tap((part) => {
-                const event = toEvent(part)
+                const event = toEvent(part, (name, _params, id, providerExecuted) => {
+                  // LanguageModel skips toolkit.handle for provider-executed
+                  // calls and unknown tools; neither gets an invocation token.
+                  if (providerExecuted || toolkit.tools[name] === undefined) return
+                  const binding = toolCallBindings.find((candidate) => candidate.id === undefined)
+                  if (binding !== undefined) {
+                    binding.id = id
+                  } else {
+                    providerToolCallIds.push(id)
+                  }
+                })
                 return event === undefined ? Effect.void : emit(event)
               }),
               Stream.runCollect,
@@ -249,6 +342,14 @@ export const runLoop = (options: LoopOptions): Stream.Stream<AgentEvent> =>
             openStep = false
             stop = "interrupted"
             break
+          }
+
+          for (const buffered of bufferedSubagents) {
+            const actualId = toolCallBindings.find(
+              (binding) => binding.token === buffered.token,
+            )?.id
+            const { toolCallId: _token, ...event } = buffered.event
+            yield* emit(actualId === undefined ? event : { ...event, toolCallId: actualId })
           }
 
           yield* appendStepEvents(options, outcome)

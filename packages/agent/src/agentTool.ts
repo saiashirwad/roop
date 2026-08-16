@@ -58,7 +58,14 @@ export const delegation = (options: DelegationOptions) => {
         (event) =>
           Effect.gen(function* () {
             if (emit._tag === "Some") {
-              yield* emit.value.emit({ _tag: "Subagent", name: options.name, event })
+              yield* emit.value.emit({
+                _tag: "Subagent",
+                name: options.name,
+                ...(emit.value.toolCallId === undefined
+                  ? undefined
+                  : { toolCallId: emit.value.toolCallId }),
+                event,
+              })
             }
             if (event._tag === "TextDelta") summary += event.delta
             if (event._tag === "Finish") failure = failure ?? failureFor(event)

@@ -202,6 +202,45 @@ it.layer(Parent)("subagent", (it) => {
   )
 })
 
+const concurrentWorker = subagent({
+  name: "concurrent-worker",
+  description: "delegate an identical task",
+  plugins: [
+    scriptedPlugin("child-concurrent", [[{ type: "text-delta", id: "cw", delta: "child" }]]),
+  ],
+})
+
+const ConcurrentParent = AgentPlugins([
+  concurrentWorker,
+  scriptedPlugin("concurrent-parent", [
+    [
+      { type: "tool-call", id: "p1", name: "concurrent-worker", params: { task: "same" } },
+      { type: "tool-call", id: "p2", name: "concurrent-worker", params: { task: "same" } },
+    ],
+    [{ type: "text-delta", id: "cp", delta: "done" }],
+  ]),
+]).pipe(Layer.provide(SessionStoreMemory), Layer.provide(cryptoWeb))
+
+it.layer(ConcurrentParent)("concurrent subagents", (it) => {
+  it.effect("correlates identical concurrent calls with their provider ids", () =>
+    Effect.gen(function* () {
+      const agent = yield* Agent
+      const events = yield* collect(
+        agent.prompt({ prompt: "delegate twice", sessionId: "concurrent-subagents" }),
+      )
+      const nested = events.filter(
+        (event): event is Extract<(typeof events)[number], { _tag: "Subagent" }> =>
+          event._tag === "Subagent",
+      )
+      assert.strictEqual(nested.length, 4)
+      assert.deepStrictEqual(
+        nested.map((event) => event.toolCallId),
+        ["p1", "p1", "p2", "p2"],
+      )
+    }),
+  )
+})
+
 // --- issue C: scope-bound runtime registration ---
 
 const LaterTool = Tool.make("later", {

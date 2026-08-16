@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Scope } from "effect"
+import { Context, Crypto, Effect, Layer, Scope } from "effect"
 import { Toolkit } from "effect/unstable/ai"
 
 import { Agent } from "./Agent.ts"
@@ -20,35 +20,33 @@ export const subagent = <
     | Layer.Layer<any, any, LayerIn>
     | ((params: { readonly task: string }) => Layer.Layer<any, any, LayerIn>)
     | undefined
-}): Plugin<PluginRequirements<Plugins> | LayerIn> => {
+}): Plugin<PluginRequirements<Plugins> | LayerIn | Crypto.Crypto> => {
   const { tool, handler } = delegation(options)
   const toolkit = Toolkit.make(tool)
-  const makeChild = () =>
+  const makeChild = (crypto: Crypto.Crypto) =>
     AgentPlugins(options.plugins, { systemPrompt: options.systemPrompt }).pipe(
       Layer.provide(SessionStoreMemory),
+      Layer.provide(Layer.succeed(Crypto.Crypto, crypto)),
     )
   const handlers = toolkit.toLayer(
     Effect.gen(function* () {
       const context = yield* Effect.context<PluginRequirements<Plugins> | LayerIn>()
+      const crypto = yield* Crypto.Crypto
       return {
         [options.name]: (params: { readonly task: string }) =>
           Effect.scoped(
             Effect.gen(function* () {
               const scope = yield* Scope.Scope
-              const custom =
-                typeof options.layer === "function" ? options.layer(params) : options.layer
+              const custom = Layer.isLayer(options.layer) ? options.layer : options.layer?.(params)
               const contextLayer = Layer.succeedContext(context)
               const childContext =
                 custom !== undefined
-                  ? yield* Layer.buildWithScope(
-                      custom as Layer.Layer<any, any, any>,
-                      scope,
-                    ).pipe(
+                  ? yield* Layer.buildWithScope(custom, scope).pipe(
                       Effect.provide(contextLayer),
                       Effect.map((customCtx) => Context.merge(context, customCtx)),
                     )
                   : context
-              const baseChild = makeChild()
+              const baseChild = makeChild(crypto)
               const child = baseChild.pipe(Layer.provide(Layer.succeedContext(childContext)))
               const run = Effect.gen(function* () {
                 const agent = yield* Agent

@@ -1,7 +1,7 @@
 import { defineRule } from "@oxlint/plugins"
 import type { ESTree, Scope, SourceCode, Variable } from "@oxlint/plugins"
 
-const moduleMockMethods = new Set(["doMock", "mock", "unstable_mockModule"])
+const moduleMockMethods = new Set(["doMock", "mock", "setMock", "unstable_mockModule"])
 
 function resolveVariable(
   sourceCode: SourceCode,
@@ -55,6 +55,7 @@ function moduleMockCall(sourceCode: SourceCode, callee: ESTree.Expression): bool
     ? property.type === "Literal" &&
       (property.value === "doMock" ||
         property.value === "mock" ||
+        property.value === "setMock" ||
         property.value === "unstable_mockModule")
       ? property.value
       : null

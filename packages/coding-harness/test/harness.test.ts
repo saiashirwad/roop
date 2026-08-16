@@ -10,6 +10,8 @@ import { ExecutionWorld } from "@roop/coding-tools/ExecutionWorld.ts"
 import { Effect, FileSystem, Layer, Path, Stream } from "effect"
 import { LanguageModel, type Response } from "effect/unstable/ai"
 
+import { parsePort } from "../src/parsePort.ts"
+
 const agentLayer = (model: Effect.Effect<LanguageModel.Service>, root: string) =>
   AgentPlugins([
     CodingTools(),
@@ -59,6 +61,17 @@ const expectedTags = [
   "TextDelta",
   "Finish",
 ]
+
+it.effect("parsePort rejects malformed and out-of-range ports", () =>
+  Effect.gen(function* () {
+    assert.strictEqual(yield* parsePort("1"), 1)
+    assert.strictEqual(yield* parsePort("65535"), 65535)
+    for (const value of ["0", "65536", "1.5", "NaN", "-1", "0x10", "1e3", " 8080 "]) {
+      const error = yield* parsePort(value).pipe(Effect.flip)
+      assert.match(error.message, /expected an integer from 1 to 65535/)
+    }
+  }),
+)
 
 it.effect("runs writeFile, readFile, and bash through the agent", () =>
   withWorkspace((root) =>

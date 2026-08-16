@@ -39,12 +39,16 @@ export const SessionEvent = Schema.Union([
     id: Schema.String,
     name: Schema.String,
     params: Schema.Unknown,
+    // Optional for backwards compatibility with v1 logs.
+    providerExecuted: Schema.optionalKey(Schema.Boolean),
   }),
   Schema.TaggedStruct("tool/result", {
     id: Schema.String,
     name: Schema.String,
     isFailure: Schema.Boolean,
     result: Schema.Unknown,
+    // Optional for backwards compatibility with v1 logs.
+    providerExecuted: Schema.optionalKey(Schema.Boolean),
   }),
   Schema.TaggedStruct("turn/start", {}),
   Schema.TaggedStruct("turn/end", {
@@ -133,7 +137,7 @@ export const deriveMessages = (
             id: event.id,
             name: event.name,
             params: event.params,
-            providerExecuted: false,
+            providerExecuted: event.providerExecuted ?? false,
           }),
         )
         break

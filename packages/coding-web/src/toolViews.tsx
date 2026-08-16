@@ -141,7 +141,11 @@ const Todos = ({ tool }: { readonly tool: Tool }) => {
 }
 
 const statusOf = (tool: Tool) =>
-  tool.result === undefined ? styles.running : tool.isFailure === true ? styles.failed : styles.ok
+  tool.isFailure === true
+    ? styles.failed
+    : tool.result === undefined && tool.isFailure === undefined
+      ? styles.running
+      : styles.ok
 
 const activity = (items: ReadonlyArray<Item>): string => {
   const last = items.at(-1)
@@ -161,7 +165,9 @@ const activity = (items: ReadonlyArray<Item>): string => {
 
 const SubagentCard = ({ tool }: { readonly tool: Tool }) => {
   const [manual, setManual] = useState<boolean | undefined>(undefined)
-  const running = tool.result === undefined
+  // A successful Schema.Void result is undefined; isFailure is the explicit
+  // completion marker emitted by the RPC worker in that case.
+  const running = tool.result === undefined && tool.isFailure === undefined
   const open = manual ?? running
   const { summary: task } = summarizeTool(tool)
   const caption =

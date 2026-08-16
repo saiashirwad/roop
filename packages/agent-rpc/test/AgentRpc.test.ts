@@ -104,6 +104,16 @@ it.layer(AgentRpcServer.pipe(Layer.provide(TestLayer)))("AgentRpc", (it) => {
         deriveMessages(forkedHistory.events).map((message) => message.role),
         ["user", "assistant", "tool"],
       )
+
+      const duplicateFork = yield* Effect.exit(
+        client.ForkSession({ fromSessionId: "s1", toSessionId: "s1-fork" }),
+      )
+      assert.ok(Exit.isFailure(duplicateFork))
+      /* SAFETY: Exit.findErrorOption is present after the preceding failure assertion. */
+      assert.strictEqual(
+        (Option.getOrThrow(Exit.findErrorOption(duplicateFork)) as any)._tag,
+        "SessionAlreadyExists",
+      )
     }),
   )
 
@@ -120,22 +130,22 @@ it.layer(AgentRpcServer.pipe(Layer.provide(TestLayer)))("AgentRpc", (it) => {
           }),
         ),
       )
+      /* SAFETY: The invalid model id deterministically yields ModelNotFound. */
       assert.strictEqual(
-        /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
         (Option.getOrThrow(Exit.findErrorOption(modelExit)) as any)._tag,
         "ModelNotFound",
       )
 
       const interruptExit = yield* Effect.exit(client.Interrupt({ sessionId: "nope" }))
+      /* SAFETY: Interrupting the unknown session deterministically yields RunNotFound. */
       assert.strictEqual(
-        /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
         (Option.getOrThrow(Exit.findErrorOption(interruptExit)) as any)._tag,
         "RunNotFound",
       )
 
       const historyExit = yield* Effect.exit(client.GetHistory({ sessionId: "nope" }))
+      /* SAFETY: Reading the unknown session deterministically yields SessionNotFound. */
       assert.strictEqual(
-        /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
         (Option.getOrThrow(Exit.findErrorOption(historyExit)) as any)._tag,
         "SessionNotFound",
       )

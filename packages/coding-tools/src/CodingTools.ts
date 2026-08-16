@@ -3,7 +3,7 @@ import { Effect, Schema, Stream } from "effect"
 import { Tool, Toolkit } from "effect/unstable/ai"
 import { ChildProcess } from "effect/unstable/process"
 
-import { ExecutionWorld } from "./ExecutionWorld.ts"
+import { ExecutionWorld, type ExecutionWorldService } from "./ExecutionWorld.ts"
 
 export class ToolFailure extends Schema.TaggedErrorClass<ToolFailure>()("ToolFailure", {
   message: Schema.String,
@@ -18,7 +18,26 @@ const makeGrepRegex = (pattern: string, caseSensitive?: boolean): RegExp => {
   }
 }
 
-export const CodingTools = (_root?: string): Plugin<ExecutionWorld> => {
+const NonNegativeInt = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
+
+const normalizedWorkspacePath = (world: ExecutionWorldService, resolved: string): string => {
+  const root = world.root.replaceAll("\\", "/").replace(/\/+$/, "")
+  const target = resolved.replaceAll("\\", "/")
+  if (target === root) return ""
+  return target.startsWith(`${root}/`) ? target.slice(root.length + 1) : target
+}
+
+const isIgnoredWorkspacePath = (file: string): boolean =>
+  file
+    .replaceAll("\\", "/")
+    .split("/")
+    .some((segment) => segment === ".git" || segment === "node_modules" || segment === ".roop")
+
+/** Resolve an entry returned by readDirectory, which is relative to targetDir. */
+const resolveDirectoryEntry = (world: ExecutionWorldService, targetDir: string, entry: string) =>
+  world.resolvePath(`${targetDir.replace(/[\\/]$/, "")}/${entry}`)
+
+export const CodingTools = (): Plugin<ExecutionWorld> => {
   const asFailure = <A, E, R = never>(
     effect: Effect.Effect<A, E, R>,
   ): Effect.Effect<A, ToolFailure, R> =>
@@ -83,7 +102,7 @@ export const CodingTools = (_root?: string): Plugin<ExecutionWorld> => {
       parameters: Schema.Struct({
         pattern: Schema.optionalKey(Schema.String),
         path: Schema.optionalKey(Schema.String),
-        limit: Schema.optionalKey(Schema.Finite),
+        limit: Schema.optionalKey(NonNegativeInt),
       }),
       success: Schema.Struct({
         files: Schema.Array(Schema.String),
@@ -101,7 +120,7 @@ export const CodingTools = (_root?: string): Plugin<ExecutionWorld> => {
         pattern: Schema.String,
         path: Schema.optionalKey(Schema.String),
         caseSensitive: Schema.optionalKey(Schema.Boolean),
-        limit: Schema.optionalKey(Schema.Finite),
+        limit: Schema.optionalKey(NonNegativeInt),
       }),
       success: Schema.Struct({
         matches: Schema.Array(
@@ -156,8 +175,7 @@ export const CodingTools = (_root?: string): Plugin<ExecutionWorld> => {
           const world = yield* ExecutionWorld
           const file = yield* asFailure(world.resolvePath(path))
           const rawEdits =
-            edits ??
-            (oldText !== undefined && newText !== undefined ? [{ oldText, newText }] : [])
+            edits ?? (oldText !== undefined && newText !== undefined ? [{ oldText, newText }] : [])
           if (rawEdits.length === 0) {
             return yield* new ToolFailure({
               message:
@@ -170,7 +188,14 @@ export const CodingTools = (_root?: string): Plugin<ExecutionWorld> => {
             if (editItem.oldText === "") {
               return yield* new ToolFailure({ message: "oldText cannot be empty" })
             }
-            const count = content.split(editItem.oldText).length - 1
+            let count = 0
+            for (let offset = 0; ;) {
+              const index = content.indexOf(editItem.oldText, offset)
+              if (index === -1) break
+              count += 1
+              // Advance one character so overlapping occurrences are counted too.
+              offset = index + 1
+            }
             if (count === 0) {
               const preview =
                 editItem.oldText.length > 60
@@ -199,34 +224,31 @@ export const CodingTools = (_root?: string): Plugin<ExecutionWorld> => {
         Effect.gen(function* () {
           const world = yield* ExecutionWorld
           const dir = yield* asFailure(world.resolvePath(path ?? "."))
-          return yield* asFailure(
-            world.filesystem
-              .readDirectory(dir, { recursive: true })
-              .pipe(Effect.map((files) => ({ files }))),
+          const entries: ReadonlyArray<string> = yield* asFailure(
+            world.filesystem.readDirectory(dir, { recursive: true }),
           )
+          const files = yield* Effect.forEach(entries, (entry) =>
+            asFailure(resolveDirectoryEntry(world, dir, entry)).pipe(
+              Effect.map((resolved) => normalizedWorkspacePath(world, resolved)),
+            ),
+          )
+          return { files: files.filter((file) => !isIgnoredWorkspacePath(file)) }
         }),
       find: ({ pattern, path: searchPath, limit }) =>
         Effect.gen(function* () {
           const maxLimit = limit ?? 100
           const world = yield* ExecutionWorld
           const targetDir = yield* asFailure(world.resolvePath(searchPath ?? "."))
-          const rawFiles = yield* asFailure(
+          const rawFiles: ReadonlyArray<string> = yield* asFailure(
             world.filesystem.readDirectory(targetDir, { recursive: true }),
           )
-
-          const ignoredSubstrings = [
-            ".git/",
-            ".git\\",
-            "node_modules/",
-            "node_modules\\",
-            ".roop/",
-          ]
-          const filtered = rawFiles.filter(
-            (file) =>
-              !ignoredSubstrings.some(
-                (ignored) => file.startsWith(ignored) || file.includes(ignored),
-              ),
+          const entries = yield* Effect.forEach(rawFiles, (entry) =>
+            asFailure(resolveDirectoryEntry(world, targetDir, entry)).pipe(
+              Effect.map((resolved) => ({ file: normalizedWorkspacePath(world, resolved) })),
+            ),
           )
+
+          const filtered = entries.filter(({ file }) => !isIgnoredWorkspacePath(file))
 
           let matched = filtered
           if (pattern && pattern.trim() !== "") {
@@ -241,14 +263,14 @@ export const CodingTools = (_root?: string): Plugin<ExecutionWorld> => {
                   "$",
                 "i",
               )
-              matched = filtered.filter((file) => regex.test(file))
+              matched = filtered.filter(({ file }) => regex.test(file))
             } else {
-              matched = filtered.filter((file) => file.toLowerCase().includes(p))
+              matched = filtered.filter(({ file }) => file.toLowerCase().includes(p))
             }
           }
 
           const totalFiles = matched.length
-          const files = matched.slice(0, maxLimit)
+          const files = matched.slice(0, maxLimit).map(({ file }) => file)
           return {
             files,
             totalFiles,
@@ -260,30 +282,19 @@ export const CodingTools = (_root?: string): Plugin<ExecutionWorld> => {
           const maxLimit = limit ?? 100
           const world = yield* ExecutionWorld
           const targetDir = yield* asFailure(world.resolvePath(searchPath ?? "."))
-          const allFiles = yield* asFailure(
+          const allFiles: ReadonlyArray<string> = yield* asFailure(
             world.filesystem.readDirectory(targetDir, { recursive: true }),
           )
 
           const regex = makeGrepRegex(pattern, caseSensitive)
           const matches: Array<{ file: string; line: number; content: string }> = []
           let totalMatches = 0
-          const ignoredSubstrings = [
-            ".git/",
-            ".git\\",
-            "node_modules/",
-            "node_modules\\",
-            ".roop/",
-          ]
-
-          for (const relFile of allFiles) {
-            if (
-              ignoredSubstrings.some(
-                (ignored) => relFile.startsWith(ignored) || relFile.includes(ignored),
-              )
-            ) {
+          for (const entry of allFiles) {
+            const fullPath = yield* asFailure(resolveDirectoryEntry(world, targetDir, entry))
+            const relFile = normalizedWorkspacePath(world, fullPath)
+            if (isIgnoredWorkspacePath(relFile)) {
               continue
             }
-            const fullPath = yield* asFailure(world.resolvePath(relFile))
             const contentOption = yield* world.filesystem
               .readFileString(fullPath)
               .pipe(Effect.option)

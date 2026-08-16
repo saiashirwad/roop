@@ -15,7 +15,10 @@ export const nextSessionId = (): string => Effect.runSync(Effect.orDie(crypto.ra
 const runtime = Atom.runtime(AgentRpcClientHttp("/rpc"))
 
 export const transcriptAtom = Atom.make<ReadonlyArray<Item>>([])
-export const sessionAtom = Atom.make<string>(nextSessionId())
+// A session is only persisted after the first prompt. Keeping this undefined
+// prevents actions such as fork from pretending that an empty UUID is saved.
+export const sessionAtom = Atom.make<string | undefined>(undefined)
+export const activePromptSessionAtom = Atom.make<string | undefined>(undefined)
 export const modelAtom = Atom.make<string | undefined>(undefined)
 
 export const capsAtom = runtime.atom(
@@ -27,12 +30,15 @@ export const capsAtom = runtime.atom(
 
 export const promptAtom = runtime.fn((text: string, ctx: Atom.FnContext) =>
   Effect.gen(function* () {
-    const client = yield* RpcClient.make(AgentRpc)
     ctx.set(transcriptAtom, [...ctx(transcriptAtom), { kind: "user", text }])
     const modelId = ctx(modelAtom)
+    const sessionId = ctx(sessionAtom) ?? nextSessionId()
+    ctx.set(sessionAtom, sessionId)
+    ctx.set(activePromptSessionAtom, sessionId)
+    const client = yield* RpcClient.make(AgentRpc)
     const payload = {
       prompt: text,
-      sessionId: ctx(sessionAtom),
+      sessionId,
       maxTurns: 50,
     }
     yield* client.Prompt(modelId === undefined ? payload : { ...payload, modelId }).pipe(
@@ -47,7 +53,12 @@ export const promptAtom = runtime.fn((text: string, ctx: Atom.FnContext) =>
           ]),
         ),
       ),
-      Effect.ensuring(Effect.sync(() => ctx.refresh(sessionsAtom))),
+      Effect.ensuring(
+        Effect.sync(() => {
+          ctx.set(activePromptSessionAtom, undefined)
+          ctx.refresh(sessionsAtom)
+        }),
+      ),
     )
   }),
 )
@@ -61,6 +72,7 @@ export const sessionsAtom = runtime.atom(
 
 export const selectSessionAtom = runtime.fn((sessionId: string, ctx: Atom.FnContext) =>
   Effect.gen(function* () {
+    if (ctx(activePromptSessionAtom) !== undefined) return
     const client = yield* RpcClient.make(AgentRpc)
     const session = yield* client.GetHistory({ sessionId })
     ctx.set(sessionAtom, sessionId)
@@ -70,8 +82,10 @@ export const selectSessionAtom = runtime.fn((sessionId: string, ctx: Atom.FnCont
 
 export const forkSessionAtom = runtime.fn((toSessionId: string | undefined, ctx: Atom.FnContext) =>
   Effect.gen(function* () {
+    if (ctx(activePromptSessionAtom) !== undefined) return
     const client = yield* RpcClient.make(AgentRpc)
     const current = ctx(sessionAtom)
+    if (current === undefined) return
     const result =
       toSessionId === undefined || toSessionId === ""
         ? yield* client.ForkSession({ fromSessionId: current })
@@ -86,6 +100,9 @@ export const forkSessionAtom = runtime.fn((toSessionId: string | undefined, ctx:
 export const interruptAtom = runtime.fn((_: void, ctx: Atom.FnContext) =>
   Effect.gen(function* () {
     const client = yield* RpcClient.make(AgentRpc)
-    yield* client.Interrupt({ sessionId: ctx(sessionAtom) }).pipe(Effect.ignore)
+    const sessionId = ctx(activePromptSessionAtom)
+    if (sessionId !== undefined) {
+      yield* client.Interrupt({ sessionId }).pipe(Effect.ignore)
+    }
   }),
 )

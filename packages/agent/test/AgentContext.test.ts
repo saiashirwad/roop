@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest"
-import { Effect, Exit, Schema, Scope } from "effect"
+import { Effect, Exit, Option, Schema, Scope } from "effect"
 import { Tool, Toolkit } from "effect/unstable/ai"
 
 import { AgentContext, AgentContextLive } from "../src/AgentContext.ts"
@@ -73,6 +73,52 @@ it.layer(contextLayer)("AgentContext", (it) => {
 
       yield* Scope.close(target, Exit.succeed(undefined))
       assert.ok(!("extra" in (yield* context.tools)))
+    }),
+  )
+
+  it.effect("disposes one duplicate registration without removing its twin", () =>
+    Effect.gen(function* () {
+      const context = yield* AgentContext
+      const beforeTools = Object.keys(yield* context.tools)
+      const beforeSections = yield* context.promptSections
+      const global = yield* GlobalToolkit.pipe(
+        Effect.provide(
+          GlobalToolkit.toLayer({ echo: ({ note }) => Effect.succeed({ reply: note }) }),
+        ),
+      )
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
+      const first = yield* context.registerTool(Global, global as any)
+      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
+      const second = yield* context.registerTool(Global, global as any)
+      const promptFirst = yield* context.registerPromptSection("duplicate")
+      const promptSecond = yield* context.registerPromptSection("duplicate")
+
+      yield* first
+      yield* promptFirst
+      assert.strictEqual((yield* context.tools).echo?.name, "echo")
+      assert.deepStrictEqual(yield* context.promptSections, ["duplicate"])
+
+      yield* second
+      yield* promptSecond
+      assert.deepStrictEqual(Object.keys(yield* context.tools), beforeTools)
+      assert.deepStrictEqual(yield* context.promptSections, beforeSections)
+    }),
+  )
+
+  it.effect("reports unknown toolkit calls as typed AiError tool-not-found failures", () =>
+    Effect.gen(function* () {
+      const context = yield* AgentContext
+      /* SAFETY: The empty unknown payload is intentionally sent to an unknown tool. */
+      const exit = yield* Effect.exit((yield* context.toolkit).handle("missing", {} as never))
+      assert.ok(Exit.isFailure(exit))
+      /* SAFETY: Exit.findErrorOption is present after the preceding failure assertion. */
+      const error = Option.getOrThrow(Exit.findErrorOption(exit)) as {
+        readonly _tag: string
+        readonly reason: { readonly _tag: string; readonly toolName: string }
+      }
+      assert.strictEqual(error._tag, "AiError")
+      assert.strictEqual(error.reason._tag, "ToolNotFoundError")
+      assert.strictEqual(error.reason.toolName, "missing")
     }),
   )
 })

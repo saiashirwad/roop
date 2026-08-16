@@ -8,8 +8,6 @@ layers.
 [Quick start](#quick-start) · [Architecture](#architecture) · [Core concepts](#core-concepts) ·
 [Packages](#packages) · [Development](#development)
 
-</div>
-
 > [!NOTE] ROOP is under active development. The workspace packages are private and the public APIs
 > are not yet stable.
 
@@ -237,6 +235,7 @@ concurrency.
 | `Interrupt`    | Stop the active run for a session                 |
 | `GetHistory`   | Load one persisted session                        |
 | `ListSessions` | List sessions by recency                          |
+| `ForkSession`  | Copy a persisted session into a new session       |
 
 The bundled transport uses Effect RPC over HTTP with NDJSON serialization, so the agent engine and
 its user interfaces remain independently deployable.
@@ -267,7 +266,7 @@ its user interfaces remain independently deployable.
 | [`@roop/plugin-claude`](./packages/plugin-claude) | Claude adapter backed by the local `claude` CLI                    |
 | [`@roop/plugin-codex`](./packages/plugin-codex)   | Codex adapter backed by the local `codex` CLI                      |
 | [`@roop/plugin-skills`](./packages/plugin-skills) | Loads `SKILL.md` directories and exposes them through a typed tool |
-| [`@roop/plugin-todo`](./packages/plugin-todo)     | In-memory task planning through the `writeTodos` tool              |
+| [`@roop/plugin-todo`](./packages/plugin-todo)     | Task planning through the `writeTodos` tool                        |
 | [`@roop/plugin-web`](./packages/plugin-web)       | Bounded HTTP fetching through the `webFetch` tool                  |
 
 ## Configuration

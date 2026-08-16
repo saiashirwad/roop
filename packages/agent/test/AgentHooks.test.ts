@@ -86,14 +86,58 @@ it.layer(
         "step/end",
         "turn/end",
       ])
-      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
+      /* SAFETY: The fixture's final event is the turn/end record with a reason. */
       const turnEnd = session.events[session.events.length - 1] as any
       assert.strictEqual(turnEnd.reason, "completed")
+      /* SAFETY: The recorded step/start event is present in the fixture's ordered history. */
       assert.strictEqual(
-        /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
         (session.events.find((event) => event._tag === "step/start") as any).index,
         1,
       )
+    }),
+  )
+})
+
+it.layer(
+  Main(
+    scripted([
+      [
+        {
+          type: "tool-call" as const,
+          id: "provider-1",
+          name: "echo",
+          params: { note: "hi" },
+          providerExecuted: true,
+        },
+        {
+          type: "tool-result" as const,
+          id: "provider-1",
+          name: "echo",
+          isFailure: false,
+          result: { reply: "provider" },
+          providerExecuted: true,
+        },
+      ],
+      [{ type: "text-delta" as const, id: "done", delta: "done" }],
+    ]),
+  ),
+)("provider-executed tool calls", (it) => {
+  it.effect("preserves providerExecuted in emitted and durable events", () =>
+    Effect.gen(function* () {
+      const agent = yield* Agent
+      const events = yield* collect(agent.prompt({ prompt: "say hi", sessionId: "provider" }))
+      /* SAFETY: The scripted response emits the call and result first. */
+      assert.strictEqual((events[0] as any).providerExecuted, true)
+      /* SAFETY: The scripted response emits the call and result first. */
+      assert.strictEqual((events[1] as any).providerExecuted, true)
+
+      const session = yield* agent.history("provider")
+      /* SAFETY: The scripted response contains a durable tool call. */
+      const call = session.events.find((event) => event._tag === "tool/call") as any
+      assert.strictEqual(call.providerExecuted, true)
+      /* SAFETY: The scripted response contains a durable tool result. */
+      const result = session.events.find((event) => event._tag === "tool/result") as any
+      assert.strictEqual(result.providerExecuted, true)
     }),
   )
 })

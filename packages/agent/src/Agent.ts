@@ -21,6 +21,7 @@ const findLastSystemMessage = (events: ReadonlyArray<SessionEvent>): string | un
 
 import {
   SessionFormatError,
+  SessionAlreadyExists,
   SessionNotFound,
   SessionStore,
   type Session,
@@ -57,7 +58,7 @@ export class Agent extends Context.Service<
     readonly fork: (
       fromSessionId: string,
       toSessionId?: string,
-    ) => Effect.Effect<SessionMeta, SessionNotFound | SessionFormatError>
+    ) => Effect.Effect<SessionMeta, SessionNotFound | SessionFormatError | SessionAlreadyExists>
   }
 >()("roop/Agent") {}
 
@@ -81,9 +82,9 @@ export const AgentLive = <Tools extends Record<string, Tool.Any>>(
         },
       )
 
-      const clearActive = (sessionId: string) =>
+      const clearActive = (sessionId: string, run: Deferred.Deferred<void>) =>
         Ref.update(active, (map) => {
-          if (!map.has(sessionId)) return map
+          if (map.get(sessionId) !== run) return map
           const next = new Map(map)
           next.delete(sessionId)
           return next
@@ -97,82 +98,96 @@ export const AgentLive = <Tools extends Record<string, Tool.Any>>(
         ),
         prompt: (request) =>
           Stream.unwrap(
-            Effect.gen(function* () {
-              const sessionId = request.sessionId ?? (yield* Effect.orDie(crypto.randomUUIDv4))
-              const model = yield* context.resolveModel(request.modelId)
-              const systemPrompt = yield* context.systemPrompt
+            // Assigned once the claim succeeds; setup failures use this same
+            // token to release the claim before the stream is created.
+            (() => {
+              let cleanup: Effect.Effect<void> = Effect.void
+              return Effect.gen(function* () {
+                const sessionId = request.sessionId ?? (yield* Effect.orDie(crypto.randomUUIDv4))
+                const model = yield* context.resolveModel(request.modelId)
+                const systemPrompt = yield* context.systemPrompt
 
-              const interrupt = yield* Deferred.make<void>()
-              const claimed = yield* Ref.modify(active, (map) =>
-                map.has(sessionId)
-                  ? ([false, map] as const)
-                  : ([true, new Map(map).set(sessionId, interrupt)] as const),
-              )
-              if (!claimed) {
-                return yield* new SessionBusy({ sessionId })
-              }
-
-              const append = (event: SessionEvent) => store.append(sessionId, event)
-
-              const stored = yield* store.load(sessionId).pipe(
-                Effect.map((session) => Option.some<Session>(session)),
-                Effect.catchIf(
-                  (error): error is SessionNotFound => error._tag === "SessionNotFound",
-                  () => Effect.succeed(Option.none<Session>()),
-                ),
-              )
-              // An empty requested systemPrompt leaves the log untouched; a
-              // non-empty one is appended whenever it diverges from the last
-              // system message already recorded (including when there is none).
-              if (systemPrompt !== "") {
-                const lastSystem =
-                  stored._tag === "Some" ? findLastSystemMessage(stored.value.events) : undefined
-                if (lastSystem !== systemPrompt) {
-                  yield* append({ _tag: "system/message", content: systemPrompt })
+                const interrupt = yield* Deferred.make<void>()
+                const claimed = yield* Ref.modify(active, (map) =>
+                  map.has(sessionId)
+                    ? ([false, map] as const)
+                    : ([true, new Map(map).set(sessionId, interrupt)] as const),
+                )
+                if (!claimed) {
+                  return yield* new SessionBusy({ sessionId })
                 }
-              }
-              yield* append({ _tag: "user/message", content: request.prompt })
+                cleanup = clearActive(sessionId, interrupt)
 
-              const chat = yield* Effect.orDie(
-                Chat.fromPrompt(
-                  yield* store.deriveMessages(sessionId).pipe(
-                    // The log was just appended to, so a missing session here is
-                    // impossible; treat it as a defect rather than widening the
-                    // prompt error channel with SessionNotFound.
-                    Effect.catchIf(
-                      (error): error is SessionNotFound => error._tag === "SessionNotFound",
-                      () => Effect.die(new Error(`session ${sessionId} vanished after append`)),
+                const append = (event: SessionEvent) => store.append(sessionId, event)
+
+                const stored = yield* store.load(sessionId).pipe(
+                  Effect.map((session) => Option.some<Session>(session)),
+                  Effect.catchIf(
+                    (error): error is SessionNotFound => error._tag === "SessionNotFound",
+                    () => Effect.succeed(Option.none<Session>()),
+                  ),
+                )
+                // An empty requested systemPrompt leaves the log untouched; a
+                // non-empty one is appended whenever it diverges from the last
+                // system message already recorded (including when there is none).
+                if (systemPrompt !== "") {
+                  const lastSystem =
+                    stored._tag === "Some" ? findLastSystemMessage(stored.value.events) : undefined
+                  if (lastSystem !== systemPrompt) {
+                    yield* append({ _tag: "system/message", content: systemPrompt })
+                  }
+                }
+                yield* append({ _tag: "user/message", content: request.prompt })
+
+                const chat = yield* Effect.orDie(
+                  Chat.fromPrompt(
+                    yield* store.deriveMessages(sessionId).pipe(
+                      // The log was just appended to, so a missing session here is
+                      // impossible; treat it as a defect rather than widening the
+                      // prompt error channel with SessionNotFound.
+                      Effect.catchIf(
+                        (error): error is SessionNotFound => error._tag === "SessionNotFound",
+                        () => Effect.die(new Error(`session ${sessionId} vanished after append`)),
+                      ),
                     ),
                   ),
-                ),
+                )
+
+                const journaledSections = new Set<string>()
+                if (systemPrompt !== "") journaledSections.add(systemPrompt)
+                for (const section of yield* context.promptSections) journaledSections.add(section)
+
+                return runLoop({
+                  sessionId,
+                  chat,
+                  model,
+                  toolkit: context.toolkit,
+                  beforeRequest: () =>
+                    Effect.gen(function* () {
+                      for (const section of yield* context.promptSections) {
+                        if (journaledSections.has(section)) continue
+                        journaledSections.add(section)
+                        yield* append({ _tag: "system/message", content: section })
+                        yield* Ref.update(chat.history, (history) =>
+                          Prompt.concat(
+                            history,
+                            Prompt.make([{ role: "system", content: section }]),
+                          ),
+                        )
+                      }
+                    }),
+                  maxTurns: request.maxTurns,
+                  interrupt,
+                  append,
+                  hooks,
+                }).pipe(Stream.ensuring(cleanup))
+              }).pipe(
+                // Claiming happens before any load/append/model setup. If that
+                // setup fails, the stream never exists to run an ensuring finalizer.
+                // Clear only this run's token so a later run cannot be disturbed.
+                Effect.catchCause((cause) => cleanup.pipe(Effect.andThen(Effect.failCause(cause)))),
               )
-
-              const journaledSections = new Set<string>()
-              if (systemPrompt !== "") journaledSections.add(systemPrompt)
-              for (const section of yield* context.promptSections) journaledSections.add(section)
-
-              return runLoop({
-                sessionId,
-                chat,
-                model,
-                toolkit: context.toolkit,
-                beforeRequest: () =>
-                  Effect.gen(function* () {
-                    for (const section of yield* context.promptSections) {
-                      if (journaledSections.has(section)) continue
-                      journaledSections.add(section)
-                      yield* append({ _tag: "system/message", content: section })
-                      yield* Ref.update(chat.history, (history) =>
-                        Prompt.concat(history, Prompt.make([{ role: "system", content: section }])),
-                      )
-                    }
-                  }),
-                maxTurns: request.maxTurns,
-                interrupt,
-                append,
-                hooks,
-              }).pipe(Stream.ensuring(clearActive(sessionId)))
-            }),
+            })(),
           ),
         interrupt: (sessionId) =>
           Ref.get(active).pipe(

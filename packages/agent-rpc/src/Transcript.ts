@@ -17,6 +17,7 @@ export type Item =
       readonly id: string
       readonly name: string
       readonly params: unknown
+      readonly completed: boolean
       readonly result?: unknown
       readonly isFailure?: boolean
       readonly children?: ReadonlyArray<Item>
@@ -36,12 +37,15 @@ export const apply = (items: ReadonlyArray<Item>, event: AgentEvent): ReadonlyAr
       return items
     }
     case "ToolCall": {
-      return [...items, { kind: "tool", id: event.id, name: event.name, params: event.params }]
+      return [
+        ...items,
+        { kind: "tool", id: event.id, name: event.name, params: event.params, completed: false },
+      ]
     }
     case "ToolResult": {
       return items.map((item) =>
         item.kind === "tool" && item.id === event.id
-          ? { ...item, result: event.result, isFailure: event.isFailure }
+          ? { ...item, result: event.result, completed: true, isFailure: event.isFailure }
           : item,
       )
     }
@@ -57,10 +61,14 @@ export const apply = (items: ReadonlyArray<Item>, event: AgentEvent): ReadonlyAr
           ]
     }
     case "Subagent": {
-      // Attach nested events to the caller's most recent unfinished call.
-      const index = items.findLastIndex(
-        (item) => item.kind === "tool" && item.name === event.name && item.result === undefined,
-      )
+      // New events carry the stable parent tool-call id. Keep the name-based
+      // fallback only for old clients/logs that predate that field.
+      const index =
+        event.toolCallId === undefined
+          ? items.findLastIndex(
+              (item) => item.kind === "tool" && item.name === event.name && !item.completed,
+            )
+          : items.findLastIndex((item) => item.kind === "tool" && item.id === event.toolCallId)
       if (index === -1) return items
       /* SAFETY: The predicate above guarantees this item is a tool call. */
       const target = items[index] as Extract<Item, { kind: "tool" }>
@@ -95,7 +103,10 @@ export const fromMessages = (messages: ReturnType<typeof deriveMessages>): Reado
           if (part.type === "text") {
             items = [...items, { kind: "assistant", text: part.text }]
           } else if (part.type === "tool-call") {
-            items = [...items, { kind: "tool", id: part.id, name: part.name, params: part.params }]
+            items = [
+              ...items,
+              { kind: "tool", id: part.id, name: part.name, params: part.params, completed: false },
+            ]
           }
         }
         break
@@ -105,7 +116,7 @@ export const fromMessages = (messages: ReturnType<typeof deriveMessages>): Reado
           if (part.type === "tool-result") {
             items = items.map((item) =>
               item.kind === "tool" && item.id === part.id
-                ? { ...item, result: part.result, isFailure: part.isFailure }
+                ? { ...item, result: part.result, completed: true, isFailure: part.isFailure }
                 : item,
             )
           }
@@ -144,6 +155,7 @@ const line = (text: string, max = 80) => {
   return flat.length > max ? `${flat.slice(0, max)}…` : flat
 }
 
+const utf8Bytes = (text: string): number => new TextEncoder().encode(text).byteLength
 const bytes = (count: number) => (count < 1024 ? `${count}b` : `${(count / 1024).toFixed(1)}kb`)
 
 const ReadFileParams = Schema.Struct({ path: Schema.String })
@@ -225,13 +237,13 @@ const summaryOf = {
         : Option.getOrUndefined(Schema.decodeUnknownOption(ReadFileResult)(call.result))?.content
     return {
       label: "read",
-      summary: `${decoded.path}${content === undefined ? "" : ` · ${bytes(content.length)}`}`,
+      summary: `${decoded.path}${content === undefined ? "" : ` · ${bytes(utf8Bytes(content))}`}`,
     }
   },
   writeFile: (call: ToolCall): ToolSummary => {
     const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(WriteFileParams)(call.params))
     if (decoded === undefined) return fallback(call)
-    return { label: "write", summary: `${decoded.path} · ${bytes(decoded.content.length)}` }
+    return { label: "write", summary: `${decoded.path} · ${bytes(utf8Bytes(decoded.content))}` }
   },
   edit: (call: ToolCall): ToolSummary => {
     const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(EditParams)(call.params))
@@ -295,7 +307,7 @@ const summaryOf = {
     const detail =
       payload?.status === undefined
         ? ""
-        : ` · ${payload.status} · ${bytes(payload.body?.length ?? 0)}${
+        : ` · ${payload.status} · ${bytes(utf8Bytes(payload.body ?? ""))}${
             payload.truncated === true ? " truncated" : ""
           }`
     return { label: "fetch", summary: `${line(decoded.url)}${detail}` }

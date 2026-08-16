@@ -20,16 +20,22 @@ function isGlobalReflect(sourceCode: SourceCode, expression: ESTree.Expression):
   return variable === null || variable.defs.length === 0
 }
 
+function unwrapChainExpression(expression: ESTree.Expression): ESTree.Expression {
+  return expression.type === "ChainExpression" ? expression.expression : expression
+}
+
 /** Reports whether a call target names one method on the global Reflect object. */
 export function isGlobalReflectMethodCall(
   sourceCode: SourceCode,
   callee: ESTree.Expression,
   methodName: string,
 ): boolean {
-  if (!("property" in callee) || !("object" in callee) || !("computed" in callee)) return false
-  if (!isGlobalReflect(sourceCode, callee.object)) return false
-  const property = callee.property
-  return callee.computed
+  const unwrapped = unwrapChainExpression(callee)
+  if (!("property" in unwrapped) || !("object" in unwrapped) || !("computed" in unwrapped))
+    return false
+  if (!isGlobalReflect(sourceCode, unwrapped.object)) return false
+  const property = unwrapped.property
+  return unwrapped.computed
     ? property.type === "Literal" && property.value === methodName
     : property.type === "Identifier" && property.name === methodName
 }

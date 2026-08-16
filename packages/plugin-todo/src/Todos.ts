@@ -1,5 +1,5 @@
 import { Plugin } from "@roop/agent/Plugin.ts"
-import { Effect, Ref, Schema } from "effect"
+import { Effect, Schema } from "effect"
 import { Tool, Toolkit } from "effect/unstable/ai"
 
 const Todo = Schema.Struct({
@@ -22,14 +22,9 @@ export const Todos = (): Plugin => {
   return Plugin({
     name: "todos",
     toolkit,
-    handlers: toolkit.toLayer(
-      Effect.gen(function* () {
-        const store = yield* Ref.make<ReadonlyArray<Todo>>([])
-        return {
-          writeTodos: ({ todos }) => Effect.as(Ref.set(store, todos), { todos }),
-        }
-      }),
-    ),
+    handlers: toolkit.toLayer({
+      writeTodos: ({ todos }) => Effect.succeed({ todos }),
+    }),
     systemPrompt:
       "For any task with more than one step, first write a todo list with the writeTodos tool, then keep it current as you work: mark the item you are working on active and finished items done.",
   })

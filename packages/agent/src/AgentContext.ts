@@ -1,5 +1,5 @@
 import { Context, Effect, Exit, Layer, Ref, Scope } from "effect"
-import { LanguageModel } from "effect/unstable/ai"
+import { AiError, LanguageModel } from "effect/unstable/ai"
 import type * as Tool from "effect/unstable/ai/Tool"
 
 import type { ErasedToolkit } from "./agentLoop.ts"
@@ -27,6 +27,11 @@ type ToolEntry = {
 type ModelEntry = {
   readonly ad: ModelAd
   readonly model: LanguageModel.Service
+}
+
+type Registration<A> = {
+  readonly value: A
+  readonly identity: object
 }
 
 export class AgentContext extends Context.Service<
@@ -67,15 +72,18 @@ export class AgentContext extends Context.Service<
   }
 >()("roop/AgentContext") {}
 
-const scoped = <A>(ref: Ref.Ref<ReadonlyArray<A>>, value: A, scope: Scope.Scope) =>
+const scoped = <A>(ref: Ref.Ref<ReadonlyArray<Registration<A>>>, value: A, scope: Scope.Scope) =>
   Effect.suspend(() => {
     let disposed = false
+    const registration: Registration<A> = { value, identity: {} }
     const dispose = Effect.suspend(() => {
       if (disposed) return Effect.void
       disposed = true
-      return Ref.update(ref, (entries) => entries.filter((entry) => entry !== value))
+      return Ref.update(ref, (entries) =>
+        entries.filter((entry) => entry.identity !== registration.identity),
+      )
     })
-    return Ref.update(ref, (entries) => [...entries, value]).pipe(
+    return Ref.update(ref, (entries) => [...entries, registration]).pipe(
       Effect.andThen(Effect.addFinalizer(() => dispose)),
       Effect.as(dispose),
       Effect.provideService(Scope.Scope, scope),
@@ -99,10 +107,10 @@ export const make = (
   options?: AgentContextOptions,
 ): Effect.Effect<AgentContext["Service"], never, Scope.Scope> =>
   Effect.gen(function* () {
-    const tools = yield* Ref.make<ReadonlyArray<ToolEntry>>([])
-    const promptSections = yield* Ref.make<ReadonlyArray<string>>([])
-    const models = yield* Ref.make<ReadonlyArray<ModelEntry>>([])
-    const skills = yield* Ref.make<ReadonlyArray<Skill>>([])
+    const tools = yield* Ref.make<ReadonlyArray<Registration<ToolEntry>>>([])
+    const promptSections = yield* Ref.make<ReadonlyArray<Registration<string>>>([])
+    const models = yield* Ref.make<ReadonlyArray<Registration<ModelEntry>>>([])
+    const skills = yield* Ref.make<ReadonlyArray<Registration<Skill>>>([])
     const basePrompt = options?.systemPrompt ?? ""
     // The agent-owned scope: closed when the layer's own scope closes, which
     // unwinds every registration that bound to it (including mid-run ones).
@@ -110,13 +118,20 @@ export const make = (
     yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
 
     const resolvedTools = () =>
-      Ref.get(tools).pipe(Effect.map((entries) => latestBy(entries, (entry) => entry.tool.name)))
+      Ref.get(tools).pipe(
+        Effect.map((entries) =>
+          latestBy(
+            entries.map((entry) => entry.value),
+            (entry) => entry.tool.name,
+          ),
+        ),
+      )
 
     const allModels = () =>
       Ref.get(models).pipe(
         Effect.map((entries) =>
           latestBy(
-            entries.map((entry) => entry.ad),
+            entries.map((entry) => entry.value.ad),
             (entry) => entry.id,
           ),
         ),
@@ -126,11 +141,24 @@ export const make = (
       toolkit: resolvedTools().pipe(
         Effect.map((entries) => {
           const byName = Object.fromEntries(entries.map((entry) => [entry.tool.name, entry]))
+          const handle: ErasedToolkit["handle"] = (name, params) => {
+            const entry = byName[name]
+            return entry === undefined
+              ? Effect.fail(
+                  AiError.make({
+                    module: "AgentContext",
+                    method: `${name}.handle`,
+                    reason: new AiError.ToolNotFoundError({
+                      toolName: name,
+                      availableTools: Object.keys(byName),
+                    }),
+                  }),
+                )
+              : entry.toolkit.handle(name, params)
+          }
           return {
             tools: Object.fromEntries(entries.map((entry) => [entry.tool.name, entry.tool])),
-            /* SAFETY: Dynamic tools share the erased handle contract of ErasedToolkit. */
-            handle: ((name: string, params: Tool.Parameters<Tool.Any>) =>
-              byName[name]!.toolkit.handle(name, params)) as ErasedToolkit["handle"],
+            handle,
           }
         }),
       ),
@@ -139,23 +167,35 @@ export const make = (
           Object.fromEntries(entries.map((entry) => [entry.tool.name, entry.tool])),
         ),
       ),
-      skills: Ref.get(skills).pipe(Effect.map((entries) => latestBy(entries, (entry) => entry.id))),
-      systemPrompt: Ref.get(promptSections).pipe(
-        Effect.map((sections) =>
-          [basePrompt, ...sections].filter((text) => text !== "").join("\n\n"),
+      skills: Ref.get(skills).pipe(
+        Effect.map((entries) =>
+          latestBy(
+            entries.map((entry) => entry.value),
+            (entry) => entry.id,
+          ),
         ),
       ),
-      promptSections: Ref.get(promptSections),
+      systemPrompt: Ref.get(promptSections).pipe(
+        Effect.map((sections) =>
+          [basePrompt, ...sections.map((section) => section.value)]
+            .filter((text) => text !== "")
+            .join("\n\n"),
+        ),
+      ),
+      promptSections: Ref.get(promptSections).pipe(
+        Effect.map((entries) => entries.map((e) => e.value)),
+      ),
       models: allModels(),
-      defaultModelId: allModels().pipe(Effect.map((entries) => entries[0]?.id ?? "")),
+      defaultModelId: allModels().pipe(Effect.map((entries) => entries.at(-1)?.id ?? "")),
       resolveModel: (modelId) =>
         Ref.get(models).pipe(
-          Effect.flatMap((registered) => {
+          Effect.flatMap((registrations) => {
+            const registered = registrations.map((entry) => entry.value)
             if (modelId === undefined) {
-              const first = registered[0]
-              return first === undefined
+              const last = registered.at(-1)
+              return last === undefined
                 ? Effect.fail(new ModelNotFound({ modelId: "" }))
-                : Effect.succeed(first.model)
+                : Effect.succeed(last.model)
             }
             const entry = registered.findLast((candidate) => candidate.ad.id === modelId)
             return entry === undefined

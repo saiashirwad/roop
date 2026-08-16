@@ -39,14 +39,37 @@ export interface ExecutionWorldService {
    * Safely resolve a path relative to the workspace root.
    * Fails with PathEscapesError if the resolved path escapes the workspace root.
    */
-  readonly resolvePath: (raw: string) => Effect.Effect<string, PathEscapesError>
+  readonly resolvePath: (
+    raw: string,
+  ) => Effect.Effect<string, PathEscapesError | PlatformError.PlatformError>
 }
 
 export const makePathResolver = (
   root: string,
   path: Path.Path,
-): ((raw: string) => Effect.Effect<string, PathEscapesError>) => {
+  filesystem?: FileSystem.FileSystem,
+): ((raw: string) => Effect.Effect<string, PathEscapesError | PlatformError.PlatformError>) => {
   const workspace = path.resolve(root)
+  const isNotFound = (error: PlatformError.PlatformError): boolean =>
+    error.reason._tag === "NotFound"
+
+  const canonicalAncestor = (filesystem: FileSystem.FileSystem, target: string) =>
+    Effect.gen(function* () {
+      let candidate = target
+      while (true) {
+        const resolved = yield* filesystem.realPath(candidate).pipe(
+          Effect.map((real) => ({ candidate, real })),
+          Effect.catchTag("PlatformError", (error) =>
+            isNotFound(error) ? Effect.void : Effect.fail(error),
+          ),
+        )
+        if (resolved !== undefined) return resolved
+        const parent = path.dirname(candidate)
+        if (parent === candidate) return undefined
+        candidate = parent
+      }
+    })
+
   return (raw: string) =>
     Effect.gen(function* () {
       const target = path.isAbsolute(raw) ? raw : path.resolve(workspace, raw)
@@ -58,6 +81,35 @@ export const makePathResolver = (
           root: workspace,
           message: `path escapes the workspace root (${workspace}): ${raw}`,
         })
+      }
+
+      // Keep the pure resolver usable for lightweight callers that do not
+      // provide a filesystem capability; the ExecutionWorld layers always do.
+      if (filesystem === undefined) return target
+
+      // Resolve the existing target, or the nearest existing ancestor for a
+      // new file, so symlinks cannot redirect operations outside the workspace.
+      // Filesystems without realPath support (for example the in-memory test
+      // world) report NotFound for every path and retain lexical semantics.
+      const fs = filesystem
+      const rootReal = yield* fs
+        .realPath(workspace)
+        .pipe(
+          Effect.catchTag("PlatformError", (error) =>
+            isNotFound(error) ? Effect.succeed(workspace) : Effect.fail(error),
+          ),
+        )
+      const ancestor = yield* canonicalAncestor(fs, target)
+      if (ancestor !== undefined) {
+        const realTarget = path.join(ancestor.real, path.relative(ancestor.candidate, target))
+        const realRel = path.relative(rootReal, realTarget)
+        if (realRel === ".." || realRel.startsWith(`..${path.sep}`) || path.isAbsolute(realRel)) {
+          return yield* new PathEscapesError({
+            path: raw,
+            root: workspace,
+            message: `path escapes the workspace root (${workspace}): ${raw}`,
+          })
+        }
       }
       return target
     })
@@ -92,7 +144,7 @@ export class ExecutionWorld extends Context.Service<ExecutionWorld, ExecutionWor
           env: options?.env,
           filesystem,
           spawner,
-          resolvePath: makePathResolver(resolvedRoot, path),
+          resolvePath: makePathResolver(resolvedRoot, path, filesystem),
         })
       }),
     )
@@ -198,7 +250,7 @@ export class ExecutionWorld extends Context.Service<ExecutionWorld, ExecutionWor
           env: options?.env,
           filesystem: mockFileSystem,
           spawner: mockSpawner,
-          resolvePath: makePathResolver(root, path),
+          resolvePath: makePathResolver(root, path, mockFileSystem),
         })
       }),
     )
@@ -273,7 +325,7 @@ export class ExecutionWorld extends Context.Service<ExecutionWorld, ExecutionWor
                 cwd: baseRepo,
               }),
             )
-            yield* Effect.all(
+            const exitCode = yield* Effect.all(
               [
                 Stream.runDrain(cleanupHandle.stdout),
                 Stream.runDrain(cleanupHandle.stderr),
@@ -281,7 +333,16 @@ export class ExecutionWorld extends Context.Service<ExecutionWorld, ExecutionWor
               ],
               { concurrency: "unbounded" },
             )
-            yield* filesystem.remove(worktreePath, { recursive: true }).pipe(Effect.ignore)
+            const code = Number(exitCode[2])
+            if (code !== 0) {
+              return yield* new WorktreeError({
+                exitCode: code,
+                message: `Failed to remove git worktree at ${worktreePath} (exit code ${code})`,
+              })
+            }
+            // Git owns the worktree metadata. Only remove any empty directory
+            // left behind after git confirms that metadata cleanup succeeded.
+            yield* filesystem.remove(worktreePath, { recursive: true })
           }),
         ).pipe(Effect.ignore)
 
@@ -292,7 +353,7 @@ export class ExecutionWorld extends Context.Service<ExecutionWorld, ExecutionWor
           env: options.env,
           filesystem,
           spawner,
-          resolvePath: makePathResolver(worktreePath, path),
+          resolvePath: makePathResolver(worktreePath, path, filesystem),
         })
       }),
     )

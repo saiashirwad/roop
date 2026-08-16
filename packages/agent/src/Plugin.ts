@@ -1,4 +1,4 @@
-import { Effect, Layer } from "effect"
+import { Crypto, Effect, Layer } from "effect"
 import { Toolkit } from "effect/unstable/ai"
 import type * as Tool from "effect/unstable/ai/Tool"
 
@@ -77,13 +77,16 @@ const asModelSpec = (spec: {
   readonly provider: string
   readonly description?: string | undefined
   readonly layer: object
-}): ModelSpec<never, never> => ({
-  id: spec.id,
-  provider: spec.provider,
-  ...(spec.description === undefined ? undefined : { description: spec.description }),
-  /* SAFETY: Model layers are already built; the view erases their R. */
-  layer: spec.layer as ModelSpec<never, never>["layer"],
-})
+}): ModelSpec<never, never> => {
+  /* SAFETY: The view only erases the model layer's requirement channel; each
+   * plugin supplies a concrete Layer at registration time. */
+  return {
+    id: spec.id,
+    provider: spec.provider,
+    ...(spec.description === undefined ? undefined : { description: spec.description }),
+    layer: spec.layer as ModelSpec<never, never>["layer"],
+  }
+}
 
 export type PluginRequirements<Plugins extends ReadonlyArray<Plugin<any, any>>> =
   Plugins[number] extends Plugin<infer R, infer RH> ? R | RH : never
@@ -91,7 +94,11 @@ export type PluginRequirements<Plugins extends ReadonlyArray<Plugin<any, any>>> 
 export const AgentPlugins = <const Plugins extends ReadonlyArray<Plugin<any>>>(
   plugins: Plugins,
   options?: { readonly systemPrompt?: string | undefined },
-): Layer.Layer<Agent, never, SessionStore | Exclude<PluginRequirements<Plugins>, AgentContext>> => {
+): Layer.Layer<
+  Agent,
+  never,
+  SessionStore | Crypto.Crypto | Exclude<PluginRequirements<Plugins>, AgentContext>
+> => {
   const views: ReadonlyArray<PluginView> = plugins
   const toolkit = Toolkit.merge(
     ...views.flatMap((plugin) => (plugin.toolkit === undefined ? [] : [plugin.toolkit])),
@@ -126,16 +133,12 @@ export const AgentPlugins = <const Plugins extends ReadonlyArray<Plugin<any>>>(
       if (systemPrompt !== "") {
         yield* Effect.asVoid(context.registerPromptSection(systemPrompt))
       }
-      yield* Effect.forEach(
-        models,
-        (spec) => Effect.asVoid(context.registerModel(spec)),
-        { discard: true },
-      )
-      yield* Effect.forEach(
-        skills,
-        (skill) => Effect.asVoid(context.registerSkill(skill)),
-        { discard: true },
-      )
+      yield* Effect.forEach(models, (spec) => Effect.asVoid(context.registerModel(spec)), {
+        discard: true,
+      })
+      yield* Effect.forEach(skills, (skill) => Effect.asVoid(context.registerSkill(skill)), {
+        discard: true,
+      })
       return context
     }),
   )
@@ -154,7 +157,7 @@ export const AgentPlugins = <const Plugins extends ReadonlyArray<Plugin<any>>>(
     ) as Layer.Layer<
       Agent,
       never,
-      SessionStore | Exclude<PluginRequirements<Plugins>, AgentContext>
+      SessionStore | Crypto.Crypto | Exclude<PluginRequirements<Plugins>, AgentContext>
     >
   )
 }

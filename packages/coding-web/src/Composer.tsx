@@ -16,6 +16,7 @@ import {
   COMMAND_PRIORITY_HIGH,
   COMMAND_PRIORITY_LOW,
   KEY_ENTER_COMMAND,
+  KEY_ESCAPE_COMMAND,
 } from "lexical"
 import { useEffect, useMemo, useState } from "react"
 import { createPortal } from "react-dom"
@@ -247,7 +248,8 @@ const InlineMenu = ({
                       }
                       if (event.key === "Escape") {
                         event.preventDefault()
-                        document.getElementById("composer")?.focus()
+                        editor.dispatchCommand(KEY_ESCAPE_COMMAND, event.nativeEvent)
+                        editor.getRootElement()?.focus()
                       }
                     }}
                   />

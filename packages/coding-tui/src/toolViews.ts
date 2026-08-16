@@ -47,25 +47,12 @@ const iconOf = {
   skill: `${cyan("\uf0c3")} ${bold("skill")}`,
   Subagent: `${cyan("\uf126")} ${bold("Subagent")}`,
   task: `${cyan("\uf126")} ${bold("Subagent")}`,
-} satisfies Record<string, string>
+} as const
 
 const iconFor = (name: string): string => {
-  switch (name) {
-    case "readFile":
-    case "writeFile":
-    case "edit":
-    case "listFiles":
-    case "find":
-    case "grep":
-    case "bash":
-    case "webFetch":
-    case "skill":
-    case "Subagent":
-    case "task":
-      return iconOf[name]
-    default:
-      return `${cyan("\uf013")} ${bold(name)}`
-  }
+  /* SAFETY: unknown names use the fallback after this typed lookup. */
+  const key = name as keyof typeof iconOf
+  return iconOf[key] ?? `${cyan("\uf013")} ${bold(name)}`
 }
 
 export const renderToolCall = (data: ToolCallData): string => {
@@ -80,8 +67,10 @@ export const renderToolCall = (data: ToolCallData): string => {
     data.name === "writeTodos"
       ? todoView(data)
       : `${iconFor(data.name)}${summary === "" ? "" : dim(` ${summary}`)}`
-  const status =
-    data.result === undefined ? dim("\uf10c") : failed ? red("\uf00d") : green("\uf00c")
+  // `undefined` is a valid Schema.Void result. The RPC worker marks every
+  // completed call (including Void) with isFailure, so only an unset marker is pending.
+  const pending = data.result === undefined && data.isFailure === undefined
+  const status = failed ? red("\uf00d") : pending ? dim("\uf10c") : green("\uf00c")
   const message = failureMessage(data)
   const failure = failed && message !== undefined ? `\n  ${red(line(message))}` : ""
   return `${status} ${body}${failure}`

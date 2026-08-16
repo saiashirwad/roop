@@ -9,6 +9,18 @@ const commentOwnerKinds = new Set([
   "ReturnStatement",
   "ThrowStatement",
   "VariableDeclaration",
+  "IfStatement",
+  "ForStatement",
+  "ForInStatement",
+  "ForOfStatement",
+  "WhileStatement",
+  "DoWhileStatement",
+  "SwitchStatement",
+  "SwitchCase",
+  "TryStatement",
+  "CatchClause",
+  "FunctionDeclaration",
+  "FunctionExpression",
 ])
 
 function isConstAssertion(node: TypeAssertion): boolean {
@@ -20,18 +32,23 @@ function isConstAssertion(node: TypeAssertion): boolean {
 }
 
 function hasSafetyComment(sourceCode: SourceCode, node: TypeAssertion): boolean {
-  let current: ESTree.Node = node
-  while (true) {
+  let statement: ESTree.Node | null = node.parent
+  while (statement !== null) {
     if (
-      sourceCode
-        .getCommentsBefore(current)
-        .some((comment) => comment.end <= node.start && /\bSAFETY\s*:/u.test(comment.value))
+      statement.type === "ArrowFunctionExpression" &&
+      sourceCode.getCommentsBefore(statement).some((comment) => /\bSAFETY\s*:/u.test(comment.value))
     ) {
       return true
     }
-    if (commentOwnerKinds.has(current.type) || current.parent.type === "Program") return false
-    current = current.parent
+    if (commentOwnerKinds.has(statement.type)) break
+    if (statement.parent === null) break
+    statement = statement.parent
   }
+  if (statement === null) return false
+  return (
+    sourceCode.getCommentsBefore(node).some((comment) => /\bSAFETY\s*:/u.test(comment.value)) ||
+    sourceCode.getCommentsBefore(statement).some((comment) => /\bSAFETY\s*:/u.test(comment.value))
+  )
 }
 
 /** Require every non-const type assertion to state the invariant TypeScript cannot express. */

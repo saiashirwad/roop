@@ -12,6 +12,7 @@ const ToolCall = Schema.TaggedStruct("ToolCall", {
   id: Schema.String,
   name: Schema.String,
   params: Schema.Unknown,
+  providerExecuted: Schema.optionalKey(Schema.Boolean),
 })
 
 const ToolResult = Schema.TaggedStruct("ToolResult", {
@@ -19,6 +20,7 @@ const ToolResult = Schema.TaggedStruct("ToolResult", {
   name: Schema.String,
   isFailure: Schema.Boolean,
   result: Schema.Unknown,
+  providerExecuted: Schema.optionalKey(Schema.Boolean),
 })
 
 const Finish = Schema.TaggedStruct("Finish", {
@@ -29,6 +31,8 @@ const Finish = Schema.TaggedStruct("Finish", {
 export interface SubagentEvent {
   readonly _tag: "Subagent"
   readonly name: string
+  /** Stable id of the parent delegation tool call. */
+  readonly toolCallId?: string
   readonly event: AgentEvent
 }
 
@@ -48,6 +52,7 @@ export const AgentEvent = Schema.Union([
   Finish,
   Schema.TaggedStruct("Subagent", {
     name: Schema.String,
+    toolCallId: Schema.optionalKey(Schema.String),
     event: Schema.suspend((): Schema.Codec<AgentEvent> => AgentEvent),
   }),
 ])

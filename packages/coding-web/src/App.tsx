@@ -11,7 +11,6 @@ import {
   forkSessionAtom,
   interruptAtom,
   modelAtom,
-  nextSessionId,
   promptAtom,
   selectSessionAtom,
   sessionAtom,
@@ -182,7 +181,7 @@ const Sidebar = ({ busy, onNew }: { readonly busy: boolean; readonly onNew: () =
           {modelId ?? (caps._tag === "Success" ? caps.value.defaultModelId : "")}
         </span>
       </div>
-      <button {...stylex.props(styles.row)} onClick={onNew}>
+      <button {...stylex.props(styles.row)} disabled={busy} onClick={onNew}>
         <span {...stylex.props(styles.rowIcon)}>✚</span>
         <span {...stylex.props(styles.rowText)}>New session</span>
       </button>
@@ -192,6 +191,7 @@ const Sidebar = ({ busy, onNew }: { readonly busy: boolean; readonly onNew: () =
           <button
             key={session.id}
             {...stylex.props(styles.row, session.id === active && styles.rowActive)}
+            disabled={busy}
             onClick={() => select(session.id)}
           >
             <span {...stylex.props(styles.rowIcon)}>💬</span>
@@ -236,7 +236,8 @@ export const App = () => {
     return () => window.removeEventListener("keydown", onKey)
   }, [])
   const newSession = () => {
-    setSession(nextSessionId())
+    if (busy) return
+    setSession(undefined)
     setTranscript([])
   }
   const close = () => {
@@ -244,6 +245,10 @@ export const App = () => {
     document.getElementById("composer")?.focus()
   }
   const onAction = (action: PaletteAction) => {
+    if (busy) {
+      close()
+      return
+    }
     switch (action.kind) {
       case "new": {
         newSession()
@@ -267,6 +272,7 @@ export const App = () => {
   const send = useAtomSet(promptAtom)
   const interrupt = useAtomSet(interruptAtom)
   const model = modelId ?? (caps._tag === "Success" ? caps.value.defaultModelId : "")
+  const session = useAtomValue(sessionAtom)
   const title = transcript.find((item) => item.kind === "user")
   const tagCommands: ReadonlyArray<Command> =
     caps._tag === "Success"
@@ -369,6 +375,8 @@ export const App = () => {
           activeModel={model}
           models={caps.value.models}
           sessions={sessions._tag === "Success" ? sessions.value : []}
+          busy={busy}
+          canFork={session !== undefined}
           onAction={onAction}
           onClose={close}
         />

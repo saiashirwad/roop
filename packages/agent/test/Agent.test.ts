@@ -323,7 +323,7 @@ const FsLayer = AgentLiveToolkit(EchoToolkit, {
 )
 
 it.layer(FsLayer)("Agent kernel corrupt session", (it) => {
-  it.effect("fails the prompt stream with SessionFormatError on a corrupt log", () =>
+  it.effect("fails setup with SessionFormatError and releases the session claim", () =>
     Effect.gen(function* () {
       const agent = yield* Agent
 
@@ -335,9 +335,87 @@ it.layer(FsLayer)("Agent kernel corrupt session", (it) => {
       const failure = Option.getOrThrow(Exit.findErrorOption(exit)) as any
       assert.strictEqual(failure._tag, "SessionFormatError")
       assert.strictEqual(failure.sessionId, "corrupt")
+
+      // Repair the file and retry: a failed setup must not leave a stale
+      // SessionBusy claim behind.
+      yield* FileSystem.FileSystem.pipe(
+        Effect.flatMap((fs) =>
+          fs.writeFileString(
+            `${corruptDir}/corrupt.json`,
+            JSON.stringify({
+              id: "corrupt",
+              header: { version: 2, createdAt: 0 },
+              events: [],
+              updatedAt: 0,
+            }),
+          ),
+        ),
+        Effect.provide(NodeFileSystem.layer),
+      )
+      const retry = yield* collect(agent.prompt({ prompt: "retry", sessionId: "corrupt" }))
+      /* SAFETY: A completed retry always emits Finish as its final event. */
+      assert.strictEqual((retry.at(-1) as any).reason, "completed")
     }),
   )
 })
+
+it.effect("fork propagates SessionAlreadyExists through the agent API", () =>
+  Effect.gen(function* () {
+    const agent = yield* Agent
+    yield* collect(agent.prompt({ prompt: "fork source", sessionId: "fork-source" }))
+    const exit = yield* Effect.exit(agent.fork("fork-source", "fork-source"))
+    assert.ok(Exit.isFailure(exit))
+    /* SAFETY: Exit.findErrorOption is present after the preceding failure assertion. */
+    const failure = Option.getOrThrow(Exit.findErrorOption(exit)) as any
+    assert.strictEqual(failure._tag, "SessionAlreadyExists")
+  }).pipe(
+    Effect.provide(
+      Main(scripted([[{ type: "text-delta" as const, id: "t-fork", delta: "done" }]])),
+    ),
+  ),
+)
+
+it.effect("advertises and executes the latest duplicate model registration", () =>
+  Effect.gen(function* () {
+    const agent = yield* Agent
+    const capabilities = yield* agent.capabilities
+    assert.deepStrictEqual(
+      capabilities.models.map((model) => model.id),
+      ["duplicate"],
+    )
+    const events = yield* collect(agent.prompt({ prompt: "latest", sessionId: "latest-model" }))
+    /* SAFETY: The scripted model emits a TextDelta for the latest registration. */
+    assert.strictEqual(
+      (events.find((event: any) => event._tag === "TextDelta") as any).delta,
+      "latest",
+    )
+  }).pipe(
+    Effect.provide(
+      AgentLiveToolkit(EchoToolkit, {
+        models: [
+          {
+            id: "duplicate",
+            provider: "test",
+            layer: modelLayer(
+              scripted([[{ type: "text-delta" as const, id: "old", delta: "old" }]]),
+            ),
+          },
+          {
+            id: "duplicate",
+            provider: "test",
+            layer: modelLayer(
+              scripted([[{ type: "text-delta" as const, id: "new", delta: "latest" }]]),
+            ),
+          },
+        ],
+      }).pipe(
+        Layer.provide(SessionStoreMemory),
+        Layer.provide(cryptoWeb),
+        Layer.provide(EchoToolkit.toLayer({ echo: ({ note }) => Effect.succeed({ reply: note }) })),
+      ),
+    ),
+  ),
+)
 
 it.layer(
   Main(

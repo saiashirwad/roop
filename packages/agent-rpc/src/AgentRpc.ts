@@ -4,6 +4,7 @@ import { Capabilities } from "@roop/agent/Capabilities.ts"
 import { ModelNotFound } from "@roop/agent/ModelCatalog.ts"
 import {
   Session,
+  SessionAlreadyExists,
   SessionFormatError,
   SessionMeta,
   SessionNotFound,
@@ -49,6 +50,6 @@ export const AgentRpc = RpcGroup.make(
       toSessionId: Schema.optionalKey(Schema.String),
     },
     success: SessionMeta,
-    error: Schema.Union([SessionNotFound, SessionFormatError]),
+    error: Schema.Union([SessionNotFound, SessionFormatError, SessionAlreadyExists]),
   }),
 )

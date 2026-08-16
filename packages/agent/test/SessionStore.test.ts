@@ -243,9 +243,10 @@ it.layer(StoreLive)("SessionStoreFs", (it) => {
   it.effect("list skips corrupt sessions and returns the valid ones", () =>
     Effect.gen(function* () {
       yield* appendAll("good")
-      yield* FileSystem.FileSystem.pipe(
-        Effect.flatMap((fs) => fs.writeFileString(`${dir}/broken.json`, "{not json")),
-      )
+      const fs = yield* FileSystem.FileSystem
+      yield* fs.writeFileString(`${dir}/broken.json`, "{not json")
+      // A percent-encoded session id can still be malformed after decoding.
+      yield* fs.writeFileString(`${dir}/%E0%A4%A.json`, "{}")
 
       const metas = yield* (yield* SessionStore).list
       // timestamps can collide within a millisecond, so only assert membership
@@ -286,6 +287,45 @@ it.layer(StoreLive)("SessionStoreFs", (it) => {
       const forkedAfter = yield* store.load("forked")
       assert.strictEqual(origAfter.events.length, scripted.length)
       assert.strictEqual(forkedAfter.events.length, scripted.length + 1)
+    }),
+  )
+
+  it.effect("preserves encoded session ids and serializes concurrent appends", () =>
+    Effect.gen(function* () {
+      const store = yield* SessionStore
+      const sessionId = "unicode/セッション?"
+      const events = Array.from({ length: 12 }, (_, index) => ({
+        _tag: "user/message" as const,
+        content: `message-${index}`,
+      }))
+      yield* Effect.all(
+        events.map((event) => store.append(sessionId, event)),
+        { concurrency: "unbounded", discard: true },
+      )
+      const session = yield* store.load(sessionId)
+      assert.strictEqual(session.events.length, events.length)
+      assert.deepStrictEqual(
+        session.events.map((event) => (event._tag === "user/message" ? event.content : "")).sort(),
+        events.map((event) => event.content).sort(),
+      )
+    }),
+  )
+
+  it.effect("rejects concurrent forks that target the same session id", () =>
+    Effect.gen(function* () {
+      const store = yield* SessionStore
+      yield* appendAll("fork-source")
+      const results = yield* Effect.all(
+        [0, 1].map(() => Effect.exit(store.fork("fork-source", "fork-target"))),
+        { concurrency: "unbounded" },
+      )
+      assert.strictEqual(results.filter(Exit.isSuccess).length, 1)
+      assert.strictEqual(results.filter(Exit.isFailure).length, 1)
+      const failure = results.find(Exit.isFailure)!
+      /* SAFETY: The failed concurrent fork is the duplicate-target case, whose
+       * tagged error is inspected below. */
+      const error = Option.getOrThrow(Exit.findErrorOption(failure)) as { _tag: string }
+      assert.strictEqual(error._tag, "SessionAlreadyExists")
     }),
   )
 })

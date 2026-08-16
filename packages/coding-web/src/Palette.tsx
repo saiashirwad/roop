@@ -32,12 +32,16 @@ export type PaletteAction =
 
 export const Palette = ({
   activeModel,
+  busy,
+  canFork,
   models,
   sessions = [],
   onAction,
   onClose,
 }: {
   readonly activeModel: string
+  readonly busy: boolean
+  readonly canFork: boolean
   readonly models: ReadonlyArray<Model>
   readonly sessions?: ReadonlyArray<{ readonly id: string; readonly title: string }>
   readonly onAction: (action: PaletteAction) => void
@@ -56,10 +60,17 @@ export const Palette = ({
         <Command.List>
           <Command.Empty>No results</Command.Empty>
           <Command.Group heading="Session">
-            <Command.Item onSelect={() => onAction({ kind: "new" })}>New session</Command.Item>
-            <Command.Item onSelect={() => onAction({ kind: "fork" })}>Fork current session</Command.Item>
+            <Command.Item disabled={busy} onSelect={() => onAction({ kind: "new" })}>
+              New session
+            </Command.Item>
+            {canFork && (
+              <Command.Item disabled={busy} onSelect={() => onAction({ kind: "fork" })}>
+                Fork current session
+              </Command.Item>
+            )}
             {sessions.map((session) => (
               <Command.Item
+                disabled={busy}
                 key={session.id}
                 value={`resume ${session.id} ${session.title}`}
                 onSelect={() => onAction({ kind: "resume", id: session.id })}

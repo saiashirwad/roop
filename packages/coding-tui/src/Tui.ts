@@ -15,7 +15,8 @@ import { AgentRpcClientHttp } from "@roop/agent-rpc/AgentRpcHttp.ts"
 import { fromSessionEvents } from "@roop/agent-rpc/Transcript.ts"
 import type { AgentEvent } from "@roop/agent/AgentEvent.ts"
 import { cryptoWeb } from "@roop/agent/cryptoWeb.ts"
-import { Clock, Crypto, Effect, Queue, Stream } from "effect"
+import type { SessionEvent } from "@roop/agent/SessionEvent.ts"
+import { Cause, Clock, Crypto, Effect, Option, Queue, Stream } from "effect"
 import { RpcClient } from "effect/unstable/rpc"
 
 import { bold, cyan, dim, editorTheme, markdownTheme, red } from "./theme.ts"
@@ -81,7 +82,7 @@ const main = Effect.gen(function* () {
     tui.requestRender()
   }
 
-  const replaySession = (events: ReadonlyArray<any>) => {
+  const replaySession = (events: ReadonlyArray<SessionEvent>) => {
     chat.clear()
     const items = fromSessionEvents(events)
     for (const item of items) {
@@ -93,18 +94,16 @@ const main = Effect.gen(function* () {
           chat.addChild(new Markdown(item.text, 0, 0, markdownTheme))
           break
         case "tool":
-          chat.addChild(
-            new Text(
-              renderToolCall({
-                name: item.name,
-                params: item.params,
-                result: item.result,
-                ...(item.isFailure === undefined ? {} : { isFailure: item.isFailure }),
-              }),
-              0,
-              0,
-            ),
-          )
+          const toolData =
+            item.isFailure === undefined
+              ? { name: item.name, params: item.params, result: item.result }
+              : {
+                  name: item.name,
+                  params: item.params,
+                  result: item.result,
+                  isFailure: item.isFailure,
+                }
+          chat.addChild(new Text(renderToolCall(toolData), 0, 0))
           break
         case "notice":
           chat.addChild(new Text(dim(item.text), 0, 0))
@@ -140,8 +139,7 @@ const main = Effect.gen(function* () {
           return sessions
             .filter(
               (s) =>
-                s.id.startsWith(prefix) ||
-                s.title.toLowerCase().includes(prefix.toLowerCase()),
+                s.id.startsWith(prefix) || s.title.toLowerCase().includes(prefix.toLowerCase()),
             )
             .map((s) => ({
               value: s.id,
@@ -165,6 +163,10 @@ const main = Effect.gen(function* () {
   const command = (line: string) =>
     Effect.gen(function* () {
       const [name, arg] = line.slice(1).split(/\s+/, 2)
+      if (busy && (name === "resume" || name === "fork" || name === "new")) {
+        info(dim("busy — esc to interrupt"))
+        return
+      }
       switch (name) {
         case "models": {
           if (arg === undefined) {
@@ -224,8 +226,7 @@ const main = Effect.gen(function* () {
           )
           return
         }
-        case "resume":
-        case "switch": {
+        case "resume": {
           if (arg === undefined || arg.trim() === "") {
             info(red("usage: /resume <session-id>"))
             return
@@ -239,7 +240,14 @@ const main = Effect.gen(function* () {
           const targetId = matched !== undefined ? matched.id : targetPrefix
           const historyResult = yield* Effect.exit(client.GetHistory({ sessionId: targetId }))
           if (historyResult._tag === "Failure") {
-            info(red(`session not found: ${targetId}`))
+            const failure = Cause.findErrorOption(historyResult.cause)
+            if (Option.isSome(failure) && failure.value._tag === "SessionNotFound") {
+              info(red(`session not found: ${targetId}`))
+            } else if (Option.isSome(failure) && failure.value._tag === "SessionFormatError") {
+              info(red(`failed to read session ${targetId}: ${failure.value.message}`))
+            } else {
+              info(red(`failed to resume session ${targetId}: ${String(historyResult.cause)}`))
+            }
             return
           }
           sessionId = targetId
@@ -386,6 +394,7 @@ const main = Effect.gen(function* () {
     })
 
   let busy = false
+  let activePromptSessionId: string | undefined
   yield* Stream.fromQueue(actions).pipe(
     Stream.takeWhile((action) => action._tag !== "Quit"),
     Stream.runForEach((action) => {
@@ -401,12 +410,23 @@ const main = Effect.gen(function* () {
             })
           }
           busy = true
+          activePromptSessionId = sessionId
           return Effect.forkScoped(
-            run(action.text).pipe(Effect.ensuring(Effect.sync(() => (busy = false)))),
+            run(action.text).pipe(
+              Effect.ensuring(
+                Effect.sync(() => {
+                  busy = false
+                  activePromptSessionId = undefined
+                }),
+              ),
+            ),
           )
         }
         case "Interrupt": {
-          return Effect.forkScoped(client.Interrupt({ sessionId }).pipe(Effect.ignore))
+          const target = activePromptSessionId
+          return target === undefined
+            ? Effect.void
+            : Effect.forkScoped(client.Interrupt({ sessionId: target }).pipe(Effect.ignore))
         }
       }
     }),

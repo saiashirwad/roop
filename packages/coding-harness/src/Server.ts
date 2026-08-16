@@ -28,6 +28,8 @@ export const server = (options: {
   readonly port: number
   readonly root: string
   readonly apiKey: string
+  /** Keep the unauthenticated development server private by default. */
+  readonly host?: string | undefined
 }) => {
   const deepseek = OpenAiCompatible({
     name: "deepseek",
@@ -74,6 +76,7 @@ export const server = (options: {
     Layer.provide(
       NodeHttpServer.layer(process.getBuiltinModule("node:http").createServer, {
         port: options.port,
+        host: options.host ?? "127.0.0.1",
       }),
     ),
   )
