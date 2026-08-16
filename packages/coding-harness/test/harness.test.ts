@@ -12,7 +12,7 @@ import { LanguageModel, type Response } from "effect/unstable/ai"
 
 const agentLayer = (model: Effect.Effect<LanguageModel.Service>, root: string) =>
   AgentPlugins([
-    CodingTools(root),
+    CodingTools(),
     Plugin({
       name: "fake-model",
       models: [
@@ -22,7 +22,7 @@ const agentLayer = (model: Effect.Effect<LanguageModel.Service>, root: string) =
   ]).pipe(
     Layer.provide(SessionStoreMemory),
     Layer.provide(cryptoWeb),
-    Layer.provide(ExecutionWorld.layer),
+    Layer.provide(ExecutionWorld.local(root)),
     Layer.provide(NodeChildProcessSpawner.layer),
     Layer.provide(NodeFileSystem.layer),
     Layer.provide(NodePath.layer),

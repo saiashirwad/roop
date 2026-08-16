@@ -1,5 +1,5 @@
 import { Plugin } from "@roop/agent/Plugin.ts"
-import { Effect, Path, Schema, Stream } from "effect"
+import { Effect, Schema, Stream } from "effect"
 import { Tool, Toolkit } from "effect/unstable/ai"
 import { ChildProcess } from "effect/unstable/process"
 
@@ -9,20 +9,7 @@ export class ToolFailure extends Schema.TaggedErrorClass<ToolFailure>()("ToolFai
   message: Schema.String,
 }) {}
 
-export const CodingTools = (root: string): Plugin<ExecutionWorld | Path.Path> => {
-  const within = (raw: string): Effect.Effect<string, ToolFailure, Path.Path> =>
-    Effect.gen(function* () {
-      const path = yield* Path.Path
-      const workspace = path.resolve(root)
-      const target = path.isAbsolute(raw) ? raw : path.resolve(workspace, raw)
-      const rel = path.relative(workspace, target)
-      const escapes = rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)
-      if (escapes) {
-        return yield* new ToolFailure({ message: `path escapes the workspace: ${raw}` })
-      }
-      return target
-    })
-
+export const CodingTools = (_root?: string): Plugin<ExecutionWorld> => {
   const asFailure = <A, E, R = never>(
     effect: Effect.Effect<A, E, R>,
   ): Effect.Effect<A, ToolFailure, R> =>
@@ -39,7 +26,7 @@ export const CodingTools = (root: string): Plugin<ExecutionWorld | Path.Path> =>
       success: Schema.Struct({ content: Schema.String }),
       failure: ToolFailure,
       failureMode: "return",
-      dependencies: [ExecutionWorld, Path.Path],
+      dependencies: [ExecutionWorld],
     }),
     Tool.make("writeFile", {
       description: "Create or overwrite a UTF-8 text file inside the workspace",
@@ -47,7 +34,7 @@ export const CodingTools = (root: string): Plugin<ExecutionWorld | Path.Path> =>
       success: Schema.Struct({ path: Schema.String }),
       failure: ToolFailure,
       failureMode: "return",
-      dependencies: [ExecutionWorld, Path.Path],
+      dependencies: [ExecutionWorld],
     }),
     Tool.make("listFiles", {
       description: "Recursively list file paths under a workspace directory",
@@ -55,7 +42,7 @@ export const CodingTools = (root: string): Plugin<ExecutionWorld | Path.Path> =>
       success: Schema.Struct({ files: Schema.Array(Schema.String) }),
       failure: ToolFailure,
       failureMode: "return",
-      dependencies: [ExecutionWorld, Path.Path],
+      dependencies: [ExecutionWorld],
     }),
     Tool.make("bash", {
       description: "Run a shell command in the workspace and capture stdout, stderr, and exit code",
@@ -67,7 +54,7 @@ export const CodingTools = (root: string): Plugin<ExecutionWorld | Path.Path> =>
       }),
       failure: ToolFailure,
       failureMode: "return",
-      dependencies: [ExecutionWorld, Path.Path],
+      dependencies: [ExecutionWorld],
     }),
   )
 
@@ -78,7 +65,7 @@ export const CodingTools = (root: string): Plugin<ExecutionWorld | Path.Path> =>
       readFile: ({ path }) =>
         Effect.gen(function* () {
           const world = yield* ExecutionWorld
-          const file = yield* within(path)
+          const file = yield* asFailure(world.resolvePath(path))
           return yield* asFailure(
             world.filesystem.readFileString(file).pipe(Effect.map((content) => ({ content }))),
           )
@@ -86,14 +73,14 @@ export const CodingTools = (root: string): Plugin<ExecutionWorld | Path.Path> =>
       writeFile: ({ path, content }) =>
         Effect.gen(function* () {
           const world = yield* ExecutionWorld
-          const file = yield* within(path)
+          const file = yield* asFailure(world.resolvePath(path))
           yield* asFailure(world.filesystem.writeFileString(file, content))
           return { path }
         }),
       listFiles: ({ path }) =>
         Effect.gen(function* () {
           const world = yield* ExecutionWorld
-          const dir = yield* within(path ?? ".")
+          const dir = yield* asFailure(world.resolvePath(path ?? "."))
           return yield* asFailure(
             world.filesystem
               .readDirectory(dir, { recursive: true })
@@ -103,10 +90,13 @@ export const CodingTools = (root: string): Plugin<ExecutionWorld | Path.Path> =>
       bash: ({ command }) =>
         Effect.scoped(
           Effect.gen(function* () {
-            const path = yield* Path.Path
             const world = yield* ExecutionWorld
             const handle = yield* world.spawner.spawn(
-              ChildProcess.make(command, { shell: true, cwd: path.resolve(root) }),
+              ChildProcess.make(command, {
+                shell: true,
+                cwd: world.root,
+                env: world.env,
+              }),
             )
             const [stdout, stderr, exitCode] = yield* Effect.all(
               [

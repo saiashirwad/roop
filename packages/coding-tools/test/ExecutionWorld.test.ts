@@ -5,14 +5,23 @@ import { cryptoWeb } from "@roop/agent/cryptoWeb.ts"
 import { AgentPlugins, Plugin } from "@roop/agent/Plugin.ts"
 import { SessionStoreMemory } from "@roop/agent/SessionStore.ts"
 import { scripted } from "@roop/agent/Testing.ts"
-import { Effect, FileSystem, Layer, Sink, Stream } from "effect"
+import { Effect, FileSystem, Layer, Path, Stream } from "effect"
 import { LanguageModel } from "effect/unstable/ai"
-import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner"
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 
 import { CodingTools } from "../src/CodingTools.ts"
 import { ExecutionWorld } from "../src/ExecutionWorld.ts"
 
-it.effect("ExecutionWorld: Node-backed ExecutionWorld executes file and bash tools", () =>
+const nodePlatform = Layer.mergeAll(
+  NodeFileSystem.layer,
+  NodeChildProcessSpawner.layer.pipe(
+    Layer.provide(NodeFileSystem.layer),
+    Layer.provide(NodePath.layer),
+  ),
+  NodePath.layer,
+)
+
+it.effect("ExecutionWorld.local: Node-backed ExecutionWorld executes file and bash tools", () =>
   Effect.gen(function* () {
     const agent = yield* Agent
     const events = yield* Stream.runCollect(
@@ -33,7 +42,7 @@ it.effect("ExecutionWorld: Node-backed ExecutionWorld executes file and bash too
           const fs = yield* FileSystem.FileSystem
           const root = yield* fs.makeTempDirectoryScoped({ prefix: "roop-layer-test-" })
           return AgentPlugins([
-            CodingTools(root),
+            CodingTools(),
             Plugin({
               name: "model",
               models: [
@@ -76,118 +85,241 @@ it.effect("ExecutionWorld: Node-backed ExecutionWorld executes file and bash too
           ]).pipe(
             Layer.provide(SessionStoreMemory),
             Layer.provide(cryptoWeb),
-            Layer.provide(ExecutionWorld.layer),
-            Layer.provide(NodeFileSystem.layer),
-            Layer.provide(NodeChildProcessSpawner.layer),
-            Layer.provide(NodePath.layer),
+            Layer.provide(ExecutionWorld.local(root)),
           )
         }),
+      ).pipe(Layer.provideMerge(nodePlatform)),
+    ),
+  ),
+)
+
+it.effect("ExecutionWorld: prevents path escaping outside workspace root", () =>
+  Effect.gen(function* () {
+    const agent = yield* Agent
+    const events = yield* Stream.runCollect(
+      agent.prompt({ prompt: "escape", sessionId: "s-escape" }),
+    ).pipe(Effect.map((chunk) => [...chunk]))
+
+    /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
+    const toolResults = events.filter((e: any) => e._tag === "ToolResult") as ReadonlyArray<any>
+    assert.strictEqual(toolResults.length, 1)
+    assert.strictEqual(toolResults[0].isFailure, true)
+    assert.match(toolResults[0].result.message, /path escapes the workspace root/)
+  }).pipe(
+    Effect.scoped,
+    Effect.provide(
+      Layer.unwrap(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const root = yield* fs.makeTempDirectoryScoped({ prefix: "roop-escape-test-" })
+          return AgentPlugins([
+            CodingTools(),
+            Plugin({
+              name: "model",
+              models: [
+                {
+                  id: "fake",
+                  provider: "test",
+                  layer: Layer.effect(
+                    LanguageModel.LanguageModel,
+                    scripted([
+                      [
+                        {
+                          type: "tool-call",
+                          id: "c1",
+                          name: "readFile",
+                          params: { path: "../outside.txt" },
+                        },
+                      ],
+                      [{ type: "text-delta", id: "t1", delta: "done" }],
+                    ]),
+                  ),
+                },
+              ],
+            }),
+          ]).pipe(
+            Layer.provide(SessionStoreMemory),
+            Layer.provide(cryptoWeb),
+            Layer.provide(ExecutionWorld.local(root)),
+          )
+        }),
+      ).pipe(Layer.provideMerge(nodePlatform)),
+    ),
+  ),
+)
+
+it.effect("ExecutionWorld.memory: runs in-memory without host disk access", () =>
+  Effect.gen(function* () {
+    const agent = yield* Agent
+    const events = yield* Stream.runCollect(
+      agent.prompt({ prompt: "run in memory", sessionId: "s-memory" }),
+    ).pipe(Effect.map((chunk) => [...chunk]))
+
+    /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
+    const toolResults = events.filter((e: any) => e._tag === "ToolResult") as ReadonlyArray<any>
+    assert.strictEqual(toolResults.length, 3)
+    assert.deepStrictEqual(toolResults[0].result, { content: "initial data" })
+    assert.deepStrictEqual(toolResults[1].result, { path: "new-file.txt" })
+    assert.strictEqual(toolResults[2].result.stdout, "output: echo memory")
+  }).pipe(
+    Effect.provide(
+      AgentPlugins([
+        CodingTools(),
+        Plugin({
+          name: "model",
+          models: [
+            {
+              id: "fake",
+              provider: "test",
+              layer: Layer.effect(
+                LanguageModel.LanguageModel,
+                scripted([
+                  [
+                    {
+                      type: "tool-call",
+                      id: "c1",
+                      name: "readFile",
+                      params: { path: "init.txt" },
+                    },
+                  ],
+                  [
+                    {
+                      type: "tool-call",
+                      id: "c2",
+                      name: "writeFile",
+                      params: { path: "new-file.txt", content: "created in memory" },
+                    },
+                  ],
+                  [
+                    {
+                      type: "tool-call",
+                      id: "c3",
+                      name: "bash",
+                      params: { command: "echo memory" },
+                    },
+                  ],
+                  [{ type: "text-delta", id: "t1", delta: "done" }],
+                ]),
+              ),
+            },
+          ],
+        }),
+      ]).pipe(
+        Layer.provide(SessionStoreMemory),
+        Layer.provide(cryptoWeb),
+        Layer.provide(
+          ExecutionWorld.memory({
+            root: "/virtual-workspace",
+            files: {
+              "/virtual-workspace/init.txt": "initial data",
+            },
+          }),
+        ),
+        Layer.provide(NodePath.layer),
       ),
     ),
-    Effect.provide([NodeFileSystem.layer, NodePath.layer]),
   ),
 )
 
 it.effect(
-  "ExecutionWorld: swapping the ExecutionWorld layer moves filesystem and subprocess behavior together",
-  () => {
-    const virtualFiles = new Map<string, string>()
-    virtualFiles.set("/virtual-root/demo.txt", "content from virtual world")
+  "ExecutionWorld.homestead: Git worktree isolated ExecutionWorld creates and removes worktree on scope close",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+      const baseRepo = yield* fs.makeTempDirectoryScoped({ prefix: "roop-git-base-" })
 
-    const mockFileSystem = FileSystem.makeNoop({
-      readFileString: (path: string) =>
-        Effect.sync(() => {
-          const content = virtualFiles.get(path)
-          if (content === undefined) throw new Error(`file not found: ${path}`)
-          return content
+      // Initialize git repo with an initial commit
+      const exec = (args: ReadonlyArray<string>) =>
+        Effect.gen(function* () {
+          const handle = yield* spawner.spawn(ChildProcess.make("git", args, { cwd: baseRepo }))
+          const exitCode = yield* handle.exitCode
+          assert.strictEqual(Number(exitCode), 0)
+        })
+
+      yield* exec(["init"])
+      yield* exec(["config", "user.name", "Roop Test"])
+      yield* exec(["config", "user.email", "roop@test.local"])
+      yield* fs.writeFileString(path.join(baseRepo, "README.md"), "# Base Repo")
+      yield* exec(["add", "README.md"])
+      yield* exec(["commit", "-m", "initial commit"])
+
+      const worktreeDir = path.join(baseRepo, ".roop", "worktrees", "wt-test")
+
+      // Run agent inside homestead worktree scoped to this block
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const agentLayer = AgentPlugins([
+            CodingTools(),
+            Plugin({
+              name: "model",
+              models: [
+                {
+                  id: "fake",
+                  provider: "test",
+                  layer: Layer.effect(
+                    LanguageModel.LanguageModel,
+                    scripted([
+                      [
+                        {
+                          type: "tool-call",
+                          id: "c1",
+                          name: "readFile",
+                          params: { path: "README.md" },
+                        },
+                      ],
+                      [
+                        {
+                          type: "tool-call",
+                          id: "c2",
+                          name: "writeFile",
+                          params: { path: "branch-file.txt", content: "branch data" },
+                        },
+                      ],
+                      [{ type: "text-delta", id: "t1", delta: "done" }],
+                    ]),
+                  ),
+                },
+              ],
+            }),
+          ]).pipe(
+            Layer.provide(SessionStoreMemory),
+            Layer.provide(cryptoWeb),
+            Layer.provide(
+              ExecutionWorld.homestead({
+                baseRepo,
+                worktreeDir,
+              }),
+            ),
+            Layer.provide(nodePlatform),
+          )
+
+          const scope = yield* Effect.scope
+          const context = yield* Layer.buildWithScope(agentLayer, scope)
+
+          const agent = yield* Agent.pipe(Effect.provide(context))
+          const events = yield* Stream.runCollect(
+            agent.prompt({ prompt: "worktree", sessionId: "s-wt" }),
+          ).pipe(
+            Effect.provide(context),
+            Effect.map((chunk) => [...chunk]),
+          )
+
+          /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
+          const toolResults = events.filter(
+            (e: any) => e._tag === "ToolResult",
+          ) as ReadonlyArray<any>
+          assert.strictEqual(toolResults.length, 2)
+          assert.deepStrictEqual(toolResults[0].result, { content: "# Base Repo" })
+          assert.deepStrictEqual(toolResults[1].result, { path: "branch-file.txt" })
+
+          // Check worktree dir exists while in scope
+          assert.strictEqual(yield* fs.exists(worktreeDir), true)
         }),
-      writeFileString: (path: string, content: string) =>
-        Effect.sync(() => {
-          virtualFiles.set(path, content)
-        }),
-      readDirectory: () => Effect.succeed(["demo.txt"]),
-    })
+      )
 
-    const mockSpawner = ChildProcessSpawner.make((_command) =>
-      Effect.succeed(
-        ChildProcessSpawner.makeHandle({
-          pid: ChildProcessSpawner.ProcessId(99999),
-          exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
-          isRunning: Effect.succeed(false),
-          kill: () => Effect.void,
-          stdin: Sink.drain,
-          stdout: Stream.make(new TextEncoder().encode("output from virtual sandbox")),
-          stderr: Stream.empty,
-          all: Stream.make(new TextEncoder().encode("output from virtual sandbox")),
-          getInputFd: () => Sink.drain,
-          getOutputFd: () => Stream.empty,
-          unref: Effect.succeed(Effect.void),
-        }),
-      ),
-    )
-
-    const customExecutionWorldLayer = Layer.succeed(
-      ExecutionWorld,
-      ExecutionWorld.of({
-        filesystem: mockFileSystem,
-        spawner: mockSpawner,
-      }),
-    )
-
-    return Effect.gen(function* () {
-      const agent = yield* Agent
-      const events = yield* Stream.runCollect(
-        agent.prompt({ prompt: "run virtual", sessionId: "s-virtual" }),
-      ).pipe(Effect.map((chunk) => [...chunk]))
-
-      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
-      const toolResults = events.filter((e: any) => e._tag === "ToolResult") as ReadonlyArray<any>
-      assert.strictEqual(toolResults.length, 2)
-
-      assert.deepStrictEqual(toolResults[0].result, { content: "content from virtual world" })
-      assert.strictEqual(toolResults[1].result.stdout, "output from virtual sandbox")
-    }).pipe(
-      Effect.provide(
-        AgentPlugins([
-          CodingTools("/virtual-root"),
-          Plugin({
-            name: "model",
-            models: [
-              {
-                id: "fake",
-                provider: "test",
-                layer: Layer.effect(
-                  LanguageModel.LanguageModel,
-                  scripted([
-                    [
-                      {
-                        type: "tool-call",
-                        id: "c1",
-                        name: "readFile",
-                        params: { path: "demo.txt" },
-                      },
-                    ],
-                    [
-                      {
-                        type: "tool-call",
-                        id: "c2",
-                        name: "bash",
-                        params: { command: "echo hello" },
-                      },
-                    ],
-                    [{ type: "text-delta", id: "t1", delta: "done" }],
-                  ]),
-                ),
-              },
-            ],
-          }),
-        ]).pipe(
-          Layer.provide(SessionStoreMemory),
-          Layer.provide(cryptoWeb),
-          Layer.provide(customExecutionWorldLayer),
-          Layer.provide(NodePath.layer),
-        ),
-      ),
-    )
-  },
+      // After scope close, worktree dir must be cleaned up
+      assert.strictEqual(yield* fs.exists(worktreeDir), false)
+    }).pipe(Effect.scoped, Effect.provide(nodePlatform)),
 )

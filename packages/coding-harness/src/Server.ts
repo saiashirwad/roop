@@ -35,7 +35,7 @@ export const server = (options: {
     apiKey: options.apiKey,
     models: [{ id: "deepseek-chat", description: "DeepSeek V3 via the OpenAI-compatible API" }],
   })
-  const codingTools = CodingTools(options.root)
+  const codingTools = CodingTools()
   const webTools = WebTools()
   const codex = Codex()
 
@@ -61,7 +61,7 @@ export const server = (options: {
       ]).pipe(Layer.provide(SessionStoreFs(path.join(options.root, ".roop", "sessions"))))
     }),
   ).pipe(
-    Layer.provide(ExecutionWorld.layer),
+    Layer.provide(ExecutionWorld.local(options.root)),
     Layer.provide(NodeChildProcessSpawner.layer),
     Layer.provide(NodeCrypto.layer),
     Layer.provide(NodeFileSystem.layer),
