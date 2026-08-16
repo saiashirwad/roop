@@ -16,7 +16,7 @@ import { fromSessionEvents } from "@roop/agent-rpc/Transcript.ts"
 import type { AgentEvent } from "@roop/agent/AgentEvent.ts"
 import { cryptoWeb } from "@roop/agent/cryptoWeb.ts"
 import type { SessionEvent } from "@roop/agent/SessionEvent.ts"
-import { Cause, Clock, Crypto, Effect, Option, Queue, Stream } from "effect"
+import { Cause, Clock, Crypto, Effect, FiberSet, Option, Queue, Stream } from "effect"
 import { RpcClient } from "effect/unstable/rpc"
 
 import { bold, cyan, dim, editorTheme, markdownTheme, red } from "./theme.ts"
@@ -37,6 +37,7 @@ const formatAgo = (timestamp: number, now: number): string => {
 
 const main = Effect.gen(function* () {
   const url = process.argv[2] ?? "http://localhost:8787/rpc"
+  const runPromise = yield* FiberSet.makeRuntimePromise()
   const client = yield* RpcClient.make(AgentRpc).pipe(Effect.provide(AgentRpcClientHttp(url)))
   const caps = yield* client.Capabilities()
   const crypto = yield* Crypto.Crypto
@@ -133,23 +134,24 @@ const main = Effect.gen(function* () {
       name: "resume",
       description: "resume/switch to a session by ID (/resume <id>)",
       argumentHint: "<id>",
-      getArgumentCompletions: async (prefix) => {
-        try {
-          const sessions = await Effect.runPromise(client.ListSessions())
-          return sessions
-            .filter(
-              (s) =>
-                s.id.startsWith(prefix) || s.title.toLowerCase().includes(prefix.toLowerCase()),
-            )
-            .map((s) => ({
-              value: s.id,
-              label: s.id.slice(0, 8),
-              description: s.title === "" ? "Untitled" : s.title,
-            }))
-        } catch {
-          return []
-        }
-      },
+      getArgumentCompletions: (prefix) =>
+        runPromise(
+          client.ListSessions().pipe(
+            Effect.map((sessions) =>
+              sessions
+                .filter(
+                  (s) =>
+                    s.id.startsWith(prefix) || s.title.toLowerCase().includes(prefix.toLowerCase()),
+                )
+                .map((s) => ({
+                  value: s.id,
+                  label: s.id.slice(0, 8),
+                  description: s.title === "" ? "Untitled" : s.title,
+                })),
+            ),
+            Effect.orElseSucceed(() => []),
+          ),
+        ),
     },
     {
       name: "fork",

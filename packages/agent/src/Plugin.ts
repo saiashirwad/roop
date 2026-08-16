@@ -1,171 +1,228 @@
-import { Crypto, Effect, Layer } from "effect"
-import { Toolkit } from "effect/unstable/ai"
+import { Context, Crypto, Effect, Layer, Scope } from "effect"
+import type { Toolkit } from "effect/unstable/ai"
 import type * as Tool from "effect/unstable/ai/Tool"
 
 import { AgentLive, type Agent } from "./Agent.ts"
-import { AgentContext, make as makeAgentContext } from "./AgentContext.ts"
+import {
+  AgentContext,
+  AgentContextLive,
+  type ConflictPolicy,
+} from "./AgentContext.ts"
 import { AgentHooks, layerNoop } from "./AgentHooks.ts"
 import type { ModelSpec } from "./ModelCatalog.ts"
 import { PluginId } from "./PluginId.ts"
 import { RunRegistryLive } from "./RunRegistry.ts"
+import { eraseToolkit } from "./runStep.ts"
 import type { SessionJournal } from "./SessionJournal.ts"
-import { type Skill } from "./Skills.ts"
+import type { Skill } from "./Skills.ts"
 
-export type Plugin<R = never, RH = never> = {
+export type { ConflictPolicy, RegistrationConflict } from "./AgentContext.ts"
+
+export interface Plugin<out R = never, out E = never, out RH = never> {
+  readonly id: PluginId
+  readonly name: string
+  /** Internal installer; AgentPlugins supplies AgentContext and the hook base. */
+  readonly install: Layer.Layer<never, never, AgentContext | AgentHooks | R | RH>
+  readonly _R?: (_: never) => R
+  readonly _E?: (_: never) => E
+  readonly _RH?: (_: never) => RH
+}
+
+export interface PluginOptions<
+  Tools extends Record<string, Tool.Any> = Record<string, never>,
+  R = never,
+  E = never,
+  RH = never,
+> {
   readonly id?: PluginId | string | undefined
-  readonly name: string
-  readonly toolkit?: Toolkit.Any | undefined
-  readonly handlers?: Layer.Layer<never, never, R> | undefined
-  /**
-   * A hook waterfall stage (see `layerHook`) — by construction it requires the
-   * downstream `AgentHooks`, which `AgentPlugins` provides when composing the
-   * chain. Plugins compose outermost-first: an earlier plugin's hooks see
-   * requests before, and results after, a later plugin's.
-   */
-  readonly hooks?: Layer.Layer<AgentHooks, never, AgentHooks | NoInfer<R> | RH> | undefined
-  readonly models?: ReadonlyArray<ModelSpec<never, R>> | undefined
+  readonly name?: string | undefined
+  readonly toolkit?: Toolkit.Toolkit<Tools> | undefined
+  readonly handlers?: Layer.Layer<Tool.HandlersFor<Tools>, E, R> | undefined
+  readonly hooks?: Layer.Layer<AgentHooks, E, AgentHooks | NoInfer<R> | RH> | undefined
+  readonly models?: ReadonlyArray<ModelSpec<E, R>> | undefined
   readonly skills?: ReadonlyArray<Skill> | undefined
   readonly systemPrompt?: string | undefined
+  readonly promptSections?: ReadonlyArray<string> | undefined
+  readonly conflictPolicy?: ConflictPolicy | undefined
+  readonly install?: Layer.Layer<never, E, AgentContext | R> | undefined
   /** Type-only hook service requirements. */
-  readonly _hookRequirements?: RH
+  readonly _hookRequirements?: RH | undefined
 }
 
-export const Plugin = <Tools extends Record<string, Tool.Any>, R = never, RH = never>(options: {
-  readonly id?: PluginId | string
-  readonly name: string
-  readonly toolkit?: Toolkit.Toolkit<Tools>
-  readonly handlers?: Layer.Layer<Tool.HandlersFor<Tools>, never, R>
-  readonly hooks?: Layer.Layer<AgentHooks, never, AgentHooks | NoInfer<R> | RH>
-  readonly models?: ReadonlyArray<ModelSpec<never, R>>
-  readonly skills?: ReadonlyArray<Skill>
-  readonly systemPrompt?: string
-}): Plugin<R, RH> => {
-  /* SAFETY: The constructor erases the concrete toolkit Tools parameter; R and RH
-   * stay on handlers, hooks, and models. */
+export const make = <
+  Tools extends Record<string, Tool.Any> = Record<string, never>,
+  R = never,
+  E = never,
+  RH = never,
+>(
+  options: PluginOptions<Tools, R, E, RH>,
+): Plugin<R, E, RH> => {
+  const pluginId =
+    options.id !== undefined
+      ? PluginId.make(options.id)
+      : options.name !== undefined
+        ? PluginId.make(options.name)
+        : PluginId.make("anonymous-plugin")
+  const name = options.name ?? String(pluginId)
+
+  /* SAFETY: The default installer satisfies the closed installer signature. */
+  const defaultInstall = Layer.effectDiscard(
+    Effect.gen(function* () {
+      const context = yield* AgentContext
+      const scope = yield* Scope.Scope
+
+      // 1. Tool handlers
+      if (options.toolkit !== undefined) {
+        if (options.handlers !== undefined) {
+          const handlersCtx = yield* Layer.buildWithScope(options.handlers, scope)
+          const withHandler = yield* Effect.provide(
+            options.toolkit,
+            handlersCtx,
+          )
+          const erasedToolkit = eraseToolkit(withHandler)
+          for (const tool of Object.values(withHandler.tools)) {
+            yield* Effect.asVoid(
+              context.registerTool(tool, erasedToolkit, {
+                pluginId,
+                conflictPolicy: options.conflictPolicy,
+              }),
+            )
+          }
+        }
+      } else if (options.handlers !== undefined) {
+        yield* Layer.buildWithScope(options.handlers, scope)
+      }
+
+      // 2. Models
+      if (options.models !== undefined) {
+        for (const spec of options.models) {
+          yield* Effect.asVoid(
+            context.registerModel(spec, {
+              pluginId,
+              conflictPolicy: options.conflictPolicy,
+            }),
+          )
+        }
+      }
+
+      // 3. Skills
+      if (options.skills !== undefined) {
+        for (const skill of options.skills) {
+          yield* Effect.asVoid(
+            context.registerSkill(skill, {
+              pluginId,
+              conflictPolicy: options.conflictPolicy,
+            }),
+          )
+        }
+      }
+
+      // 4. Prompt sections & system prompt
+      const sections = [options.systemPrompt, ...(options.promptSections ?? [])].filter(
+        (text): text is string => text !== undefined && text !== "",
+      )
+      for (const section of sections) {
+        yield* Effect.asVoid(
+          context.registerPromptSection(section, {
+            pluginId,
+            conflictPolicy: options.conflictPolicy ?? "stack",
+          }),
+        )
+      }
+
+      // 5. Hooks
+      if (options.hooks !== undefined) {
+        const hookLayer = options.hooks
+        yield* Effect.asVoid(
+          context.registerHook(
+            (downstream) =>
+              Effect.gen(function* () {
+                const hookScope = yield* Scope.make()
+                const downstreamLayer = Layer.succeed(AgentHooks, downstream)
+                const built = yield* Layer.buildWithScope(
+                  hookLayer.pipe(Layer.provide(downstreamLayer)),
+                  hookScope,
+                )
+                return Context.get(built, AgentHooks)
+              }),
+            {
+              pluginId,
+              conflictPolicy: options.conflictPolicy ?? "stack",
+            },
+          ),
+        )
+      }
+
+      // 6. Custom install layer if provided
+      if (options.install !== undefined) {
+        yield* Layer.buildWithScope(options.install, scope)
+      }
+    }),
+  )
   return {
-    ...options,
-    id: options.id !== undefined ? PluginId.make(options.id) : PluginId.make(options.name),
-  } as Plugin<R, RH>
-}
-
-/** Structural view that drops `any` from plugin Layer/ModelSpec channels. */
-type PluginView = {
-  readonly toolkit?: Toolkit.Any | undefined
-  readonly handlers?: object | undefined
-  readonly hooks?: object | undefined
-  readonly models?:
-    | ReadonlyArray<{
-        readonly id: string
-        readonly provider: string
-        readonly description?: string | undefined
-        readonly layer: object
-      }>
-    | undefined
-  readonly skills?: ReadonlyArray<Skill> | undefined
-  readonly systemPrompt?: string | undefined
-}
-
-interface PluginLayerValue {}
-
-const asHandlerLayer = <R>(layer: PluginLayerValue): Layer.Layer<never, never, R> => {
-  /* SAFETY: Plugin handlers are Layer values; R is recovered from the plugin list. */
-  return layer as Layer.Layer<never, never, R>
-}
-
-const asHookLayer = (layer: PluginLayerValue): Layer.Layer<AgentHooks, never, AgentHooks> => {
-  /* SAFETY: Plugin hooks are AgentHooks layers; the view erases extra R.
-   * AgentPlugins provides AgentContext to the composed waterfall, so hook
-   * stages may require it even though it is erased here. */
-  return layer as Layer.Layer<AgentHooks, never, AgentHooks>
-}
-
-const asModelSpec = (spec: {
-  readonly id: string
-  readonly provider: string
-  readonly description?: string | undefined
-  readonly layer: object
-}): ModelSpec<never, never> => {
-  /* SAFETY: The view only erases the model layer's requirement channel; each
-   * plugin supplies a concrete Layer at registration time. */
-  return {
-    id: spec.id,
-    provider: spec.provider,
-    ...(spec.description === undefined ? undefined : { description: spec.description }),
-    layer: spec.layer as ModelSpec<never, never>["layer"],
+    id: pluginId,
+    name,
+    install: Layer.orDie(defaultInstall),
   }
 }
 
-export type PluginRequirements<Plugins extends ReadonlyArray<Plugin<any, any>>> =
-  Plugins[number] extends Plugin<infer R, infer RH> ? R | RH : never
+export const Plugin = Object.assign(make, {
+  make,
+})
 
-export const AgentPlugins = <const Plugins extends ReadonlyArray<Plugin<any>>>(
+/* oxlint-disable effecttsgo/any-unknown-in-error-context -- plugin lists are existentially typed: each element may require a distinct service union. */
+export type PluginRequirements<Plugins extends ReadonlyArray<Plugin<any, any, any>>> =
+  Plugins[number] extends Plugin<infer R, any, infer RH>
+    ? (0 extends 1 & R ? never : R) | (0 extends 1 & RH ? never : RH)
+    : never
+
+export type PluginErrors<Plugins extends ReadonlyArray<Plugin<any, any, any>>> =
+  Plugins[number] extends Plugin<any, infer E, any> ? (0 extends 1 & E ? never : E) : never
+
+export const AgentPlugins = <const Plugins extends ReadonlyArray<Plugin<any, any, any>>>(
   plugins: Plugins,
-  options?: { readonly systemPrompt?: string | undefined },
+  options?: {
+    readonly systemPrompt?: string | undefined
+    readonly conflictPolicy?: ConflictPolicy | undefined
+  },
 ): Layer.Layer<
   Agent,
   never,
   SessionJournal | Crypto.Crypto | Exclude<PluginRequirements<Plugins>, AgentContext>
 > => {
-  const views: ReadonlyArray<PluginView> = plugins
-  const toolkit = Toolkit.merge(
-    ...views.flatMap((plugin) => (plugin.toolkit === undefined ? [] : [plugin.toolkit])),
-  )
-  const handlers = views.flatMap((plugin) =>
-    plugin.handlers === undefined
-      ? []
-      : [asHandlerLayer<PluginRequirements<Plugins>>(plugin.handlers)],
-  )
-  const models = views.flatMap((plugin) => (plugin.models ?? []).map(asModelSpec))
-  const skills = views.flatMap((plugin) => plugin.skills ?? [])
-  const systemPrompt = [options?.systemPrompt, ...views.map((plugin) => plugin.systemPrompt)]
-    .filter((text): text is string => text !== undefined && text !== "")
-    .join("\n\n")
+  const registry = AgentContextLive({
+    systemPrompt: options?.systemPrompt,
+    defaultConflictPolicy:
+      options?.conflictPolicy !== undefined
+        ? {
+            tool: options.conflictPolicy,
+            model: options.conflictPolicy,
+            skill: options.conflictPolicy,
+            prompt: options.conflictPolicy,
+            hook: options.conflictPolicy,
+          }
+        : undefined,
+  })
 
-  // Waterfall the hook layers outermost-first over the no-op base.
-  const hooks = views.reduceRight(
-    (downstream: Layer.Layer<AgentHooks>, plugin) =>
-      plugin.hooks === undefined
-        ? downstream
-        : asHookLayer(plugin.hooks).pipe(Layer.provide(downstream)),
-    layerNoop,
-  )
-
-  // The registry is built with static contributions (prompt, models, skills)
-  // registered upon acquisition, and provided into the handlers, hooks, and
-  // agent live layer.
-  const registry = Layer.effect(
-    AgentContext,
+  const installAll = Layer.effectDiscard(
     Effect.gen(function* () {
-      const context = yield* makeAgentContext()
-      if (systemPrompt !== "") {
-        yield* Effect.asVoid(context.registerPromptSection(systemPrompt))
+      const scope = yield* Scope.Scope
+      const context = yield* AgentContext
+      for (const plugin of plugins) {
+        yield* Layer.buildWithScope(
+          plugin.install.pipe(Layer.provide(Layer.succeed(AgentContext, context))),
+          scope,
+        )
       }
-      yield* Effect.forEach(models, (spec) => Effect.asVoid(context.registerModel(spec)), {
-        discard: true,
-      })
-      yield* Effect.forEach(skills, (skill) => Effect.asVoid(context.registerSkill(skill)), {
-        discard: true,
-      })
-      return context
     }),
   )
 
-  /* SAFETY: Crypto stays caller-provided so platform packages can substitute it;
-   * the public type keeps SessionJournal plus each plugin's R/RH. AgentContext
-   * requirements are satisfied by the provided registry, never the caller. */
-  return (
-    // oxlint-disable-next-line effecttsgo/unsafe-effect-type-assertion -- Crypto is supplied by the caller, not this layer
-    Layer.unwrap(Effect.map(toolkit, (withHandler) => AgentLive(withHandler))).pipe(
-      Layer.provide([
-        registry,
-        RunRegistryLive,
-        hooks.pipe(Layer.provide(registry)),
-        ...handlers.map((handler) => handler.pipe(Layer.provide(registry))),
-      ]),
-    ) as Layer.Layer<
-      Agent,
-      never,
-      SessionJournal | Crypto.Crypto | Exclude<PluginRequirements<Plugins>, AgentContext>
-    >
+  const registryWithPlugins = installAll.pipe(Layer.provide(layerNoop), Layer.provideMerge(registry))
+
+  return Layer.fresh(AgentLive).pipe(
+    Layer.orDie,
+    Layer.provide(registryWithPlugins),
+    Layer.provide(RunRegistryLive),
   )
 }
+/* oxlint-enable effecttsgo/any-unknown-in-error-context */
