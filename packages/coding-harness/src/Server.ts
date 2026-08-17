@@ -20,18 +20,21 @@ import { Effect, Layer, Path } from "effect"
 import { HttpRouter } from "effect/unstable/http"
 
 /**
- * Model plugins gated on what the environment provides: DeepSeek needs an API
- * key, while Claude and Codex are local CLIs and always register. The
- * `delegation` list omits Claude, matching the models subagents may use.
+ * Model plugins gated on what the environment provides: DeepSeek needs a
+ * non-empty API key (an empty one is treated as absent so the server boots
+ * local-only instead of 401-ing at request time), while Claude and Codex are
+ * local CLIs and always register. The `delegation` list omits Claude, matching
+ * the models subagents may use.
  */
 export const modelPlugins = (deepseekApiKey: string | undefined) => {
+  const apiKey = deepseekApiKey?.trim()
   const deepseek =
-    deepseekApiKey === undefined
+    apiKey === undefined || apiKey === ""
       ? undefined
       : OpenAiCompatible({
           name: "deepseek",
           apiUrl: "https://api.deepseek.com",
-          apiKey: deepseekApiKey,
+          apiKey,
           models: [
             { id: "deepseek-chat", description: "DeepSeek V3 via the OpenAI-compatible API" },
           ],

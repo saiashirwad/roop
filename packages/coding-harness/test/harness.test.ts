@@ -109,6 +109,8 @@ it("modelPlugins registers DeepSeek only when its API key is present", () => {
     plugins.map((plugin) => plugin.name)
   assert.deepStrictEqual(names(modelPlugins(undefined).agent), ["claude", "codex"])
   assert.deepStrictEqual(names(modelPlugins(undefined).delegation), ["codex"])
+  assert.deepStrictEqual(names(modelPlugins("").agent), ["claude", "codex"])
+  assert.deepStrictEqual(names(modelPlugins("  ").delegation), ["codex"])
   assert.deepStrictEqual(names(modelPlugins("sk-test").agent), ["deepseek", "claude", "codex"])
   assert.deepStrictEqual(names(modelPlugins("sk-test").delegation), ["codex", "deepseek"])
 })

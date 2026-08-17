@@ -11,6 +11,7 @@ import { Option, Schema } from "effect"
 import { useState } from "react"
 
 import { Markdown } from "./Markdown.tsx"
+import { Reasoning } from "./Reasoning.tsx"
 
 const styles = stylex.create({
   callout: {
@@ -199,6 +200,8 @@ const SubagentCard = ({ tool }: { readonly tool: Tool }) => {
                     <Markdown text={item.text} />
                   </div>
                 )
+              case "reasoning":
+                return <Reasoning key={index} text={item.text} />
               case "tool":
                 return <ToolCard key={index} tool={item} />
               default:

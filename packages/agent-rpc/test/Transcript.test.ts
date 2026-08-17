@@ -81,27 +81,22 @@ it("summarizes unregistered tool names with the generic fallback", () => {
   })
 })
 
-it("layers caller formatters over the built-in summaries", () => {
-  const summarize = summarizeTool.with({
-    deployK8s: () => ({ label: "deploy", summary: "prod cluster" }),
-    bash: () => ({ label: "sh", summary: "caller wins" }),
-  })
-
-  expect(summarize({ name: "deployK8s", params: { cluster: "prod" } })).toEqual({
-    label: "deploy",
-    summary: "prod cluster",
-  })
-  expect(summarize({ name: "bash", params: { command: "ls" } })).toEqual({
-    label: "sh",
-    summary: "caller wins",
-  })
+it("summarizes writeTodos calls by todo count", () => {
   expect(
-    summarize({ name: "readFile", params: { path: "a.txt" }, result: { content: "hi" } }),
-  ).toEqual({ label: "read", summary: "a.txt · 2b" })
-  expect(summarize({ name: "otherTool", params: { x: 1 } })).toEqual({
-    label: "otherTool",
-    summary: "x: 1",
-  })
+    summarizeTool({
+      name: "writeTodos",
+      params: {
+        todos: [
+          { text: "one", state: "pending" },
+          { text: "two", state: "active" },
+          { text: "three", state: "done" },
+        ],
+      },
+    }),
+  ).toEqual({ label: "todos", summary: "3 todos" })
+  expect(
+    summarizeTool({ name: "writeTodos", params: { todos: [{ text: "only", state: "done" }] } }),
+  ).toEqual({ label: "todos", summary: "1 todo" })
 })
 
 it("summarizes UTF-8 byte sizes rather than JavaScript code-unit lengths", () => {

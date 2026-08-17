@@ -318,10 +318,15 @@ const main = Effect.gen(function* () {
       const render = (event: AgentEvent) => {
         switch (event._tag) {
           case "TextDelta": {
-            // Text after reasoning starts a new assistant block; only the
-            // reasoning state resets, never the assistant buffer itself.
-            reasoning = undefined
-            reasoningBuffer = ""
+            // Reasoning models emit reasoning first, so text after reasoning
+            // opens a fresh assistant block — matching apply(), which starts a
+            // new assistant item there. Plain streaming text still appends.
+            if (reasoning !== undefined) {
+              reasoning = undefined
+              reasoningBuffer = ""
+              markdown = undefined
+              buffer = ""
+            }
             buffer += event.delta
             if (markdown === undefined) {
               markdown = new Markdown("", 0, 0, markdownTheme)
