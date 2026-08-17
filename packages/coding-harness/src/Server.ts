@@ -19,22 +19,43 @@ import { Claude, Codex, OpenAiCompatible, SkillsDir, Todos, WebTools } from "@ro
 import { Effect, Layer, Path } from "effect"
 import { HttpRouter } from "effect/unstable/http"
 
+/**
+ * Model plugins gated on what the environment provides: DeepSeek needs an API
+ * key, while Claude and Codex are local CLIs and always register. The
+ * `delegation` list omits Claude, matching the models subagents may use.
+ */
+export const modelPlugins = (deepseekApiKey: string | undefined) => {
+  const deepseek =
+    deepseekApiKey === undefined
+      ? undefined
+      : OpenAiCompatible({
+          name: "deepseek",
+          apiUrl: "https://api.deepseek.com",
+          apiKey: deepseekApiKey,
+          models: [
+            { id: "deepseek-chat", description: "DeepSeek V3 via the OpenAI-compatible API" },
+          ],
+        })
+  const codex = Codex()
+  return {
+    /** Registered in the harness agent. */
+    agent: deepseek === undefined ? [Claude(), codex] : [deepseek, Claude(), codex],
+    /** Model plugins also handed to delegated subagents. */
+    delegation: deepseek === undefined ? [codex] : [codex, deepseek],
+  }
+}
+
 export const server = (options: {
   readonly port: number
   readonly root: string
-  readonly apiKey: string
+  /** Omit to run without DeepSeek; only the local CLI models register. */
+  readonly deepseekApiKey?: string | undefined
   /** Keep the unauthenticated development server private by default. */
   readonly host?: string | undefined
 }) => {
-  const deepseek = OpenAiCompatible({
-    name: "deepseek",
-    apiUrl: "https://api.deepseek.com",
-    apiKey: options.apiKey,
-    models: [{ id: "deepseek-chat", description: "DeepSeek V3 via the OpenAI-compatible API" }],
-  })
+  const models = modelPlugins(options.deepseekApiKey)
   const codingTools = CodingTools()
   const webTools = WebTools()
-  const codex = Codex()
 
   const agent = Layer.unwrap(
     Effect.gen(function* () {
@@ -45,14 +66,12 @@ export const server = (options: {
         webTools,
         Todos(),
         skills,
-        deepseek,
-        Claude(),
-        codex,
+        ...models.agent,
         subagent({
           name: delegationToolName,
           description:
             "Delegate a self-contained coding task to a subagent in an isolated Git worktree. Give it one complete task and receive a summary.",
-          plugins: [codingTools, webTools, codex, deepseek],
+          plugins: [codingTools, webTools, ...models.delegation],
           layer: ExecutionWorld.worktreeFromParent(),
           policy: { maxTotalSteps: 25 },
         }),

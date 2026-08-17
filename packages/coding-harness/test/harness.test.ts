@@ -11,6 +11,7 @@ import { Effect, FileSystem, Layer, Path, Stream } from "effect"
 import { LanguageModel, type Response } from "effect/unstable/ai"
 
 import { parsePort } from "../src/parsePort.ts"
+import { modelPlugins, server } from "../src/Server.ts"
 
 const agentLayer = (model: Effect.Effect<LanguageModel.Service>, root: string) =>
   AgentPlugins([
@@ -100,5 +101,23 @@ it.effect("runs writeFile, readFile, and bash through the agent", () =>
       assert.strictEqual(bash.result.exitCode, 0)
       assert.strictEqual(bash.result.stdout, "ok")
     }).pipe(Effect.provide(agentLayer(scripted(turns), root))),
+  ),
+)
+
+it("modelPlugins registers DeepSeek only when its API key is present", () => {
+  const names = (plugins: ReadonlyArray<{ readonly name: string }>) =>
+    plugins.map((plugin) => plugin.name)
+  assert.deepStrictEqual(names(modelPlugins(undefined).agent), ["claude", "codex"])
+  assert.deepStrictEqual(names(modelPlugins(undefined).delegation), ["codex"])
+  assert.deepStrictEqual(names(modelPlugins("sk-test").agent), ["deepseek", "claude", "codex"])
+  assert.deepStrictEqual(names(modelPlugins("sk-test").delegation), ["codex", "deepseek"])
+})
+
+it.effect("server layer boots on an ephemeral port with and without a DeepSeek API key", () =>
+  withWorkspace((root) =>
+    Effect.gen(function* () {
+      yield* Layer.build(server({ port: 0, root, deepseekApiKey: undefined }))
+      yield* Layer.build(server({ port: 0, root, deepseekApiKey: "sk-test" }))
+    }),
   ),
 )
