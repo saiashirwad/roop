@@ -204,7 +204,7 @@ export const AgentLiveToolkit = <Tools extends Record<string, Tool.Any>>(
     skills: options?.skills ?? [],
   })
 
-  return AgentLive.pipe(
+  return Layer.fresh(AgentLive).pipe(
     Layer.provide([
       tools,
       config,

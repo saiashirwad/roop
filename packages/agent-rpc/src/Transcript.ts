@@ -177,6 +177,15 @@ const EditResult = Schema.Struct({
   path: Schema.optionalKey(Schema.String),
   appliedEdits: Schema.optionalKey(Schema.Finite),
 })
+const ApplyPatchParams = Schema.Struct({
+  patch: Schema.optionalKey(Schema.String),
+  patchText: Schema.optionalKey(Schema.String),
+  diff: Schema.optionalKey(Schema.String),
+})
+const ApplyPatchResult = Schema.Struct({
+  files: Schema.optionalKey(Schema.Array(Schema.String)),
+  summary: Schema.optionalKey(Schema.String),
+})
 const ListFilesParams = Schema.Struct({ path: Schema.optionalKey(Schema.String) })
 const ListFilesResult = Schema.Struct({ files: Schema.optionalKey(Schema.Array(Schema.String)) })
 const FindParams = Schema.Struct({
@@ -257,6 +266,31 @@ const summaryOf = {
     return {
       label: "edit",
       summary: `${decoded.path} · ${editCount} edit${editCount === 1 ? "" : "s"}`,
+    }
+  },
+  applyPatch: (call: ToolCall): ToolSummary => {
+    const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(ApplyPatchParams)(call.params))
+    const rawPatch = decoded?.patch ?? decoded?.patchText ?? decoded?.diff
+    if (decoded === undefined || rawPatch === undefined || rawPatch.trim() === "") {
+      return fallback(call)
+    }
+    const result = Option.getOrUndefined(Schema.decodeUnknownOption(ApplyPatchResult)(call.result))
+    if (result?.files && result.files.length > 0) {
+      const files = result.files
+      const summary =
+        files.length === 1
+          ? files[0]!
+          : `${files.length} files · ${files.slice(0, 2).join(", ")}${files.length > 2 ? "…" : ""}`
+      return { label: "patch", summary }
+    }
+
+    const headerMatch = rawPatch.match(
+      /(?:\*\*\*\s*(?:Update|Add|Delete)\s*File:\s*([^\r\n]+)|(?:---|\+\+\+)\s+[ab]\/([^\r\n\t]+)|diff --git\s+a\/([^\s]+))/i,
+    )
+    const targetFile = headerMatch?.[1] ?? headerMatch?.[2] ?? headerMatch?.[3]
+    return {
+      label: "patch",
+      summary: targetFile ? targetFile.trim() : "apply diff",
     }
   },
   listFiles: (call: ToolCall): ToolSummary => {
@@ -345,6 +379,7 @@ export const summarizeTool = (call: ToolCall): ToolSummary => {
     case "readFile":
     case "writeFile":
     case "edit":
+    case "applyPatch":
     case "listFiles":
     case "find":
     case "grep":

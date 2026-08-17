@@ -39,6 +39,7 @@ const iconOf = {
   readFile: `${cyan("\uf15b")} ${bold("read")}`,
   writeFile: `${cyan("\uf040")} ${bold("write")}`,
   edit: `${cyan("\uf044")} ${bold("edit")}`,
+  applyPatch: `${cyan("\uf044")} ${bold("patch")}`,
   listFiles: `${cyan("\uf115")} ${bold("list")}`,
   find: `${cyan("\uf0b0")} ${bold("find")}`,
   grep: `${cyan("\uf002")} ${bold("grep")}`,

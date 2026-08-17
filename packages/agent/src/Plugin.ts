@@ -134,9 +134,6 @@ export type PluginRequirements<Plugins extends ReadonlyArray<Plugin<any, any, an
     ? (0 extends 1 & R ? never : R) | (0 extends 1 & RH ? never : RH)
     : never
 
-export type PluginErrors<Plugins extends ReadonlyArray<Plugin<any, any, any>>> =
-  Plugins[number] extends Plugin<any, infer E, any> ? (0 extends 1 & E ? never : E) : never
-
 export const AgentPlugins = <const Plugins extends ReadonlyArray<Plugin<any, any, any>>>(
   plugins: Plugins,
   options?: {

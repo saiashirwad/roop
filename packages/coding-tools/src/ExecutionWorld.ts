@@ -217,6 +217,7 @@ export class ExecutionWorld extends Context.Service<ExecutionWorld, ExecutionWor
               return results
             }),
           exists: (target: string) => Effect.sync(() => files.has(target)),
+          makeDirectory: () => Effect.void,
           remove: (target: string) =>
             Effect.sync(() => {
               files.delete(target)
@@ -381,4 +382,11 @@ export class ExecutionWorld extends Context.Service<ExecutionWorld, ExecutionWor
         })
       }),
     )
+}
+
+export const normalizeWorkspacePath = (world: ExecutionWorldService, resolved: string): string => {
+  const root = world.root.replaceAll("\\", "/").replace(/\/+$/, "")
+  const target = resolved.replaceAll("\\", "/")
+  if (target === root) return ""
+  return target.startsWith(`${root}/`) ? target.slice(root.length + 1) : target
 }

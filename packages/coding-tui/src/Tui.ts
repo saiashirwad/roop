@@ -368,10 +368,11 @@ const main = Effect.gen(function* () {
           }
           case "Subagent": {
             const inner = event.event
-            let ticker = tickers.get(event.name)
+            const tickerKey = event.toolCallId ?? event.name
+            let ticker = tickers.get(tickerKey)
             if (ticker === undefined) {
               ticker = new Text("", 0, 0)
-              tickers.set(event.name, ticker)
+              tickers.set(tickerKey, ticker)
               chat.addChild(ticker)
             }
             if (inner._tag === "ToolCall") {
@@ -381,7 +382,7 @@ const main = Effect.gen(function* () {
             }
             if (inner._tag === "Finish") {
               chat.removeChild(ticker)
-              tickers.delete(event.name)
+              tickers.delete(tickerKey)
             }
             return
           }

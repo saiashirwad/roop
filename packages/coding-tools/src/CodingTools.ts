@@ -3,29 +3,26 @@ import { Effect, Schema, Stream } from "effect"
 import { Tool, Toolkit } from "effect/unstable/ai"
 import { ChildProcess } from "effect/unstable/process"
 
-import { ExecutionWorld, type ExecutionWorldService } from "./ExecutionWorld.ts"
+import { applyPatchTransaction } from "./ApplyPatch.ts"
+import {
+  ExecutionWorld,
+  type ExecutionWorldService,
+  normalizeWorkspacePath,
+} from "./ExecutionWorld.ts"
+import { ToolFailure } from "./ToolFailure.ts"
 
-export class ToolFailure extends Schema.TaggedErrorClass<ToolFailure>()("ToolFailure", {
-  message: Schema.String,
-}) {}
+export { ToolFailure } from "./ToolFailure.ts"
 
 const makeGrepRegex = (pattern: string, caseSensitive?: boolean): RegExp => {
   try {
-    return new RegExp(pattern, caseSensitive ? "g" : "gi")
+    return new RegExp(pattern, caseSensitive ? "" : "i")
   } catch {
     const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-    return new RegExp(escaped, caseSensitive ? "g" : "gi")
+    return new RegExp(escaped, caseSensitive ? "" : "i")
   }
 }
 
 const NonNegativeInt = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
-
-const normalizedWorkspacePath = (world: ExecutionWorldService, resolved: string): string => {
-  const root = world.root.replaceAll("\\", "/").replace(/\/+$/, "")
-  const target = resolved.replaceAll("\\", "/")
-  if (target === root) return ""
-  return target.startsWith(`${root}/`) ? target.slice(root.length + 1) : target
-}
 
 const isIgnoredWorkspacePath = (file: string): boolean =>
   file
@@ -83,6 +80,22 @@ export const CodingTools = (): Plugin<ExecutionWorld> => {
       success: Schema.Struct({
         path: Schema.String,
         appliedEdits: Schema.Finite,
+      }),
+      failure: ToolFailure,
+      failureMode: "return",
+      dependencies: [ExecutionWorld],
+    }),
+    Tool.make("applyPatch", {
+      description:
+        "Apply a multi-file diff, unified diff, or OpenAI patch block (*** Begin Patch) to create, update, move, or delete files atomically.",
+      parameters: Schema.Struct({
+        patch: Schema.optionalKey(Schema.String),
+        patchText: Schema.optionalKey(Schema.String),
+        diff: Schema.optionalKey(Schema.String),
+      }),
+      success: Schema.Struct({
+        summary: Schema.String,
+        files: Schema.Array(Schema.String),
       }),
       failure: ToolFailure,
       failureMode: "return",
@@ -214,11 +227,22 @@ export const CodingTools = (): Plugin<ExecutionWorld> => {
                 message: `oldText matches ${count} times in ${path}; provide more surrounding context to disambiguate: "${preview}"`,
               })
             }
-            content = content.replace(editItem.oldText, editItem.newText)
+            content = content.replace(editItem.oldText, () => editItem.newText)
             appliedEdits += 1
           }
           yield* asFailure(world.filesystem.writeFileString(file, content))
           return { path, appliedEdits }
+        }),
+      applyPatch: ({ patch, patchText, diff }) =>
+        Effect.gen(function* () {
+          const world = yield* ExecutionWorld
+          const rawPatch = patch ?? patchText ?? diff
+          if (rawPatch === undefined || rawPatch.trim() === "") {
+            return yield* new ToolFailure({
+              message: "No patch content provided: 'patch' parameter is required",
+            })
+          }
+          return yield* applyPatchTransaction(world, rawPatch)
         }),
       listFiles: ({ path }) =>
         Effect.gen(function* () {
@@ -229,7 +253,7 @@ export const CodingTools = (): Plugin<ExecutionWorld> => {
           )
           const files = yield* Effect.forEach(entries, (entry) =>
             asFailure(resolveDirectoryEntry(world, dir, entry)).pipe(
-              Effect.map((resolved) => normalizedWorkspacePath(world, resolved)),
+              Effect.map((resolved) => normalizeWorkspacePath(world, resolved)),
             ),
           )
           return { files: files.filter((file) => !isIgnoredWorkspacePath(file)) }
@@ -244,7 +268,7 @@ export const CodingTools = (): Plugin<ExecutionWorld> => {
           )
           const entries = yield* Effect.forEach(rawFiles, (entry) =>
             asFailure(resolveDirectoryEntry(world, targetDir, entry)).pipe(
-              Effect.map((resolved) => ({ file: normalizedWorkspacePath(world, resolved) })),
+              Effect.map((resolved) => ({ file: normalizeWorkspacePath(world, resolved) })),
             ),
           )
 
@@ -252,7 +276,7 @@ export const CodingTools = (): Plugin<ExecutionWorld> => {
 
           let matched = filtered
           if (pattern && pattern.trim() !== "") {
-            const p = pattern.trim().toLowerCase()
+            const p = pattern.trim()
             if (p.includes("*")) {
               const regex = new RegExp(
                 "^" +
@@ -263,9 +287,11 @@ export const CodingTools = (): Plugin<ExecutionWorld> => {
                   "$",
                 "i",
               )
-              matched = filtered.filter(({ file }) => regex.test(file))
+              matched = filtered.filter(
+                ({ file }) => regex.test(file) || regex.test(file.split("/").pop() ?? ""),
+              )
             } else {
-              matched = filtered.filter(({ file }) => file.toLowerCase().includes(p))
+              matched = filtered.filter(({ file }) => file.toLowerCase().includes(p.toLowerCase()))
             }
           }
 
@@ -291,7 +317,7 @@ export const CodingTools = (): Plugin<ExecutionWorld> => {
           let totalMatches = 0
           for (const entry of allFiles) {
             const fullPath = yield* asFailure(resolveDirectoryEntry(world, targetDir, entry))
-            const relFile = normalizedWorkspacePath(world, fullPath)
+            const relFile = normalizeWorkspacePath(world, fullPath)
             if (isIgnoredWorkspacePath(relFile)) {
               continue
             }
