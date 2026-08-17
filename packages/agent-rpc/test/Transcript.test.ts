@@ -74,6 +74,36 @@ it("replays persisted reasoning parts as reasoning items", () => {
   ])
 })
 
+it("summarizes unregistered tool names with the generic fallback", () => {
+  expect(summarizeTool({ name: "deployK8s", params: { cluster: "prod" } })).toEqual({
+    label: "deployK8s",
+    summary: "cluster: prod",
+  })
+})
+
+it("layers caller formatters over the built-in summaries", () => {
+  const summarize = summarizeTool.with({
+    deployK8s: () => ({ label: "deploy", summary: "prod cluster" }),
+    bash: () => ({ label: "sh", summary: "caller wins" }),
+  })
+
+  expect(summarize({ name: "deployK8s", params: { cluster: "prod" } })).toEqual({
+    label: "deploy",
+    summary: "prod cluster",
+  })
+  expect(summarize({ name: "bash", params: { command: "ls" } })).toEqual({
+    label: "sh",
+    summary: "caller wins",
+  })
+  expect(
+    summarize({ name: "readFile", params: { path: "a.txt" }, result: { content: "hi" } }),
+  ).toEqual({ label: "read", summary: "a.txt · 2b" })
+  expect(summarize({ name: "otherTool", params: { x: 1 } })).toEqual({
+    label: "otherTool",
+    summary: "x: 1",
+  })
+})
+
 it("summarizes UTF-8 byte sizes rather than JavaScript code-unit lengths", () => {
   expect(
     summarizeTool({

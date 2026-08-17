@@ -149,6 +149,9 @@ export type ToolCall = {
   readonly result?: unknown
 }
 
+/** Summarizes one tool call; registered by name to extend `summarizeTool`. */
+export type ToolFormatter = (call: ToolCall) => ToolSummary
+
 /** A tool result envelope, for readers that only care about the outcome. */
 export type ToolOutcome = {
   readonly result?: unknown
@@ -334,24 +337,38 @@ const summaryOf = {
 } satisfies { readonly [name: string]: (call: ToolCall) => ToolSummary }
 
 /** One-line summary of a tool call: a short label plus a compact detail string. */
-export const summarizeTool = (call: ToolCall): ToolSummary => {
-  switch (call.name) {
-    case "readFile":
-    case "writeFile":
-    case "edit":
-    case "listFiles":
-    case "find":
-    case "grep":
-    case "bash":
-    case "webFetch":
-    case "skill":
-    case "Subagent":
-    case "task":
-      return summaryOf[call.name](call)
-    default:
-      return fallback(call)
-  }
-}
+export const summarizeTool = Object.assign(
+  (call: ToolCall): ToolSummary => {
+    switch (call.name) {
+      case "readFile":
+      case "writeFile":
+      case "edit":
+      case "listFiles":
+      case "find":
+      case "grep":
+      case "bash":
+      case "webFetch":
+      case "skill":
+      case "Subagent":
+      case "task":
+        return summaryOf[call.name](call)
+      default:
+        return fallback(call)
+    }
+  },
+  {
+    /**
+     * Layer formatters for tools this package does not know over the built-ins,
+     * so a harness can summarize its own tools without editing the protocol
+     * package. Extra formatters win per tool name; every other name keeps its
+     * built-in summary or the generic fallback.
+     */
+    with:
+      (extra: Readonly<Record<string, ToolFormatter>>) =>
+      (call: ToolCall): ToolSummary =>
+        extra[call.name]?.(call) ?? summarizeTool(call),
+  },
+)
 
 const ResultMessage = Schema.Struct({ message: Schema.optionalKey(Schema.String) })
 const ResultSummary = Schema.Struct({ summary: Schema.optionalKey(Schema.String) })
