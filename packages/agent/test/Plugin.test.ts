@@ -84,7 +84,7 @@ it.layer(Composed)("AgentPlugins", (it) => {
       const events = yield* collect(agent.prompt({ prompt: "go", sessionId: "p1" }))
 
       /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
-      const results = events.filter((event: any) => event._tag === "ToolResult") as Array<any>
+      const results = events.filter((event) => event._tag === "ToolResult") as Array<any>
       assert.deepStrictEqual(
         results.map((result) => [result.name, result.result.reply]),
         [
@@ -183,12 +183,12 @@ it.layer(Parent)("subagent", (it) => {
 
       const events = yield* collect(agent.prompt({ prompt: "delegate", sessionId: "d1" }))
       /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
-      const result = events.find((event: any) => event._tag === "ToolResult") as any
+      const result = events.find((event) => event._tag === "ToolResult") as any
       assert.strictEqual(result.isFailure, false)
       assert.deepStrictEqual(result.result, { summary: "child did the task" })
 
       /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
-      const nested = events.filter((event: any) => event._tag === "Subagent") as Array<any>
+      const nested = events.filter((event) => event._tag === "Subagent") as Array<any>
       assert.deepStrictEqual(
         nested.map((wrapped) => [wrapped.name, wrapped.event._tag]),
         [
@@ -456,7 +456,7 @@ it.layer(MidRun)("mid-run registration", (it) => {
       const agent = yield* Agent
       const events = yield* collect(agent.prompt({ prompt: "go", sessionId: "r1" }))
       /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
-      const results = events.filter((event: any) => event._tag === "ToolResult") as Array<any>
+      const results = events.filter((event) => event._tag === "ToolResult") as Array<any>
       assert.deepStrictEqual(
         results.map((result) => [result.name, result.result]),
         [
@@ -472,7 +472,7 @@ it.layer(MidRun)("mid-run registration", (it) => {
           .filter((event) => event._tag === "system/message")
           .map(
             /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
-            (event: any) => event.content,
+            (event) => event.content,
           ),
         ["mid-run section"],
       )

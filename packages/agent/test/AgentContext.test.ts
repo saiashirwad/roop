@@ -148,8 +148,7 @@ it.layer(AgentContextLive())("AgentContext", (it) => {
         assert.ok(Exit.isFailure(exit))
         const error = Option.getOrThrow(Exit.findErrorOption(exit))
         assert.ok(Schema.is(RegistrationConflict)(error))
-        /* SAFETY: Schema.is above confirms error is a RegistrationConflict instance. */
-        const conflict = error as RegistrationConflict
+        const conflict = error
         assert.strictEqual(conflict.kind, "tool")
         assert.strictEqual(conflict.name, "echo")
         assert.strictEqual(String(conflict.existingPluginId), "p1")
@@ -175,8 +174,7 @@ it.layer(AgentContextLive())("AgentContext", (it) => {
         assert.ok(Exit.isFailure(exit))
         const error = Option.getOrThrow(Exit.findErrorOption(exit))
         assert.ok(Schema.is(RegistrationConflict)(error))
-        /* SAFETY: Schema.is above confirms error is a RegistrationConflict instance. */
-        const conflict = error as RegistrationConflict
+        const conflict = error
         assert.strictEqual(conflict.kind, "model")
         assert.strictEqual(conflict.name, "gpt-4o")
         assert.strictEqual(String(conflict.existingPluginId), "m1")
@@ -198,8 +196,7 @@ it.layer(AgentContextLive())("AgentContext", (it) => {
         assert.ok(Exit.isFailure(exit))
         const error = Option.getOrThrow(Exit.findErrorOption(exit))
         assert.ok(Schema.is(RegistrationConflict)(error))
-        /* SAFETY: Schema.is above confirms error is a RegistrationConflict instance. */
-        const conflict = error as RegistrationConflict
+        const conflict = error
         assert.strictEqual(conflict.kind, "skill")
         assert.strictEqual(conflict.name, "code-review")
         assert.strictEqual(String(conflict.existingPluginId), "s1")

@@ -60,7 +60,7 @@ it.layer(
       const events = yield* collect(agent.prompt({ prompt: "say hi", sessionId: "s1" }))
 
       assert.deepStrictEqual(
-        events.map((event: any) => event._tag),
+        events.map((event) => event._tag),
         ["ToolCall", "ToolResult", "TextDelta", "Finish"],
       )
       /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
@@ -159,7 +159,7 @@ it.layer(Main(hanging))("Agent kernel concurrency", (it) => {
       yield* Fiber.join(fiber)
       const rest = yield* Queue.takeAll(queue)
       assert.deepStrictEqual(
-        rest.map((event: any) => event._tag),
+        rest.map((event) => event._tag),
         ["Finish"],
       )
       assert.strictEqual(rest[0].reason, "interrupted")
@@ -271,7 +271,7 @@ it.effect("records a new system/message when resuming with a diverging prompt", 
 
     const systemEvents = session.events.filter((event) => event._tag === "system/message")
     assert.deepStrictEqual(
-      systemEvents.map((event: any) => event.content),
+      systemEvents.map((event) => event.content),
       ["you are v1", "you are v2"],
     )
 
@@ -290,7 +290,7 @@ it.effect("does not duplicate the system message when resuming with the same pro
 
     const systemEvents = session.events.filter((event) => event._tag === "system/message")
     assert.deepStrictEqual(
-      systemEvents.map((event: any) => event.content),
+      systemEvents.map((event) => event.content),
       ["you are stable"],
     )
   }),
@@ -387,10 +387,7 @@ it.effect("advertises and executes the latest duplicate model registration", () 
     )
     const events = yield* collect(agent.prompt({ prompt: "latest", sessionId: "latest-model" }))
     /* SAFETY: The scripted model emits a TextDelta for the latest registration. */
-    assert.strictEqual(
-      (events.find((event: any) => event._tag === "TextDelta") as any).delta,
-      "latest",
-    )
+    assert.strictEqual((events.find((event) => event._tag === "TextDelta") as any).delta, "latest")
   }).pipe(
     Effect.provide(
       AgentLiveToolkit(EchoToolkit, {
@@ -458,7 +455,7 @@ it.layer(
         }),
       )
       assert.deepStrictEqual(
-        events.map((event: any) => event._tag),
+        events.map((event) => event._tag),
         ["ToolCall", "ToolResult", "Finish"],
       )
       /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
@@ -481,7 +478,7 @@ it.effect(
         }),
       )
       /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
-      const finish = events.find((e: any) => e._tag === "Finish") as any
+      const finish = events.find((e) => e._tag === "Finish") as any
       assert.ok(finish !== undefined)
       assert.strictEqual(finish.reason, "stopped")
     }).pipe(

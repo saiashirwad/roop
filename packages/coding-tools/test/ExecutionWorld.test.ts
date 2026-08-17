@@ -1,6 +1,7 @@
 import { NodeChildProcessSpawner, NodeFileSystem, NodePath } from "@effect/platform-node"
 import { assert, it } from "@effect/vitest"
 import { Agent } from "@roop/agent/Agent.ts"
+import type { AgentEvent } from "@roop/agent/AgentEvent.ts"
 import { cryptoWeb } from "@roop/agent/cryptoWeb.ts"
 import { AgentPlugins, Plugin } from "@roop/agent/Plugin.ts"
 import { SessionJournalMemory } from "@roop/agent/SessionJournal.ts"
@@ -22,6 +23,14 @@ const nodePlatform = Layer.mergeAll(
   NodePath.layer,
 )
 
+type ToolResult = Extract<AgentEvent, { readonly _tag: "ToolResult" }>
+type SubagentEvent = Extract<AgentEvent, { readonly _tag: "Subagent" }>
+
+const isToolResult = (event: AgentEvent): event is ToolResult => event._tag === "ToolResult"
+const isSubagent = (event: AgentEvent): event is SubagentEvent => event._tag === "Subagent"
+const isWriteFileResult = (event: AgentEvent): event is ToolResult =>
+  event._tag === "ToolResult" && event.name === "writeFile"
+
 it.effect("CodingTools.edit: applies targeted replacements and validates uniqueness", () =>
   Effect.gen(function* () {
     const agent = yield* Agent
@@ -30,7 +39,7 @@ it.effect("CodingTools.edit: applies targeted replacements and validates uniquen
     ).pipe(Effect.map((chunk) => [...chunk]))
 
     /* SAFETY: the filter checks the discriminant before narrowing this test fixture. */
-    const toolResults = events.filter((e: any) => e._tag === "ToolResult") as ReadonlyArray<any>
+    const toolResults = events.filter(isToolResult) as ReadonlyArray<any>
     assert.strictEqual(toolResults.length, 4)
 
     // Edit 1: single edit succeeds
@@ -130,7 +139,7 @@ it.effect("CodingTools.find and grep: searches workspace file paths and line con
     ).pipe(Effect.map((chunk) => [...chunk]))
 
     /* SAFETY: the filter checks the discriminant before narrowing this test fixture. */
-    const toolResults = events.filter((e: any) => e._tag === "ToolResult") as ReadonlyArray<any>
+    const toolResults = events.filter(isToolResult) as ReadonlyArray<any>
     assert.strictEqual(toolResults.length, 4)
 
     // listFiles resolves entries relative to its nested target and omits ignored trees.
@@ -239,7 +248,7 @@ it.effect("ExecutionWorld.local: Node-backed ExecutionWorld executes file and ba
 
     /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
     /* SAFETY: the filter checks the discriminant before narrowing this test fixture. */
-    const toolResults = events.filter((e: any) => e._tag === "ToolResult") as ReadonlyArray<any>
+    const toolResults = events.filter(isToolResult) as ReadonlyArray<any>
     assert.strictEqual(toolResults.length, 3)
     assert.deepStrictEqual(toolResults[0].result, { path: "test.txt" })
     assert.deepStrictEqual(toolResults[1].result, { content: "node-world" })
@@ -311,7 +320,7 @@ it.effect("ExecutionWorld: prevents path escaping outside workspace root", () =>
     ).pipe(Effect.map((chunk) => [...chunk]))
 
     /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
-    const toolResults = events.filter((e: any) => e._tag === "ToolResult") as ReadonlyArray<any>
+    const toolResults = events.filter(isToolResult) as ReadonlyArray<any>
     assert.strictEqual(toolResults.length, 1)
     assert.strictEqual(toolResults[0].isFailure, true)
     assert.match(toolResults[0].result.message, /path escapes the workspace root/)
@@ -366,7 +375,7 @@ it.effect("ExecutionWorld: rejects symlink escapes for file and search tools", (
     ).pipe(Effect.map((chunk) => [...chunk]))
 
     /* SAFETY: the filter checks the discriminant before narrowing this test fixture. */
-    const toolResults = events.filter((e: any) => e._tag === "ToolResult") as ReadonlyArray<any>
+    const toolResults = events.filter(isToolResult) as ReadonlyArray<any>
     assert.strictEqual(toolResults.length, 6)
     for (const result of toolResults) {
       assert.strictEqual(result.isFailure, true)
@@ -471,7 +480,7 @@ it.effect("ExecutionWorld.memory: runs in-memory without host disk access", () =
     ).pipe(Effect.map((chunk) => [...chunk]))
 
     /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
-    const toolResults = events.filter((e: any) => e._tag === "ToolResult") as ReadonlyArray<any>
+    const toolResults = events.filter(isToolResult) as ReadonlyArray<any>
     assert.strictEqual(toolResults.length, 3)
     assert.deepStrictEqual(toolResults[0].result, { content: "initial data" })
     assert.deepStrictEqual(toolResults[1].result, { path: "new-file.txt" })
@@ -544,7 +553,7 @@ it.effect("ExecutionWorld.memory: fails missing files through error channel as T
     ).pipe(Effect.map((chunk) => [...chunk]))
 
     /* SAFETY: the filter checks the discriminant before narrowing this test fixture. */
-    const toolResults = events.filter((e: any) => e._tag === "ToolResult") as ReadonlyArray<any>
+    const toolResults = events.filter(isToolResult) as ReadonlyArray<any>
     assert.strictEqual(toolResults.length, 1)
     assert.strictEqual(toolResults[0].isFailure, true)
     assert.match(toolResults[0].result.message, /NotFound/)
@@ -676,9 +685,7 @@ it.effect(
           )
 
           /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
-          const toolResults = events.filter(
-            (e: any) => e._tag === "ToolResult",
-          ) as ReadonlyArray<any>
+          const toolResults = events.filter((e) => e._tag === "ToolResult") as ReadonlyArray<any>
           assert.strictEqual(toolResults.length, 2)
           assert.deepStrictEqual(toolResults[0].result, { content: "# Base Repo" })
           assert.deepStrictEqual(toolResults[1].result, { path: "branch-file.txt" })
@@ -794,17 +801,17 @@ it.effect(
       }).pipe(Effect.provide(parentLayer))
 
       /* SAFETY: the filter checks the discriminant before narrowing this test fixture. */
-      const toolResults = events.filter((e: any) => e._tag === "ToolResult") as ReadonlyArray<any>
+      const toolResults = events.filter(isToolResult) as ReadonlyArray<any>
       assert.strictEqual(toolResults.length, 1)
       assert.deepStrictEqual(toolResults[0].result, { summary: "subagent finished task" })
 
       const childWrites = events
-        .filter((e: any) => e._tag === "Subagent")
-        .map((e: any) => e.event)
-        .filter((e: any) => e._tag === "ToolResult" && e.name === "writeFile")
+        .filter(isSubagent)
+        .map((e) => e.event)
+        .filter(isWriteFileResult)
       assert.strictEqual(childWrites.length, 1)
-      assert.strictEqual(childWrites[0].isFailure, false)
-      assert.deepStrictEqual(childWrites[0].result, { path: "isolated-worktree.txt" })
+      assert.strictEqual(childWrites[0]!.isFailure, false)
+      assert.deepStrictEqual(childWrites[0]!.result, { path: "isolated-worktree.txt" })
 
       // File created in worktree should not exist in parent base repo
       assert.strictEqual(yield* fs.exists(path.join(baseRepo, "isolated-worktree.txt")), false)

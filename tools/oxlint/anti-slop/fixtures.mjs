@@ -113,6 +113,50 @@ function outer() {
   )
   assert.deepEqual(safetyLines, [4, 7])
 
+  const escapeHatches = diagnosticsFor(
+    "escape-hatches.ts",
+    `declare const value: string
+const anyValue = value as any
+const unknownValue = value as unknown
+`,
+  )
+  assert.equal(codes(escapeHatches, "no-escape-hatch-assertions").length, 2)
+
+  const deserialization = diagnosticsFor(
+    "deserialization.ts",
+    `declare const input: string
+declare const response: { json(): Promise<unknown> }
+const parsed = JSON.parse(input) as { readonly id: string }
+async function load() {
+  return (await response.json()) as { readonly id: string }
+}
+`,
+  )
+  assert.equal(codes(deserialization, "no-cast-deserialization").length, 2)
+
+  const proven = diagnosticsFor(
+    "proven.ts",
+    `declare const assert: { ok(value: unknown): asserts value }
+declare const Schema: { is(schema: unknown): (value: unknown) => boolean }
+declare const Result: unknown
+declare const value: unknown
+function prove() {
+  assert.ok(Schema.is(Result)(value))
+  const result = value as { readonly id: string }
+  return result
+}
+`,
+  )
+  assert.equal(codes(proven, "no-assertion-after-proof").length, 1)
+
+  const projection = diagnosticsFor(
+    "projection.test.ts",
+    `declare const events: ReadonlyArray<{ readonly _tag: string }>
+const matches = events.filter((event: any) => event._tag === "ToolResult")
+`,
+  )
+  assert.equal(codes(projection, "no-untyped-test-projection").length, 1)
+
   diagnosticsFor(
     "interface-cycle.ts",
     "interface A extends B {}\ninterface B extends A {}\ntype Use = A\n",

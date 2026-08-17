@@ -143,8 +143,7 @@ const runJournalConformance = (name: string, makeLayer: () => Layer.Layer<Sessio
         assert.ok(Exit.isFailure(exit))
         const error = Option.getOrThrow(Exit.findErrorOption(exit))
         assert.ok(Schema.is(SessionConflict)(error))
-        /* SAFETY: Schema.is above confirms error is a SessionConflict instance. */
-        const conflict = error as SessionConflict
+        const conflict = error
         assert.strictEqual(conflict._tag, "SessionConflict")
         assert.strictEqual(conflict.sessionId, sid)
         assert.strictEqual(conflict.expectedRevision, 1)
@@ -157,8 +156,7 @@ const runJournalConformance = (name: string, makeLayer: () => Layer.Layer<Sessio
         assert.ok(Exit.isFailure(appendConflict))
         const appendError = Option.getOrThrow(Exit.findErrorOption(appendConflict))
         assert.ok(Schema.is(SessionConflict)(appendError))
-        /* SAFETY: Schema.is above confirms error is a SessionConflict instance. */
-        const appendConflictError = appendError as SessionConflict
+        const appendConflictError = appendError
         assert.strictEqual(appendConflictError._tag, "SessionConflict")
         assert.strictEqual(appendConflictError.actualRevision, 2)
       }),

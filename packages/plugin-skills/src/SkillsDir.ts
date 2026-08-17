@@ -23,8 +23,7 @@ const unquote = (value: string): string => {
   if (first === "'" && last === "'") return value.slice(1, -1).replace(/''/g, "'")
   if (first === '"' && last === '"') {
     try {
-      /* SAFETY: YAML's double-quoted scalar syntax always decodes to a string here. */
-      return JSON.parse(value) as string
+      return Schema.decodeUnknownSync(Schema.String)(JSON.parse(value))
     } catch {
       return value.slice(1, -1)
     }

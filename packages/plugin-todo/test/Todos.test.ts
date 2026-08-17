@@ -50,7 +50,7 @@ it.layer(Main)("Todos", (it) => {
         Effect.map((chunk) => [...chunk]),
       )
       /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
-      const result = events.find((event: any) => event._tag === "ToolResult") as any
+      const result = events.find((event) => event._tag === "ToolResult") as any
       assert.strictEqual(result.isFailure, false)
       assert.deepStrictEqual(result.result, { todos: plan })
 

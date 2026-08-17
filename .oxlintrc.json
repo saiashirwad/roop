@@ -232,7 +232,10 @@
     "eqeqeq": "error",
     "radix": "off",
     "anti-slop/no-chained-type-assertions": "error",
+    "anti-slop/no-assertion-after-proof": "error",
+    "anti-slop/no-cast-deserialization": "error",
     "anti-slop/no-conditional-empty-object-spread": "error",
+    "anti-slop/no-escape-hatch-assertions": "error",
     "anti-slop/no-known-value-widening": "error",
     "anti-slop/no-module-mocking": "error",
     "anti-slop/no-object-parameters": "error",
@@ -244,6 +247,7 @@
     "anti-slop/no-unknown-returns": "error",
     "anti-slop/no-unknown-type-aliases": "error",
     "anti-slop/no-unsafe-dictionary-type": "error",
+    "anti-slop/no-untyped-test-projection": "error",
     "anti-slop/no-widen-then-assert": "error",
     "anti-slop/require-safety-comment-for-type-assertion": "error"
   },
