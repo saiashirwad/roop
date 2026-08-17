@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react"
 import { Composer, type Command } from "./Composer.tsx"
 import { Markdown } from "./Markdown.tsx"
 import { Palette, type PaletteAction } from "./Palette.tsx"
+import { Reasoning } from "./Reasoning.tsx"
 import {
   capsAtom,
   forkSessionAtom,
@@ -345,6 +346,8 @@ export const App = () => {
                   )
                 case "assistant":
                   return <Markdown key={index} text={item.text} />
+                case "reasoning":
+                  return <Reasoning key={index} text={item.text} />
                 case "tool":
                   return <ToolCard key={index} tool={item} />
                 case "notice":

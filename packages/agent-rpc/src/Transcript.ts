@@ -10,6 +10,7 @@ import { Option, Schema } from "effect"
 export type Item =
   | { readonly kind: "user"; readonly text: string }
   | { readonly kind: "assistant"; readonly text: string }
+  | { readonly kind: "reasoning"; readonly text: string }
   | {
       readonly kind: "tool"
       readonly id: string
@@ -32,7 +33,10 @@ export const apply = (items: ReadonlyArray<Item>, event: AgentEvent): ReadonlyAr
         : [...items, { kind: "assistant", text: event.delta }]
     }
     case "ReasoningDelta": {
-      return items
+      const last = items.at(-1)
+      return last?.kind === "reasoning"
+        ? [...items.slice(0, -1), { kind: "reasoning", text: last.text + event.delta }]
+        : [...items, { kind: "reasoning", text: event.delta }]
     }
     case "ToolCall": {
       return [
@@ -100,6 +104,8 @@ export const fromMessages = (messages: ReturnType<typeof deriveMessages>): Reado
         for (const part of message.content) {
           if (part.type === "text") {
             items = [...items, { kind: "assistant", text: part.text }]
+          } else if (part.type === "reasoning") {
+            items = [...items, { kind: "reasoning", text: part.text }]
           } else if (part.type === "tool-call") {
             items = [
               ...items,

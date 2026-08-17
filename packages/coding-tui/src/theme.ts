@@ -1,4 +1,4 @@
-import type { EditorTheme, MarkdownTheme } from "@mariozechner/pi-tui"
+import type { DefaultTextStyle, EditorTheme, MarkdownTheme } from "@mariozechner/pi-tui"
 
 const ansi = (open: number, close: number) => (text: string) =>
   `\u001b[${open}m${text}\u001b[${close}m`
@@ -29,6 +29,12 @@ export const markdownTheme: MarkdownTheme = {
   strikethrough,
   underline,
 }
+
+/**
+ * Base style for reasoning output. `DefaultTextStyle` has no dim flag — its
+ * color slot is a plain text transform — so dim rides there.
+ */
+export const reasoningTextStyle: DefaultTextStyle = { color: dim, italic: true }
 
 export const editorTheme: EditorTheme = {
   borderColor: dim,

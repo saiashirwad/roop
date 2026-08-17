@@ -1,6 +1,6 @@
 import { expect, it } from "vitest"
 
-import { apply, summarizeTool } from "../src/Transcript.ts"
+import { apply, fromSessionEvents, summarizeTool } from "../src/Transcript.ts"
 
 it("correlates nested subagent events by parent tool-call id", () => {
   let items = apply([], {
@@ -36,6 +36,42 @@ it("correlates nested subagent events by parent tool-call id", () => {
     completed: false,
     children: [{ kind: "assistant", text: "nested" }],
   })
+})
+
+it("coalesces consecutive reasoning deltas into one reasoning item", () => {
+  let items = apply([], { _tag: "ReasoningDelta", delta: "think " })
+  items = apply(items, { _tag: "ReasoningDelta", delta: "twice" })
+
+  expect(items).toEqual([{ kind: "reasoning", text: "think twice" }])
+})
+
+it("starts new reasoning and assistant items when they interleave", () => {
+  let items = apply([], { _tag: "ReasoningDelta", delta: "before" })
+  items = apply(items, { _tag: "TextDelta", delta: "answer" })
+  items = apply(items, { _tag: "ReasoningDelta", delta: "after" })
+
+  expect(items).toEqual([
+    { kind: "reasoning", text: "before" },
+    { kind: "assistant", text: "answer" },
+    { kind: "reasoning", text: "after" },
+  ])
+})
+
+it("replays persisted reasoning parts as reasoning items", () => {
+  const items = fromSessionEvents([
+    {
+      _tag: "assistant/message",
+      parts: [
+        { type: "reasoning", text: "deliberate" },
+        { type: "text", text: "reply" },
+      ],
+    },
+  ])
+
+  expect(items).toEqual([
+    { kind: "reasoning", text: "deliberate" },
+    { kind: "assistant", text: "reply" },
+  ])
 })
 
 it("summarizes UTF-8 byte sizes rather than JavaScript code-unit lengths", () => {

@@ -18,7 +18,7 @@ import { cryptoWeb } from "@roop/agent/cryptoWeb.ts"
 import { Cause, Clock, Crypto, Effect, FiberSet, Option, Queue, Stream } from "effect"
 import { RpcClient } from "effect/unstable/rpc"
 
-import { bold, cyan, dim, editorTheme, markdownTheme, red } from "./theme.ts"
+import { bold, cyan, dim, editorTheme, markdownTheme, red, reasoningTextStyle } from "./theme.ts"
 import { renderToolCall } from "./toolViews.ts"
 
 type Action =
@@ -92,6 +92,9 @@ const main = Effect.gen(function* () {
           break
         case "assistant":
           chat.addChild(new Markdown(item.text, 0, 0, markdownTheme))
+          break
+        case "reasoning":
+          chat.addChild(new Markdown(item.text, 0, 0, markdownTheme, reasoningTextStyle))
           break
         case "tool":
           const toolData =
@@ -302,15 +305,23 @@ const main = Effect.gen(function* () {
       loader.start()
       let markdown: Markdown | undefined
       let buffer = ""
+      let reasoning: Markdown | undefined
+      let reasoningBuffer = ""
       const calls = new Map<string, { readonly text: Text; readonly params: unknown }>()
       const tickers = new Map<string, Text>()
       const flush = () => {
         markdown = undefined
         buffer = ""
+        reasoning = undefined
+        reasoningBuffer = ""
       }
       const render = (event: AgentEvent) => {
         switch (event._tag) {
           case "TextDelta": {
+            // Text after reasoning starts a new assistant block; only the
+            // reasoning state resets, never the assistant buffer itself.
+            reasoning = undefined
+            reasoningBuffer = ""
             buffer += event.delta
             if (markdown === undefined) {
               markdown = new Markdown("", 0, 0, markdownTheme)
@@ -320,6 +331,12 @@ const main = Effect.gen(function* () {
             return
           }
           case "ReasoningDelta": {
+            reasoningBuffer += event.delta
+            if (reasoning === undefined) {
+              reasoning = new Markdown("", 0, 0, markdownTheme, reasoningTextStyle)
+              chat.addChild(reasoning)
+            }
+            reasoning.setText(reasoningBuffer)
             return
           }
           case "ToolCall": {
