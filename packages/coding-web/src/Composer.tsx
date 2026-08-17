@@ -292,13 +292,7 @@ const InlineMenu = ({
   )
 }
 
-const SubmitPlugin = ({
-  busy,
-  onSubmit,
-}: {
-  readonly busy: boolean
-  readonly onSubmit: (prompt: string) => void
-}) => {
+const SubmitPlugin = ({ onSubmit }: { readonly onSubmit: (prompt: string) => void }) => {
   const [editor] = useLexicalComposerContext()
   useEffect(
     () =>
@@ -311,14 +305,41 @@ const SubmitPlugin = ({
             .getEditorState()
             .read(() => $getRoot().getTextContent())
             .trim()
-          if (text.length === 0 || busy) return true
+          if (text.length === 0) return true
           editor.update(() => $getRoot().clear())
           onSubmit(text)
           return true
         },
         COMMAND_PRIORITY_LOW,
       ),
-    [editor, busy, onSubmit],
+    [editor, onSubmit],
+  )
+  return null
+}
+
+const EscapePlugin = ({
+  busy,
+  onInterrupt,
+}: {
+  readonly busy: boolean
+  readonly onInterrupt: () => void
+}) => {
+  const [editor] = useLexicalComposerContext()
+  useEffect(
+    () =>
+      editor.registerCommand(
+        KEY_ESCAPE_COMMAND,
+        (event) => {
+          if (busy) {
+            event?.preventDefault()
+            onInterrupt()
+            return true
+          }
+          return false
+        },
+        COMMAND_PRIORITY_LOW,
+      ),
+    [editor, busy, onInterrupt],
   )
   return null
 }
@@ -335,9 +356,14 @@ const SendButton = ({
   readonly onSubmit: (prompt: string) => void
 }) => {
   const [editor] = useLexicalComposerContext()
-  if (busy) {
+  if (busy && empty) {
     return (
-      <button {...stylex.props(styles.send, styles.stop)} onClick={onInterrupt}>
+      <button
+        {...stylex.props(styles.send, styles.stop)}
+        aria-label="Stop generation"
+        title="Stop generation"
+        onClick={onInterrupt}
+      >
         ◼
       </button>
     )
@@ -345,6 +371,8 @@ const SendButton = ({
   return (
     <button
       {...stylex.props(styles.send)}
+      aria-label="Send message"
+      title="Send message"
       disabled={empty}
       onClick={() => {
         const text = editor
@@ -411,7 +439,8 @@ export const Composer = ({
       </div>
       <InlineMenu commands={commands} trigger="/" />
       <InlineMenu commands={mentions} trigger="@" />
-      <SubmitPlugin busy={busy} onSubmit={onSubmit} />
+      <SubmitPlugin onSubmit={onSubmit} />
+      <EscapePlugin busy={busy} onInterrupt={onInterrupt} />
       <OnChangePlugin
         onChange={(state) => setEmpty(state.read(() => $getRoot().getTextContent().trim() === ""))}
       />

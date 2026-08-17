@@ -167,7 +167,10 @@ const main = Effect.gen(function* () {
   const command = (line: string) =>
     Effect.gen(function* () {
       const [name, arg] = line.slice(1).split(/\s+/, 2)
-      if (busy && (name === "resume" || name === "fork" || name === "new")) {
+      if (
+        activePromptSessionId !== undefined &&
+        (name === "resume" || name === "fork" || name === "new")
+      ) {
         info(dim("busy — esc to interrupt"))
         return
       }
@@ -401,23 +404,33 @@ const main = Effect.gen(function* () {
           }
         }
       }
-      yield* client.Prompt({ prompt, sessionId, modelId, policy: { maxTurns: 50 } }).pipe(
-        Stream.runForEach((event) =>
+      yield* Effect.acquireUseRelease(
+        Effect.sync(() => {
+          chat.addChild(loader)
+          loader.start()
+          tui.requestRender()
+        }),
+        () =>
+          client.Prompt({ prompt, sessionId, modelId, policy: { maxTurns: 50 } }).pipe(
+            Stream.runForEach((event) =>
+              Effect.sync(() => {
+                render(event)
+                tui.requestRender()
+              }),
+            ),
+            Effect.catchCause((cause) =>
+              Effect.sync(() => chat.addChild(new Text(red(Cause.pretty(cause)), 0, 0))),
+            ),
+          ),
+        () =>
           Effect.sync(() => {
-            render(event)
+            loader.stop()
+            chat.removeChild(loader)
             tui.requestRender()
           }),
-        ),
-        Effect.catchCause((cause) =>
-          Effect.sync(() => chat.addChild(new Text(red(String(cause)), 0, 0))),
-        ),
       )
-      loader.stop()
-      chat.removeChild(loader)
-      tui.requestRender()
     })
 
-  let busy = false
   let activePromptSessionId: string | undefined
   yield* Stream.fromQueue(actions).pipe(
     Stream.takeWhile((action) => action._tag !== "Quit"),
@@ -427,19 +440,41 @@ const main = Effect.gen(function* () {
           if (action.text.startsWith("/")) {
             return command(action.text)
           }
-          if (busy) {
+          if (activePromptSessionId !== undefined) {
+            const target = activePromptSessionId
             return Effect.sync(() => {
-              chat.addChild(new Text(dim("busy — esc to interrupt"), 0, 0))
+              chat.addChild(new Text(dim(`steering: ${action.text}`), 0, 0))
               tui.requestRender()
-            })
+            }).pipe(
+              Effect.andThen(
+                Effect.forkScoped(
+                  client.Steer({ sessionId: target, message: action.text }).pipe(
+                    Effect.catchTag("RunNotFound", () =>
+                      Effect.sync(() => {
+                        chat.addChild(
+                          new Text(red("cannot steer: prompt has already completed"), 0, 0),
+                        )
+                        tui.requestRender()
+                      }),
+                    ),
+                    Effect.catchCause((cause) =>
+                      Effect.sync(() => {
+                        chat.addChild(
+                          new Text(red(`steering failed: ${Cause.pretty(cause)}`), 0, 0),
+                        )
+                        tui.requestRender()
+                      }),
+                    ),
+                  ),
+                ),
+              ),
+            )
           }
-          busy = true
           activePromptSessionId = sessionId
           return Effect.forkScoped(
             run(action.text).pipe(
               Effect.ensuring(
                 Effect.sync(() => {
-                  busy = false
                   activePromptSessionId = undefined
                 }),
               ),
@@ -450,7 +485,14 @@ const main = Effect.gen(function* () {
           const target = activePromptSessionId
           return target === undefined
             ? Effect.void
-            : Effect.forkScoped(client.Interrupt({ sessionId: target }).pipe(Effect.ignore))
+            : Effect.sync(() => {
+                chat.addChild(new Text(dim("interrupting..."), 0, 0))
+                tui.requestRender()
+              }).pipe(
+                Effect.andThen(
+                  Effect.forkScoped(client.Interrupt({ sessionId: target }).pipe(Effect.ignore)),
+                ),
+              )
         }
       }
     }),

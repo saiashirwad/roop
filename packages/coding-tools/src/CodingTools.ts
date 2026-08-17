@@ -10,6 +10,7 @@ import {
   normalizeWorkspacePath,
 } from "./ExecutionWorld.ts"
 import { ToolFailure } from "./ToolFailure.ts"
+import { Truncate } from "./Truncate.ts"
 
 export { ToolFailure } from "./ToolFailure.ts"
 
@@ -24,6 +25,44 @@ const makeGrepRegex = (pattern: string, caseSensitive?: boolean): RegExp => {
 
 const NonNegativeInt = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
 
+interface ReadFileResult {
+  content: string
+  truncated?: boolean | undefined
+  spillPath?: string | undefined
+  hint?: string | undefined
+  lineOffset?: number | undefined
+  totalLines?: number | undefined
+  nextOffset?: number | undefined
+}
+
+interface GrepMatch {
+  file: string
+  line: number
+  content: string
+}
+
+interface GrepResult {
+  matches: Array<GrepMatch>
+  totalMatches: number
+  truncated: boolean
+  output?: string | undefined
+  spillPath?: string | undefined
+  hint?: string | undefined
+}
+
+interface BashResult {
+  exitCode: number
+  stdout: string
+  stderr: string
+  stdoutTruncated?: boolean | undefined
+  stderrTruncated?: boolean | undefined
+  spillPath?: string | undefined
+  stdoutSpillPath?: string | undefined
+  stderrSpillPath?: string | undefined
+  stdoutHint?: string | undefined
+  stderrHint?: string | undefined
+}
+
 const isIgnoredWorkspacePath = (file: string): boolean =>
   file
     .replaceAll("\\", "/")
@@ -34,7 +73,7 @@ const isIgnoredWorkspacePath = (file: string): boolean =>
 const resolveDirectoryEntry = (world: ExecutionWorldService, targetDir: string, entry: string) =>
   world.resolvePath(`${targetDir.replace(/[\\/]$/, "")}/${entry}`)
 
-export const CodingTools = (): Plugin<ExecutionWorld> => {
+export const CodingTools = (): Plugin<ExecutionWorld | Truncate> => {
   const asFailure = <A, E, R = never>(
     effect: Effect.Effect<A, E, R>,
   ): Effect.Effect<A, ToolFailure, R> =>
@@ -46,12 +85,25 @@ export const CodingTools = (): Plugin<ExecutionWorld> => {
 
   const toolkit = Toolkit.make(
     Tool.make("readFile", {
-      description: "Read a UTF-8 text file inside the workspace",
-      parameters: Schema.Struct({ path: Schema.String }),
-      success: Schema.Struct({ content: Schema.String }),
+      description:
+        "Read a UTF-8 text file inside the workspace. Use zero-based offset and limit to inspect a bounded line range; oversized outputs spill to .roop/truncations/.",
+      parameters: Schema.Struct({
+        path: Schema.String,
+        offset: Schema.optionalKey(NonNegativeInt),
+        limit: Schema.optionalKey(NonNegativeInt),
+      }),
+      success: Schema.Struct({
+        content: Schema.String,
+        truncated: Schema.optional(Schema.Boolean),
+        spillPath: Schema.optional(Schema.String),
+        hint: Schema.optional(Schema.String),
+        lineOffset: Schema.optional(Schema.Finite),
+        totalLines: Schema.optional(Schema.Finite),
+        nextOffset: Schema.optional(Schema.Finite),
+      }),
       failure: ToolFailure,
       failureMode: "return",
-      dependencies: [ExecutionWorld],
+      dependencies: [ExecutionWorld, Truncate],
     }),
     Tool.make("writeFile", {
       description: "Create or overwrite a UTF-8 text file inside the workspace",
@@ -128,7 +180,7 @@ export const CodingTools = (): Plugin<ExecutionWorld> => {
     }),
     Tool.make("grep", {
       description:
-        "Search file contents in the workspace for lines matching a regex pattern or literal text",
+        "Search file contents in the workspace for lines matching a regex pattern or literal text (oversized match sets spill to .roop/truncations/)",
       parameters: Schema.Struct({
         pattern: Schema.String,
         path: Schema.optionalKey(Schema.String),
@@ -145,22 +197,33 @@ export const CodingTools = (): Plugin<ExecutionWorld> => {
         ),
         totalMatches: Schema.Finite,
         truncated: Schema.Boolean,
+        output: Schema.optional(Schema.String),
+        spillPath: Schema.optional(Schema.String),
+        hint: Schema.optional(Schema.String),
       }),
       failure: ToolFailure,
       failureMode: "return",
-      dependencies: [ExecutionWorld],
+      dependencies: [ExecutionWorld, Truncate],
     }),
     Tool.make("bash", {
-      description: "Run a shell command in the workspace and capture stdout, stderr, and exit code",
+      description:
+        "Run a shell command in the workspace and capture stdout, stderr, and exit code (large outputs spill to .roop/truncations/)",
       parameters: Schema.Struct({ command: Schema.String }),
       success: Schema.Struct({
         exitCode: Schema.Finite,
         stdout: Schema.String,
         stderr: Schema.String,
+        stdoutTruncated: Schema.optional(Schema.Boolean),
+        stderrTruncated: Schema.optional(Schema.Boolean),
+        spillPath: Schema.optional(Schema.String),
+        stdoutSpillPath: Schema.optional(Schema.String),
+        stderrSpillPath: Schema.optional(Schema.String),
+        stdoutHint: Schema.optional(Schema.String),
+        stderrHint: Schema.optional(Schema.String),
       }),
       failure: ToolFailure,
       failureMode: "return",
-      dependencies: [ExecutionWorld],
+      dependencies: [ExecutionWorld, Truncate],
     }),
   )
 
@@ -168,13 +231,39 @@ export const CodingTools = (): Plugin<ExecutionWorld> => {
     name: "coding-tools",
     toolkit,
     handlers: toolkit.toLayer({
-      readFile: ({ path }) =>
+      readFile: ({ path, offset, limit }) =>
         Effect.gen(function* () {
           const world = yield* ExecutionWorld
+          const trunc = yield* Truncate
           const file = yield* asFailure(world.resolvePath(path))
-          return yield* asFailure(
-            world.filesystem.readFileString(file).pipe(Effect.map((content) => ({ content }))),
+          const raw = yield* asFailure(world.filesystem.readFileString(file))
+          const lines = raw.split(/\r?\n/)
+          const lineOffset = offset ?? 0
+          const selected =
+            offset === undefined && limit === undefined
+              ? raw
+              : lines
+                  .slice(lineOffset, limit === undefined ? undefined : lineOffset + limit)
+                  .join("\n")
+          const res = yield* asFailure(
+            trunc.truncate(selected, {
+              key: `file-${path.replaceAll(/[/\\]/g, "_")}`,
+              hintContext: `readFile for '${path}'`,
+            }),
           )
+          const response: ReadFileResult = { content: res.content }
+          if (res.truncated) {
+            response.truncated = true
+            if (res.spillPath !== undefined) response.spillPath = res.spillPath
+            if (res.hint !== undefined) response.hint = res.hint
+          }
+          if (offset !== undefined || limit !== undefined) {
+            response.lineOffset = lineOffset
+            response.totalLines = lines.length
+            const nextOffset = lineOffset + (limit ?? lines.length)
+            if (nextOffset < lines.length) response.nextOffset = nextOffset
+          }
+          return response
         }),
       writeFile: ({ path, content }) =>
         Effect.gen(function* () {
@@ -307,13 +396,14 @@ export const CodingTools = (): Plugin<ExecutionWorld> => {
         Effect.gen(function* () {
           const maxLimit = limit ?? 100
           const world = yield* ExecutionWorld
+          const trunc = yield* Truncate
           const targetDir = yield* asFailure(world.resolvePath(searchPath ?? "."))
           const allFiles: ReadonlyArray<string> = yield* asFailure(
             world.filesystem.readDirectory(targetDir, { recursive: true }),
           )
 
           const regex = makeGrepRegex(pattern, caseSensitive)
-          const matches: Array<{ file: string; line: number; content: string }> = []
+          const matches: Array<GrepMatch> = []
           let totalMatches = 0
           for (const entry of allFiles) {
             const fullPath = yield* asFailure(resolveDirectoryEntry(world, targetDir, entry))
@@ -343,16 +433,35 @@ export const CodingTools = (): Plugin<ExecutionWorld> => {
             }
           }
 
-          return {
-            matches,
-            totalMatches,
-            truncated: totalMatches > matches.length,
+          const encodedMatches = JSON.stringify(matches, null, 2)
+          const result = yield* asFailure(
+            trunc.truncate(encodedMatches, {
+              key: "grep-matches",
+              hintContext: `grep for '${pattern}'`,
+            }),
+          )
+          if (!result.truncated) {
+            return {
+              matches,
+              totalMatches,
+              truncated: totalMatches > matches.length,
+            }
           }
+          const response: GrepResult = {
+            matches: [],
+            totalMatches,
+            truncated: true,
+            output: result.content,
+          }
+          if (result.spillPath !== undefined) response.spillPath = result.spillPath
+          if (result.hint !== undefined) response.hint = result.hint
+          return response
         }),
       bash: ({ command }) =>
         Effect.scoped(
           Effect.gen(function* () {
             const world = yield* ExecutionWorld
+            const trunc = yield* Truncate
             const handle = yield* world.spawner.spawn(
               ChildProcess.make(command, {
                 shell: true,
@@ -360,7 +469,7 @@ export const CodingTools = (): Plugin<ExecutionWorld> => {
                 env: world.env,
               }),
             )
-            const [stdout, stderr, exitCode] = yield* Effect.all(
+            const [rawStdout, rawStderr, exitCode] = yield* Effect.all(
               [
                 Stream.mkString(Stream.decodeText(handle.stdout)),
                 Stream.mkString(Stream.decodeText(handle.stderr)),
@@ -368,7 +477,21 @@ export const CodingTools = (): Plugin<ExecutionWorld> => {
               ],
               { concurrency: "unbounded" },
             )
-            return { exitCode: Number(exitCode), stdout, stderr }
+            const { stdout, stderr } = yield* trunc.truncateCommand(command, rawStdout, rawStderr)
+            const spillPath = stdout.spillPath ?? stderr.spillPath
+            const response: BashResult = {
+              exitCode: Number(exitCode),
+              stdout: stdout.content,
+              stderr: stderr.content,
+            }
+            if (stdout.truncated) response.stdoutTruncated = true
+            if (stderr.truncated) response.stderrTruncated = true
+            if (spillPath !== undefined) response.spillPath = spillPath
+            if (stdout.spillPath !== undefined) response.stdoutSpillPath = stdout.spillPath
+            if (stderr.spillPath !== undefined) response.stderrSpillPath = stderr.spillPath
+            if (stdout.hint !== undefined) response.stdoutHint = stdout.hint
+            if (stderr.hint !== undefined) response.stderrHint = stderr.hint
+            return response
           }).pipe(Effect.mapError((error: any) => new ToolFailure({ message: error.message }))),
         ),
     }),

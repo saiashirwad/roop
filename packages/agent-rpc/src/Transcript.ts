@@ -163,7 +163,10 @@ const utf8Bytes = (text: string): number => new TextEncoder().encode(text).byteL
 const bytes = (count: number) => (count < 1024 ? `${count}b` : `${(count / 1024).toFixed(1)}kb`)
 
 const ReadFileParams = Schema.Struct({ path: Schema.String })
-const ReadFileResult = Schema.Struct({ content: Schema.optionalKey(Schema.String) })
+const ReadFileResult = Schema.Struct({
+  content: Schema.optionalKey(Schema.String),
+  truncated: Schema.optionalKey(Schema.Boolean),
+})
 const WriteFileParams = Schema.Struct({ path: Schema.String, content: Schema.String })
 const EditParams = Schema.Struct({
   path: Schema.String,
@@ -209,7 +212,11 @@ const GrepResult = Schema.Struct({
   totalMatches: Schema.optionalKey(Schema.Finite),
 })
 const BashParams = Schema.Struct({ command: Schema.String })
-const BashResult = Schema.Struct({ exitCode: Schema.optionalKey(Schema.Finite) })
+const BashResult = Schema.Struct({
+  exitCode: Schema.optionalKey(Schema.Finite),
+  stdoutTruncated: Schema.optionalKey(Schema.Boolean),
+  stderrTruncated: Schema.optionalKey(Schema.Boolean),
+})
 const WebFetchParams = Schema.Struct({ url: Schema.String })
 const WebFetchResult = Schema.Struct({
   status: Schema.optionalKey(Schema.Finite),
@@ -244,13 +251,15 @@ const summaryOf = {
   readFile: (call: ToolCall): ToolSummary => {
     const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(ReadFileParams)(call.params))
     if (decoded === undefined) return fallback(call)
-    const content =
+    const result =
       call.result === undefined
         ? undefined
-        : Option.getOrUndefined(Schema.decodeUnknownOption(ReadFileResult)(call.result))?.content
+        : Option.getOrUndefined(Schema.decodeUnknownOption(ReadFileResult)(call.result))
+    const content = result?.content
+    const trunc = result?.truncated === true ? " · truncated" : ""
     return {
       label: "read",
-      summary: `${decoded.path}${content === undefined ? "" : ` · ${bytes(utf8Bytes(content))}`}`,
+      summary: `${decoded.path}${content === undefined ? "" : ` · ${bytes(utf8Bytes(content))}`}${trunc}`,
     }
   },
   writeFile: (call: ToolCall): ToolSummary => {
@@ -328,12 +337,15 @@ const summaryOf = {
   bash: (call: ToolCall): ToolSummary => {
     const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(BashParams)(call.params))
     if (decoded === undefined) return fallback(call)
-    const exitCode =
+    const result =
       call.result === undefined
         ? undefined
-        : Option.getOrUndefined(Schema.decodeUnknownOption(BashResult)(call.result))?.exitCode
+        : Option.getOrUndefined(Schema.decodeUnknownOption(BashResult)(call.result))
+    const exitCode = result?.exitCode
+    const trunc =
+      result?.stdoutTruncated === true || result?.stderrTruncated === true ? " · truncated" : ""
     const exit = exitCode === undefined || exitCode === 0 ? "" : ` · exit ${exitCode}`
-    return { label: "$", summary: `${line(decoded.command)}${exit}` }
+    return { label: "$", summary: `${line(decoded.command)}${exit}${trunc}` }
   },
   webFetch: (call: ToolCall): ToolSummary => {
     const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(WebFetchParams)(call.params))

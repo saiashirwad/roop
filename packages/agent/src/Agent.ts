@@ -1,7 +1,8 @@
-import { Context, Crypto, Effect, Layer, Option, Stream } from "effect"
+import { Context, Crypto, Effect, Layer, Stream } from "effect"
 import { Chat, type Toolkit } from "effect/unstable/ai"
 import type * as Tool from "effect/unstable/ai/Tool"
 
+import { AgentBus, AgentBusMemory, sessionEventsToAgentEvents } from "./AgentBus.ts"
 import { AgentConfig, layer as agentConfigLayer } from "./AgentConfig.ts"
 import type { AgentEvent, SessionEvent } from "./AgentEvents.ts"
 import { AgentHooks } from "./AgentHooks.ts"
@@ -57,6 +58,14 @@ export class Agent extends Context.Service<
       AgentEvent,
       ModelNotFound | SessionBusy | SessionFormatError | SessionIoError | RunError
     >
+    readonly subscribe: (
+      sessionId: SessionId | string,
+      options?: { readonly replayFromStep?: number | undefined } | undefined,
+    ) => Stream.Stream<AgentEvent, SessionNotFound | SessionFormatError | SessionIoError>
+    readonly steer: (
+      sessionId: SessionId | string,
+      message: string,
+    ) => Effect.Effect<void, RunNotFound>
     readonly interrupt: (sessionId: SessionId | string) => Effect.Effect<void, RunNotFound>
     readonly history: (
       sessionId: SessionId | string,
@@ -75,7 +84,7 @@ export class Agent extends Context.Service<
 export const AgentLive: Layer.Layer<
   Agent,
   never,
-  AgentConfig | AgentTools | ModelCatalog | Crypto.Crypto | SessionJournal | RunRegistry
+  AgentConfig | AgentTools | ModelCatalog | Crypto.Crypto | SessionJournal | RunRegistry | AgentBus
 > = Layer.effect(
   Agent,
   Effect.gen(function* () {
@@ -86,6 +95,7 @@ export const AgentLive: Layer.Layer<
     const tools = yield* AgentTools
     const models = yield* ModelCatalog
     const hooks = yield* AgentHooks
+    const bus = yield* AgentBus
 
     return Agent.of({
       capabilities: Effect.succeed(
@@ -117,11 +127,8 @@ export const AgentLive: Layer.Layer<
                       .pipe(Effect.mapError((error) => runError(error, { sessionId })))
 
                   const stored = yield* store.load(sessionId).pipe(
-                    Effect.map((session) => Option.some<Session>(session)),
-                    Effect.catchIf(
-                      (error): error is SessionNotFound => error._tag === "SessionNotFound",
-                      () => Effect.succeed(Option.none<Session>()),
-                    ),
+                    Effect.asSome,
+                    Effect.catchTag("SessionNotFound", () => Effect.succeedNone),
                   )
 
                   if (systemPrompt !== "") {
@@ -137,16 +144,14 @@ export const AgentLive: Layer.Layer<
 
                   const chat = yield* Chat.fromPrompt(
                     yield* store.deriveMessages(sessionId).pipe(
-                      Effect.catchIf(
-                        (error): error is SessionNotFound => error._tag === "SessionNotFound",
-                        () =>
-                          Effect.fail(
-                            new SessionIoError({
-                              operation: "deriveMessages",
-                              sessionId,
-                              message: `session ${sessionId} vanished after append`,
-                            }),
-                          ),
+                      Effect.catchTag("SessionNotFound", () =>
+                        Effect.fail(
+                          new SessionIoError({
+                            operation: "deriveMessages",
+                            sessionId,
+                            message: `session ${sessionId} vanished after append`,
+                          }),
+                        ),
                       ),
                       Effect.mapError((error) => runError(error, { sessionId })),
                     ),
@@ -161,12 +166,34 @@ export const AgentLive: Layer.Layer<
                     interrupt: signal,
                     append,
                     hooks,
-                  })
+                  }).pipe(Stream.tap((event) => bus.publish({ sessionId, event })))
                 }),
               ),
             )
           }),
         ),
+      subscribe: (sessionId, options) =>
+        Stream.unwrap(
+          Effect.gen(function* () {
+            const sid = SessionId.make(sessionId)
+            const session = yield* store.load(sid)
+            const isActive = yield* runs.isActive(sid)
+
+            const replayed = sessionEventsToAgentEvents(session.events, options?.replayFromStep)
+            const pastStream = Stream.fromIterable(replayed)
+
+            if (!isActive) {
+              return pastStream
+            }
+
+            const liveStream = bus
+              .subscribe(sid)
+              .pipe(Stream.takeUntil((event) => event._tag === "Finish"))
+
+            return Stream.concat(pastStream, liveStream)
+          }),
+        ),
+      steer: (sessionId, message) => runs.steer(sessionId, message),
       interrupt: (sessionId) => runs.interrupt(sessionId),
       history: (sessionId) => store.load(SessionId.make(sessionId)),
       sessions: store.list,
@@ -210,6 +237,7 @@ export const AgentLiveToolkit = <Tools extends Record<string, Tool.Any>>(
       config,
       modelCatalogLayer(options?.models ?? []).pipe(Layer.orDie),
       RunRegistryLive,
+      AgentBusMemory,
     ]),
     Layer.orDie,
   )

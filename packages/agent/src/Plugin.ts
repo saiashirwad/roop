@@ -3,6 +3,7 @@ import * as Tool from "effect/unstable/ai/Tool"
 import * as Toolkit from "effect/unstable/ai/Toolkit"
 
 import { AgentLive, type Agent } from "./Agent.ts"
+import { AgentBusMemory } from "./AgentBus.ts"
 import { layer as agentConfigLayer } from "./AgentConfig.ts"
 import { layerNoop, type AgentHooks } from "./AgentHooks.ts"
 import { layer as agentToolsLayer } from "./AgentTools.ts"
@@ -186,7 +187,7 @@ export const AgentPlugins = <const Plugins extends ReadonlyArray<Plugin<any, any
   // only remaining requirements are the union represented by PluginRequirements.
   return Layer.fresh(AgentLive).pipe(
     Layer.orDie,
-    Layer.provide([tools, config, hooks, models, RunRegistryLive]),
+    Layer.provide([tools, config, hooks, models, RunRegistryLive, AgentBusMemory]),
   ) as Layer.Layer<
     Agent,
     never,

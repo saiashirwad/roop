@@ -10,6 +10,9 @@ export const AgentRpcServer = AgentRpc.toLayer(
     return AgentRpc.of({
       Capabilities: () => agent.capabilities,
       Prompt: (options) => agent.prompt(options),
+      SubscribeSession: ({ sessionId, replayFromStep }) =>
+        agent.subscribe(sessionId, { replayFromStep }),
+      Steer: ({ sessionId, message }) => agent.steer(sessionId, message),
       Interrupt: ({ sessionId }) => agent.interrupt(sessionId),
       GetHistory: ({ sessionId }) => agent.history(sessionId),
       ListSessions: () => agent.sessions,

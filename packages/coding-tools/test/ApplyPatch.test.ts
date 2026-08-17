@@ -17,6 +17,7 @@ import {
 } from "../src/ApplyPatch.ts"
 import { CodingTools } from "../src/CodingTools.ts"
 import { ExecutionWorld } from "../src/ExecutionWorld.ts"
+import { Truncate } from "../src/Truncate.ts"
 
 const nodePlatform = Layer.mergeAll(
   NodeFileSystem.layer,
@@ -493,6 +494,7 @@ describe("ApplyPatch - Two-Phase Transactional ExecutionWorld Staging", () => {
             ]).pipe(
               Layer.provide(SessionJournalMemory),
               Layer.provide(cryptoWeb),
+              Layer.provide(Truncate.layer()),
               Layer.provide(ExecutionWorld.local(root)),
             )
           }),
@@ -555,6 +557,7 @@ describe("ApplyPatch - Two-Phase Transactional ExecutionWorld Staging", () => {
         ]).pipe(
           Layer.provide(SessionJournalMemory),
           Layer.provide(cryptoWeb),
+          Layer.provide(Truncate.memory()),
           Layer.provide(
             ExecutionWorld.memory({
               root: "/workspace",
@@ -624,6 +627,7 @@ describe("ApplyPatch - Two-Phase Transactional ExecutionWorld Staging", () => {
               },
             }),
           ),
+          Layer.provide(Truncate.memory()),
           Layer.provide(SessionJournalMemory),
           Layer.provide(cryptoWeb),
           Layer.provide(NodePath.layer),
@@ -677,6 +681,7 @@ describe("ApplyPatch - Two-Phase Transactional ExecutionWorld Staging", () => {
         ]).pipe(
           Layer.provide(SessionJournalMemory),
           Layer.provide(cryptoWeb),
+          Layer.provide(Truncate.memory()),
           Layer.provide(
             ExecutionWorld.memory({
               root: "/workspace",

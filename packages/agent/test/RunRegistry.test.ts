@@ -279,4 +279,80 @@ it.layer(RunRegistryLive)("RunRegistry", (it) => {
       yield* Deferred.await(interrupted)
     }),
   )
+
+  it.effect("steer on inactive session fails with RunNotFound", () =>
+    Effect.gen(function* () {
+      const registry = yield* RunRegistry
+      const sid = SessionId.make("inactive-steer")
+
+      const exit = yield* Effect.exit(registry.steer(sid, "steer message"))
+      assert.ok(Exit.isFailure(exit))
+      /* SAFETY: Exit.findErrorOption contains RunNotFound on inactive steer attempts. */
+      const error = Option.getOrThrow(Exit.findErrorOption(exit)) as RunNotFound
+      assert.strictEqual(error._tag, "RunNotFound")
+      assert.strictEqual(error.sessionId, sid)
+    }),
+  )
+
+  it.effect("steer delivers message to active run via awaitSteer and pollSteer", () =>
+    Effect.gen(function* () {
+      const registry = yield* RunRegistry
+      const sid = SessionId.make("steer-test")
+      const started = yield* Deferred.make<void>()
+      const received = yield* Deferred.make<string>()
+
+      const fiber = yield* Effect.forkChild(
+        registry.run(sid, (signal) =>
+          Deferred.succeed(started, undefined).pipe(
+            Effect.andThen(signal.awaitSteer),
+            Effect.flatMap((msg) => Deferred.succeed(received, msg)),
+          ),
+        ),
+      )
+
+      yield* Deferred.await(started)
+      assert.strictEqual(yield* registry.isActive(sid), true)
+
+      // Send steer
+      yield* registry.steer(sid, "turn left")
+      const msg = yield* Deferred.await(received)
+      assert.strictEqual(msg, "turn left")
+
+      yield* Fiber.join(fiber)
+      assert.strictEqual(yield* registry.isActive(sid), false)
+    }),
+  )
+
+  it.effect("pollSteer drains queued messages non-blockingly", () =>
+    Effect.gen(function* () {
+      const registry = yield* RunRegistry
+      const sid = SessionId.make("steer-poll-test")
+      const started = yield* Deferred.make<void>()
+      const steered = yield* Deferred.make<void>()
+      const poll1 = yield* Deferred.make<Option.Option<string>>()
+      const poll2 = yield* Deferred.make<Option.Option<string>>()
+
+      const fiber = yield* Effect.forkChild(
+        registry.run(sid, (signal) =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(started, undefined)
+            yield* Deferred.await(steered)
+            yield* Deferred.succeed(poll1, yield* signal.pollSteer)
+            yield* Deferred.succeed(poll2, yield* signal.pollSteer)
+          }),
+        ),
+      )
+
+      yield* Deferred.await(started)
+      yield* registry.steer(sid, "first message")
+      yield* Deferred.succeed(steered, undefined)
+
+      const first = yield* Deferred.await(poll1)
+      const second = yield* Deferred.await(poll2)
+      assert.deepStrictEqual(first, Option.some("first message"))
+      assert.deepStrictEqual(second, Option.none())
+
+      yield* Fiber.join(fiber)
+    }),
+  )
 })

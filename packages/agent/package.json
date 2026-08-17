@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./Agent.ts": "./src/Agent.ts",
+    "./AgentBus.ts": "./src/AgentBus.ts",
     "./AgentConfig.ts": "./src/AgentConfig.ts",
     "./AgentEvents.ts": "./src/AgentEvents.ts",
     "./AgentHooks.ts": "./src/AgentHooks.ts",
@@ -21,7 +22,9 @@
     "./Skills.ts": "./src/Skills.ts",
     "./Testing.ts": "./src/Testing.ts",
     "./cryptoWeb.ts": "./src/cryptoWeb.ts",
-    "./Subagent.ts": "./src/Subagent.ts"
+    "./DoomLoopGuard.ts": "./src/DoomLoopGuard.ts",
+    "./Subagent.ts": "./src/Subagent.ts",
+    "./ToolPruning.ts": "./src/ToolPruning.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
