@@ -270,6 +270,7 @@ const interceptToolkit = (
           policy.toolTimeout === undefined
             ? scheduled
             : Stream.unwrap(
+                /* oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- Tool.Any's existential requirements channel leaks through ErasedToolkit.handle; handlers are built closed before eraseToolkit and closure is reasserted at asClosedToolkit. */
                 Effect.timeout(Stream.runCollect(scheduled), policy.toolTimeout).pipe(
                   Effect.map((results) => Stream.fromIterable([...results])),
                 ),
