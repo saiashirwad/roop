@@ -38,7 +38,7 @@ const terminal = (state: RunState, reason: RunTerminal): Decision => ({
   commands: [{ _tag: "Finish", reason }],
 })
 
-/** Pure, deterministic state transition for run orchestration. */
+/** Internal pure state transition for run orchestration. */
 export const transition = (state: RunState, signal: RunSignal): Decision => {
   if (state.terminal !== undefined) return { state, commands: [] }
 

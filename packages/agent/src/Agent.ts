@@ -4,6 +4,7 @@ import type * as Tool from "effect/unstable/ai/Tool"
 
 import { AgentContext, AgentContextLive, registerStatics } from "./AgentContext.ts"
 import type { AgentEvent } from "./AgentEvent.ts"
+import { AgentHooks } from "./AgentHooks.ts"
 import { runLoop } from "./agentLoop.ts"
 import { capabilitiesFrom, type Capabilities } from "./Capabilities.ts"
 import type { ModelNotFound, ModelSpec } from "./ModelCatalog.ts"
@@ -210,8 +211,14 @@ export const AgentLiveToolkit = <Tools extends Record<string, Tool.Any>>(
     readonly skills?: ReadonlyArray<Skill> | undefined
   },
 ): Layer.Layer<Agent, never, Crypto.Crypto | Tool.HandlersFor<Tools> | SessionJournal> => {
-  const registry = AgentContextLive(
-    options?.systemPrompt === undefined ? undefined : { systemPrompt: options.systemPrompt },
+  const registry = Layer.unwrap(
+    Effect.map(AgentHooks, (baseHooks) =>
+      AgentContextLive(
+        options?.systemPrompt === undefined
+          ? { baseHooks }
+          : { systemPrompt: options.systemPrompt, baseHooks },
+      ),
+    ),
   )
 
   const installToolkit = Layer.effectDiscard(

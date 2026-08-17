@@ -1,9 +1,16 @@
 {
-  "name": "@roop/plugin-codex",
+  "name": "@roop/plugins",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "exports": {
+    ".": "./src/index.ts",
+    "./Claude.ts": "./src/Claude.ts",
+    "./Codex.ts": "./src/Codex.ts",
+    "./OpenAiCompatible.ts": "./src/OpenAiCompatible.ts",
+    "./SkillsDir.ts": "./src/SkillsDir.ts",
+    "./Todos.ts": "./src/Todos.ts",
+    "./WebTools.ts": "./src/WebTools.ts",
     "./*": "./src/*"
   },
   "scripts": {
@@ -11,7 +18,9 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@effect/ai-openai-compat": "4.0.0-beta.97",
     "@roop/agent": "workspace:*",
+    "@texoport/effect-ai-claude": "^0.1.2",
     "@texoport/effect-ai-codex": "^0.1.2",
     "effect": "4.0.0-beta.97"
   },

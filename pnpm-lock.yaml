@@ -111,24 +111,9 @@ importers:
       '@roop/coding-tools':
         specifier: workspace:*
         version: link:../coding-tools
-      '@roop/plugin-claude':
+      '@roop/plugins':
         specifier: workspace:*
-        version: link:../plugin-claude
-      '@roop/plugin-codex':
-        specifier: workspace:*
-        version: link:../plugin-codex
-      '@roop/plugin-openai':
-        specifier: workspace:*
-        version: link:../plugin-openai
-      '@roop/plugin-skills':
-        specifier: workspace:*
-        version: link:../plugin-skills
-      '@roop/plugin-todo':
-        specifier: workspace:*
-        version: link:../plugin-todo
-      '@roop/plugin-web':
-        specifier: workspace:*
-        version: link:../plugin-web
+        version: link:../plugins
       effect:
         specifier: 4.0.0-beta.97
         version: 4.0.0-beta.97
@@ -272,39 +257,17 @@ importers:
         specifier: ^4.1.10
         version: 4.1.10(@types/node@26.1.1)(vite@8.2.1(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
-  packages/plugin-claude:
+  packages/plugins:
     dependencies:
+      '@effect/ai-openai-compat':
+        specifier: 4.0.0-beta.97
+        version: 4.0.0-beta.97(patch_hash=8a7f7bbcdc5e49a25e28e9bc58228c81e18870440374927c9b9746dc475c473c)(effect@4.0.0-beta.97)
       '@roop/agent':
         specifier: workspace:*
         version: link:../agent
       '@texoport/effect-ai-claude':
         specifier: ^0.1.2
         version: 0.1.2(patch_hash=91e48240e07b36186a7ce0d7d2ad5cc2f5acc14a1fafc96de04551eb0ab2f7dd)(effect@4.0.0-beta.97)
-      effect:
-        specifier: 4.0.0-beta.97
-        version: 4.0.0-beta.97
-    devDependencies:
-      '@effect/platform-node':
-        specifier: 4.0.0-beta.97
-        version: 4.0.0-beta.97(effect@4.0.0-beta.97)(ioredis@5.11.1)
-      '@effect/vitest':
-        specifier: 4.0.0-beta.97
-        version: 4.0.0-beta.97(effect@4.0.0-beta.97)(vitest@4.1.10(@types/node@26.1.1)(vite@8.2.1(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0)))
-      '@types/node':
-        specifier: ^26.1.1
-        version: 26.1.1
-      typescript:
-        specifier: ^7.0.2
-        version: 7.0.2
-      vitest:
-        specifier: ^4.1.10
-        version: 4.1.10(@types/node@26.1.1)(vite@8.2.1(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
-
-  packages/plugin-codex:
-    dependencies:
-      '@roop/agent':
-        specifier: workspace:*
-        version: link:../agent
       '@texoport/effect-ai-codex':
         specifier: ^0.1.2
         version: 0.1.2(patch_hash=91e48240e07b36186a7ce0d7d2ad5cc2f5acc14a1fafc96de04551eb0ab2f7dd)(effect@4.0.0-beta.97)
@@ -315,103 +278,6 @@ importers:
       '@effect/platform-node':
         specifier: 4.0.0-beta.97
         version: 4.0.0-beta.97(effect@4.0.0-beta.97)(ioredis@5.11.1)
-      '@effect/vitest':
-        specifier: 4.0.0-beta.97
-        version: 4.0.0-beta.97(effect@4.0.0-beta.97)(vitest@4.1.10(@types/node@26.1.1)(vite@8.2.1(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0)))
-      '@types/node':
-        specifier: ^26.1.1
-        version: 26.1.1
-      typescript:
-        specifier: ^7.0.2
-        version: 7.0.2
-      vitest:
-        specifier: ^4.1.10
-        version: 4.1.10(@types/node@26.1.1)(vite@8.2.1(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
-
-  packages/plugin-openai:
-    dependencies:
-      '@effect/ai-openai-compat':
-        specifier: 4.0.0-beta.97
-        version: 4.0.0-beta.97(patch_hash=8a7f7bbcdc5e49a25e28e9bc58228c81e18870440374927c9b9746dc475c473c)(effect@4.0.0-beta.97)
-      '@roop/agent':
-        specifier: workspace:*
-        version: link:../agent
-      effect:
-        specifier: 4.0.0-beta.97
-        version: 4.0.0-beta.97
-    devDependencies:
-      '@effect/platform-node':
-        specifier: 4.0.0-beta.97
-        version: 4.0.0-beta.97(effect@4.0.0-beta.97)(ioredis@5.11.1)
-      '@effect/vitest':
-        specifier: 4.0.0-beta.97
-        version: 4.0.0-beta.97(effect@4.0.0-beta.97)(vitest@4.1.10(@types/node@26.1.1)(vite@8.2.1(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0)))
-      '@types/node':
-        specifier: ^26.1.1
-        version: 26.1.1
-      typescript:
-        specifier: ^7.0.2
-        version: 7.0.2
-      vitest:
-        specifier: ^4.1.10
-        version: 4.1.10(@types/node@26.1.1)(vite@8.2.1(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
-
-  packages/plugin-skills:
-    dependencies:
-      '@roop/agent':
-        specifier: workspace:*
-        version: link:../agent
-      effect:
-        specifier: 4.0.0-beta.97
-        version: 4.0.0-beta.97
-    devDependencies:
-      '@effect/platform-node':
-        specifier: 4.0.0-beta.97
-        version: 4.0.0-beta.97(effect@4.0.0-beta.97)(ioredis@5.11.1)
-      '@effect/vitest':
-        specifier: 4.0.0-beta.97
-        version: 4.0.0-beta.97(effect@4.0.0-beta.97)(vitest@4.1.10(@types/node@26.1.1)(vite@8.2.1(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0)))
-      '@types/node':
-        specifier: ^26.1.1
-        version: 26.1.1
-      typescript:
-        specifier: ^7.0.2
-        version: 7.0.2
-      vitest:
-        specifier: ^4.1.10
-        version: 4.1.10(@types/node@26.1.1)(vite@8.2.1(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
-
-  packages/plugin-todo:
-    dependencies:
-      '@roop/agent':
-        specifier: workspace:*
-        version: link:../agent
-      effect:
-        specifier: 4.0.0-beta.97
-        version: 4.0.0-beta.97
-    devDependencies:
-      '@effect/vitest':
-        specifier: 4.0.0-beta.97
-        version: 4.0.0-beta.97(effect@4.0.0-beta.97)(vitest@4.1.10(@types/node@26.1.1)(vite@8.2.1(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0)))
-      '@types/node':
-        specifier: ^26.1.1
-        version: 26.1.1
-      typescript:
-        specifier: ^7.0.2
-        version: 7.0.2
-      vitest:
-        specifier: ^4.1.10
-        version: 4.1.10(@types/node@26.1.1)(vite@8.2.1(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
-
-  packages/plugin-web:
-    dependencies:
-      '@roop/agent':
-        specifier: workspace:*
-        version: link:../agent
-      effect:
-        specifier: 4.0.0-beta.97
-        version: 4.0.0-beta.97
-    devDependencies:
       '@effect/vitest':
         specifier: 4.0.0-beta.97
         version: 4.0.0-beta.97(effect@4.0.0-beta.97)(vitest@4.1.10(@types/node@26.1.1)(vite@8.2.1(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0)))

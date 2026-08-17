@@ -1,10 +1,10 @@
 import { assert, it } from "@effect/vitest"
 
-import { initialRunState, transition, type RunState } from "../src/RunMachine.ts"
+import { initialRunState, transition, type RunState } from "../src/runStateMachine.ts"
 
 const policy: RunState["policy"] = { maxTurns: 2, maxStepsPerTurn: 2, maxTotalSteps: 3 }
 
-it("RunMachine transitions deterministically and preserves terminal finality", () => {
+it("runStateMachine transitions deterministically and preserves terminal finality", () => {
   const initial = initialRunState(policy)
   const started = transition(initial, { _tag: "StartTurn" })
   assert.deepStrictEqual(started.state.turn, 1)
@@ -22,7 +22,7 @@ it("RunMachine transitions deterministically and preserves terminal finality", (
   })
 })
 
-it("RunMachine enforces turn and step bounds", () => {
+it("runStateMachine enforces turn and step bounds", () => {
   const atTurnLimit = { ...initialRunState(policy), turn: 2 }
   assert.strictEqual(transition(atTurnLimit, { _tag: "StartTurn" }).state.terminal, "stopped")
 
@@ -42,7 +42,7 @@ it("RunMachine enforces turn and step bounds", () => {
   )
 })
 
-it("RunMachine handles interruption and stop without orphaned commands", () => {
+it("runStateMachine handles interruption and stop without orphaned commands", () => {
   const state = transition(initialRunState(policy), { _tag: "StartTurn" }).state
   for (const signal of [{ _tag: "Interrupted" } as const, { _tag: "Stop" } as const]) {
     const decision = transition(state, signal)
@@ -55,7 +55,7 @@ it("RunMachine handles interruption and stop without orphaned commands", () => {
   }
 })
 
-it("RunMachine preserves invariants across exhaustive bounded signal sequences", () => {
+it("runStateMachine preserves invariants across exhaustive bounded signal sequences", () => {
   const signals = [
     { _tag: "StartTurn" as const },
     { _tag: "StepCompleted" as const, toolCalls: 0 },

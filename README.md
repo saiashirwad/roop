@@ -77,8 +77,7 @@ import { SessionJournalFs } from "@roop/agent/SessionJournal.ts"
 import { subagent } from "@roop/agent/subagent.ts"
 import { CodingTools } from "@roop/coding-tools/CodingTools.ts"
 import { ExecutionWorld } from "@roop/coding-tools/ExecutionWorld.ts"
-import { Claude } from "@roop/plugin-claude/Claude.ts"
-import { Todos } from "@roop/plugin-todo/Todos.ts"
+import { Claude, Todos } from "@roop/plugins"
 import { Layer } from "effect"
 
 const coding = CodingTools()
@@ -115,7 +114,7 @@ export const agentLayer = AgentPlugins([
 | [`@roop/coding-harness`](./packages/coding-harness) | Example agent composition and RPC server                                        |
 | [`@roop/coding-tui`](./packages/coding-tui)         | Terminal client built with `pi-tui`                                             |
 | [`@roop/coding-web`](./packages/coding-web)         | Web client (React, Vite)                                                        |
-| [`@roop/plugin-*`](./packages)                      | Model adapters (OpenAI, Claude, Codex) and utilities (skills, todos, web fetch) |
+| [`@roop/plugins`](./packages/plugins)               | Model adapters (OpenAI, Claude, Codex) and utilities (skills, todos, web fetch) |
 
 ## Development
 

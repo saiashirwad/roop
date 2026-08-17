@@ -16,12 +16,7 @@
     "@roop/agent": "workspace:*",
     "@roop/agent-rpc": "workspace:*",
     "@roop/coding-tools": "workspace:*",
-    "@roop/plugin-claude": "workspace:*",
-    "@roop/plugin-codex": "workspace:*",
-    "@roop/plugin-openai": "workspace:*",
-    "@roop/plugin-skills": "workspace:*",
-    "@roop/plugin-todo": "workspace:*",
-    "@roop/plugin-web": "workspace:*",
+    "@roop/plugins": "workspace:*",
     "effect": "4.0.0-beta.97"
   },
   "devDependencies": {

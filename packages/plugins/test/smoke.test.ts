@@ -9,6 +9,9 @@ import { Config, Effect, Layer, Option, Stream } from "effect"
 import { OpenAiCompatible } from "../src/OpenAiCompatible.ts"
 
 const apiKey = Effect.runSync(Config.option(Config.string("DEEPSEEK_API_KEY")))
+const live =
+  Option.isSome(apiKey) &&
+  Option.isSome(Effect.runSync(Config.option(Config.string("DEEPSEEK_SMOKE"))))
 
 const deepseek = OpenAiCompatible({
   name: "deepseek",
@@ -24,7 +27,7 @@ it.layer(
     Layer.provide(NodeHttpClient.layerUndici),
   ),
 )("OpenAiCompatible live", (it) => {
-  it.effect.skipIf(Option.isNone(apiKey))("streams a text reply", () =>
+  it.effect.skipIf(!live)("streams a text reply", () =>
     Effect.gen(function* () {
       const agent = yield* Agent
       const events = yield* Stream.runCollect(

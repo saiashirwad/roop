@@ -37,6 +37,8 @@ export type RegistrationOptions = {
 export type AgentContextOptions = {
   /** Base prompt prepended to every registered section. */
   readonly systemPrompt?: string | undefined
+  /** Hook implementation beneath dynamically registered hook waterfalls. */
+  readonly baseHooks?: AgentHooksInterface | undefined
   readonly defaultConflictPolicy?:
     | Partial<Record<"tool" | "model" | "skill" | "prompt" | "hook", ConflictPolicy>>
     | undefined
@@ -176,8 +178,11 @@ const defaultConflictPolicyFor = (
   }
 }
 
-const composeHooks = (hooks: ReadonlyArray<HookRegistration>): AgentHooksInterface => {
-  let current: AgentHooksInterface = hooksNoop
+const composeHooks = (
+  hooks: ReadonlyArray<HookRegistration>,
+  base: AgentHooksInterface,
+): AgentHooksInterface => {
+  let current = base
   for (let i = hooks.length - 1; i >= 0; i--) {
     const reg = hooks[i]!
     const downstream = current
@@ -196,7 +201,11 @@ const composeHooks = (hooks: ReadonlyArray<HookRegistration>): AgentHooksInterfa
   return current
 }
 
-const deriveSnapshot = (state: RegistryState, basePrompt: string): CapabilitySnapshot => {
+const deriveSnapshot = (
+  state: RegistryState,
+  basePrompt: string,
+  baseHooks: AgentHooksInterface,
+): CapabilitySnapshot => {
   const version = state.version
   const uniqueTools = latestBy(state.tools, (entry) => entry.tool.name)
   const toolsRecord: Record<string, Tool.Any> = Object.fromEntries(
@@ -251,7 +260,7 @@ const deriveSnapshot = (state: RegistryState, basePrompt: string): CapabilitySna
   const uniqueSkills = latestBy(state.skills, (entry) => entry.skill.id).map((entry) => entry.skill)
   const promptSections = state.promptSections.map((entry) => entry.text)
   const systemPrompt = [basePrompt, ...promptSections].filter((text) => text !== "").join("\n\n")
-  const hooks = composeHooks(state.hooks)
+  const hooks = composeHooks(state.hooks, baseHooks)
 
   return {
     version,
@@ -278,6 +287,7 @@ export const make = (
 ): Effect.Effect<AgentContext["Service"], never, Scope.Scope> =>
   Effect.gen(function* () {
     const basePrompt = options?.systemPrompt ?? ""
+    const baseHooks = options?.baseHooks ?? hooksNoop
     const stateRef = yield* SynchronizedRef.make<RegistryState>({
       version: 0,
       tools: [],
@@ -293,7 +303,7 @@ export const make = (
     yield* Effect.addFinalizer(() => Scope.close(agentScope, Exit.void))
 
     const snapshot = SynchronizedRef.get(stateRef).pipe(
-      Effect.map((state) => deriveSnapshot(state, basePrompt)),
+      Effect.map((state) => deriveSnapshot(state, basePrompt, baseHooks)),
     )
 
     const registerTool = (
@@ -590,7 +600,9 @@ export const make = (
       ),
       resolveModel: (modelId) =>
         SynchronizedRef.get(stateRef).pipe(
-          Effect.flatMap((state) => deriveSnapshot(state, basePrompt).resolveModel(modelId)),
+          Effect.flatMap((state) =>
+            deriveSnapshot(state, basePrompt, baseHooks).resolveModel(modelId),
+          ),
         ),
       hooks: snapshot.pipe(Effect.map((s) => s.hooks)),
       registerTool,
