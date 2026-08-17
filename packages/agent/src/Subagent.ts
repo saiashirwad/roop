@@ -3,7 +3,6 @@ import { Context, Crypto, Effect, Layer, Schema, Scope, Stream } from "effect"
 import { Tool, Toolkit } from "effect/unstable/ai"
 
 import { Agent } from "./Agent.ts"
-import { AgentContext } from "./AgentContext.ts"
 import { AgentEmit, type AgentEvent } from "./AgentEvents.ts"
 import { AgentPlugins, Plugin, type PluginRequirements } from "./Plugin.ts"
 import type { RunError } from "./RunError.ts"
@@ -110,12 +109,7 @@ export const subagent = <
     Effect.gen(function* () {
       const ambientContext = yield* Effect.context<PluginRequirements<Plugins> | LayerIn>()
       const crypto = yield* Crypto.Crypto
-      const context = ambientContext.pipe(
-        Context.omit(
-          /* SAFETY: child agents must not inherit the parent registry capability. */
-          AgentContext as any,
-        ),
-      )
+      const context = ambientContext
       return {
         [options.name]: (params: { readonly task: string }) =>
           Effect.scoped(
@@ -127,17 +121,7 @@ export const subagent = <
                 custom !== undefined
                   ? yield* Layer.buildWithScope(custom, scope).pipe(
                       Effect.provide(contextLayer),
-                      Effect.map((customCtx) =>
-                        Context.merge(
-                          context,
-                          customCtx.pipe(
-                            Context.omit(
-                              /* SAFETY: custom child layers are isolated from the parent registry too. */
-                              AgentContext as any,
-                            ),
-                          ),
-                        ),
-                      ),
+                      Effect.map((customCtx) => Context.merge(context, customCtx)),
                     )
                   : context
               const childEnv = yield* Layer.buildWithScope(makeChild(crypto), scope).pipe(

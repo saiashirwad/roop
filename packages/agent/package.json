@@ -6,9 +6,10 @@
   "exports": {
     ".": "./src/index.ts",
     "./Agent.ts": "./src/Agent.ts",
-    "./AgentContext.ts": "./src/AgentContext.ts",
+    "./AgentConfig.ts": "./src/AgentConfig.ts",
     "./AgentEvents.ts": "./src/AgentEvents.ts",
     "./AgentHooks.ts": "./src/AgentHooks.ts",
+    "./AgentTools.ts": "./src/AgentTools.ts",
     "./Capabilities.ts": "./src/Capabilities.ts",
     "./DomainIds.ts": "./src/DomainIds.ts",
     "./ModelCatalog.ts": "./src/ModelCatalog.ts",

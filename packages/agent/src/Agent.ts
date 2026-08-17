@@ -1,14 +1,20 @@
-import { Context, Crypto, Effect, Layer, Option, Ref, Stream } from "effect"
-import { Chat, Prompt, type Toolkit } from "effect/unstable/ai"
+import { Context, Crypto, Effect, Layer, Option, Stream } from "effect"
+import { Chat, type Toolkit } from "effect/unstable/ai"
 import type * as Tool from "effect/unstable/ai/Tool"
 
-import { AgentContext, AgentContextLive, registerStatics } from "./AgentContext.ts"
+import { AgentConfig, layer as agentConfigLayer } from "./AgentConfig.ts"
 import type { AgentEvent, SessionEvent } from "./AgentEvents.ts"
 import { AgentHooks } from "./AgentHooks.ts"
 import { runLoop } from "./agentLoop.ts"
+import { AgentTools } from "./AgentTools.ts"
 import { capabilitiesFrom, type Capabilities } from "./Capabilities.ts"
 import { SessionId, type ModelId } from "./DomainIds.ts"
-import type { ModelNotFound, ModelSpec } from "./ModelCatalog.ts"
+import {
+  ModelCatalog,
+  type ModelNotFound,
+  type ModelSpec,
+  layer as modelCatalogLayer,
+} from "./ModelCatalog.ts"
 import { type RunError, runError } from "./RunError.ts"
 import type { RunPolicy } from "./RunPolicy.ts"
 import { type RunNotFound, RunRegistry, RunRegistryLive, type SessionBusy } from "./RunRegistry.ts"
@@ -69,20 +75,26 @@ export class Agent extends Context.Service<
 export const AgentLive: Layer.Layer<
   Agent,
   never,
-  AgentContext | Crypto.Crypto | SessionJournal | RunRegistry
+  AgentConfig | AgentTools | ModelCatalog | Crypto.Crypto | SessionJournal | RunRegistry
 > = Layer.effect(
   Agent,
   Effect.gen(function* () {
     const store = yield* SessionJournal
     const crypto = yield* Crypto.Crypto
     const runs = yield* RunRegistry
-    const context = yield* AgentContext
+    const config = yield* AgentConfig
+    const tools = yield* AgentTools
+    const models = yield* ModelCatalog
+    const hooks = yield* AgentHooks
 
     return Agent.of({
-      capabilities: Effect.map(
-        Effect.all([context.tools, context.models, context.defaultModelId, context.skills]),
-        ([tools, models, defaultModelId, skills]) =>
-          capabilitiesFrom({ tools, models, defaultModelId, skills }),
+      capabilities: Effect.succeed(
+        capabilitiesFrom({
+          tools: tools.tools,
+          models: models.ads,
+          defaultModelId: models.defaultModelId,
+          skills: config.skills,
+        }),
       ),
       prompt: (request) =>
         Stream.unwrap(
@@ -93,8 +105,8 @@ export const AgentLive: Layer.Layer<
                 : yield* Effect.orDie(
                     crypto.randomUUIDv4.pipe(Effect.map((id) => SessionId.make(id))),
                   )
-            const model = yield* context.resolveModel(request.modelId)
-            const systemPrompt = yield* context.systemPrompt
+            const model = yield* models.resolve(request.modelId)
+            const systemPrompt = config.systemPrompt
 
             return runs.runStream(sessionId, (signal) =>
               Stream.unwrap(
@@ -140,32 +152,11 @@ export const AgentLive: Layer.Layer<
                     ),
                   ).pipe(Effect.mapError((error) => runError(error, { sessionId })))
 
-                  const journaledSections = new Set<string>()
-                  if (systemPrompt !== "") journaledSections.add(systemPrompt)
-                  for (const section of yield* context.promptSections)
-                    journaledSections.add(section)
-
-                  const hooks = yield* context.hooks
-
                   return runLoop({
                     sessionId,
                     chat,
                     model,
-                    toolkit: context.toolkit,
-                    beforeRequest: () =>
-                      Effect.gen(function* () {
-                        for (const section of yield* context.promptSections) {
-                          if (journaledSections.has(section)) continue
-                          journaledSections.add(section)
-                          yield* append({ _tag: "system/message", content: section })
-                          yield* Ref.update(chat.history, (history) =>
-                            Prompt.concat(
-                              history,
-                              Prompt.make([{ role: "system", content: section }]),
-                            ),
-                          )
-                        }
-                      }),
+                    toolkit: Effect.succeed(tools),
                     policy: request.policy,
                     interrupt: signal,
                     append,
@@ -196,10 +187,8 @@ export const AgentLive: Layer.Layer<
 
 /**
  * Single-toolkit convenience: an agent from one toolkit plus optional static
- * contributions, registered through the same registry calls `AgentPlugins`
- * uses. Unlike `AgentPlugins` this installs no hook waterfall, so the ambient
- * `AgentHooks` (reference default, or a caller-provided layer) applies.
- * Tool handlers stay caller-provided.
+ * contributions. The toolkit's handlers stay caller-provided and the ambient
+ * AgentHooks reference (default or caller-provided) is used directly.
  */
 export const AgentLiveToolkit = <Tools extends Record<string, Tool.Any>>(
   toolkit: Toolkit.Toolkit<Tools>,
@@ -209,40 +198,18 @@ export const AgentLiveToolkit = <Tools extends Record<string, Tool.Any>>(
     readonly skills?: ReadonlyArray<Skill> | undefined
   },
 ): Layer.Layer<Agent, never, Crypto.Crypto | Tool.HandlersFor<Tools> | SessionJournal> => {
-  const registry = Layer.unwrap(
-    Effect.map(AgentHooks, (baseHooks) =>
-      AgentContextLive(
-        options?.systemPrompt === undefined
-          ? { baseHooks }
-          : { systemPrompt: options.systemPrompt, baseHooks },
-      ),
-    ),
-  )
-
-  const installToolkit = Layer.effectDiscard(
-    Effect.gen(function* () {
-      const context = yield* AgentContext
-      const scope = yield* Effect.scope
-      const handlersCtx = yield* Effect.context<Tool.HandlersFor<Tools>>()
-      const withHandler = yield* Effect.provide(toolkit, handlersCtx)
-      const erasedToolkit = eraseToolkit(withHandler)
-      for (const tool of Object.values(withHandler.tools)) {
-        /* SAFETY: Register each tool with its closed handlers into AgentContext. */
-        yield* Effect.asVoid(context.registerTool(tool, erasedToolkit, { scope }))
-      }
-    }),
-  )
+  const tools = Layer.effect(AgentTools, toolkit.pipe(Effect.map(eraseToolkit)))
+  const config = agentConfigLayer({
+    systemPrompt: options?.systemPrompt ?? "",
+    skills: options?.skills ?? [],
+  })
 
   return AgentLive.pipe(
     Layer.provide([
-      registry,
+      tools,
+      config,
+      modelCatalogLayer(options?.models ?? []).pipe(Layer.orDie),
       RunRegistryLive,
-      installToolkit.pipe(Layer.orDie, Layer.provide(registry)),
-      registerStatics({
-        models: options?.models ?? [],
-        skills: options?.skills ?? [],
-        conflictPolicy: "replace",
-      }).pipe(Layer.provide(registry)),
     ]),
     Layer.orDie,
   )

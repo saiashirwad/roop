@@ -23,8 +23,7 @@ export type ToolCallParameters = Tool.Parameters<Tool.Any>
 
 /**
  * Erase a toolkit's name-to-parameter relationship after its handlers have
- * been built. AgentContext restores that relationship by looking up the
- * registered tool before dispatching a call.
+ * been built. Toolkit itself still validates every call before dispatching it.
  */
 export const eraseToolkit = <Tools extends Record<string, Tool.Any>>(
   toolkit: Toolkit.WithHandler<Tools>,
