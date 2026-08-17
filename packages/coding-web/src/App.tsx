@@ -1,7 +1,7 @@
 import { useAtom, useAtomSet, useAtomValue } from "@effect/atom-react"
 import * as stylex from "@stylexjs/stylex"
 import { Clock, Effect } from "effect"
-import { useEffect, useRef, useState } from "react"
+import { memo, useEffect, useRef, useState } from "react"
 
 import { Composer, type Command } from "./Composer.tsx"
 import { Markdown } from "./Markdown.tsx"
@@ -17,6 +17,7 @@ import {
   sessionAtom,
   sessionsAtom,
   transcriptAtom,
+  type Item,
 } from "./state.ts"
 import { ToolCard } from "./toolViews.tsx"
 
@@ -210,6 +211,26 @@ const Sidebar = ({ busy, onNew }: { readonly busy: boolean; readonly onNew: () =
   )
 }
 
+// apply() in @roop/agent-rpc/Transcript.ts only appends items or replaces the
+// changed item's object identity (deltas replace the trailing item, ToolResult
+// maps the matching one), so a completed item's reference never changes. memo
+// therefore lets default shallow prop equality skip re-parsing Markdown and
+// re-decoding tool params when a streaming delta lands on another item.
+const TranscriptItem = memo(({ item }: { readonly item: Item }) => {
+  switch (item.kind) {
+    case "user":
+      return <div {...stylex.props(styles.user)}>{item.text}</div>
+    case "assistant":
+      return <Markdown text={item.text} />
+    case "reasoning":
+      return <Reasoning text={item.text} />
+    case "tool":
+      return <ToolCard tool={item} />
+    case "notice":
+      return <div {...stylex.props(styles.notice)}>{item.text}</div>
+  }
+})
+
 export const App = () => {
   const transcript = useAtomValue(transcriptAtom)
   const sessions = useAtomValue(sessionsAtom)
@@ -336,28 +357,9 @@ export const App = () => {
                   : "Untitled"}
               </div>
             )}
-            {transcript.map((item, index) => {
-              switch (item.kind) {
-                case "user":
-                  return (
-                    <div key={index} {...stylex.props(styles.user)}>
-                      {item.text}
-                    </div>
-                  )
-                case "assistant":
-                  return <Markdown key={index} text={item.text} />
-                case "reasoning":
-                  return <Reasoning key={index} text={item.text} />
-                case "tool":
-                  return <ToolCard key={index} tool={item} />
-                case "notice":
-                  return (
-                    <div key={index} {...stylex.props(styles.notice)}>
-                      {item.text}
-                    </div>
-                  )
-              }
-            })}
+            {transcript.map((item, index) => (
+              <TranscriptItem key={index} item={item} />
+            ))}
             <div ref={bottom} />
           </div>
         </div>
