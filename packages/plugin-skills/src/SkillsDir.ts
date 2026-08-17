@@ -1,6 +1,6 @@
 import { Plugin } from "@roop/agent/Plugin.ts"
 import type { Skill } from "@roop/agent/Skills.ts"
-import { Effect, FileSystem, Option, PlatformError, Schema } from "effect"
+import { Effect, FileSystem, Option, type PlatformError, Schema } from "effect"
 import { Tool, Toolkit } from "effect/unstable/ai"
 
 class SkillNotFound extends Schema.TaggedErrorClass<SkillNotFound>()("SkillNotFound", {

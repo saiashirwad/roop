@@ -1,4 +1,4 @@
-import { Duration, Schema } from "effect"
+import { type Duration, Schema } from "effect"
 
 export interface RunPolicy {
   readonly maxTurns?: number | undefined

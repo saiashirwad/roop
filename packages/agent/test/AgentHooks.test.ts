@@ -4,6 +4,7 @@ import { LanguageModel, Prompt, Tool, Toolkit } from "effect/unstable/ai"
 
 import { Agent, AgentLiveToolkit } from "../src/Agent.ts"
 import {
+  AgentHooks,
   layerHook,
   layerNoop,
   StepRejected,
@@ -13,7 +14,6 @@ import {
   type StopRequest,
   type RunContext,
 } from "../src/AgentHooks.ts"
-import { AgentHooks } from "../src/AgentHooks.ts"
 import { cryptoWeb } from "../src/cryptoWeb.ts"
 import { SessionJournalMemory } from "../src/SessionJournal.ts"
 import { scripted } from "../src/Testing.ts"

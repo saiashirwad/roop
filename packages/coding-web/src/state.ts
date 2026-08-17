@@ -45,11 +45,11 @@ export const promptAtom = runtime.fn((text: string, ctx: Atom.FnContext) =>
       Stream.runForEach((event) =>
         Effect.sync(() => ctx.set(transcriptAtom, apply(ctx(transcriptAtom), event))),
       ),
-      Effect.catch((error) =>
+      Effect.catch((cause) =>
         Effect.sync(() =>
           ctx.set(transcriptAtom, [
             ...ctx(transcriptAtom),
-            { kind: "notice", text: String(error) },
+            { kind: "notice", text: String(cause) },
           ]),
         ),
       ),

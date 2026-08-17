@@ -7,12 +7,12 @@ import {
   FileSystem,
   Layer,
   Option,
-  PlatformError,
+  type PlatformError,
   Ref,
   Schema,
   Semaphore,
 } from "effect"
-import { Prompt } from "effect/unstable/ai"
+import type { Prompt } from "effect/unstable/ai"
 
 import {
   deriveMessages,

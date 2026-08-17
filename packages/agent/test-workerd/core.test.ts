@@ -1,6 +1,6 @@
 import { assert, it } from "@effect/vitest"
 import { Effect, Layer, Ref, Schema, Stream } from "effect"
-import { LanguageModel, Response, Tool, Toolkit } from "effect/unstable/ai"
+import { LanguageModel, type Response, Tool, Toolkit } from "effect/unstable/ai"
 
 import { Agent, AgentLiveToolkit } from "../src/Agent.ts"
 import { cryptoWeb } from "../src/cryptoWeb.ts"

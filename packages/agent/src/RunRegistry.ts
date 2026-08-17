@@ -1,5 +1,5 @@
 import {
-  Cause,
+  type Cause,
   Context,
   Deferred,
   Effect,
@@ -9,7 +9,7 @@ import {
   Queue,
   Ref,
   Schema,
-  Scope,
+  type Scope,
   Stream,
 } from "effect"
 

@@ -3,7 +3,7 @@ import { Prompt, type Chat, type LanguageModel } from "effect/unstable/ai"
 
 import type { AgentEvent } from "./AgentEvent.ts"
 import type { AgentHooksInterface } from "./AgentHooks.ts"
-import { RunError, runError } from "./RunError.ts"
+import { type RunError, runError } from "./RunError.ts"
 import { initialRunState, transition } from "./RunMachine.ts"
 import { resolveRunPolicy, type RunPolicy } from "./RunPolicy.ts"
 import type { InterruptSignal } from "./RunRegistry.ts"

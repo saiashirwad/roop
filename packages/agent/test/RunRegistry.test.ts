@@ -1,7 +1,13 @@
 import { assert, it } from "@effect/vitest"
 import { Deferred, Effect, Exit, Fiber, Option, Scope, Stream } from "effect"
 
-import { make, RunNotFound, RunRegistry, RunRegistryLive, SessionBusy } from "../src/RunRegistry.ts"
+import {
+  make,
+  type RunNotFound,
+  RunRegistry,
+  RunRegistryLive,
+  type SessionBusy,
+} from "../src/RunRegistry.ts"
 import { SessionId } from "../src/SessionId.ts"
 
 it.layer(RunRegistryLive)("RunRegistry", (it) => {

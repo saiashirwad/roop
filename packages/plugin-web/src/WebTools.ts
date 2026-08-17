@@ -41,7 +41,7 @@ export const WebTools = (options?: {
             body: body.slice(0, maxLength),
             truncated: body.length > maxLength,
           }
-        }).pipe(Effect.catch((error) => new WebFailure({ message: String(error) }))),
+        }).pipe(Effect.catch((cause) => new WebFailure({ message: String(cause) }))),
     }),
   })
 }

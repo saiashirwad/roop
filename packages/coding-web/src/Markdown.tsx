@@ -76,13 +76,15 @@ marked.use({
       const safe = safeHref(href ?? "")
       const text = this.parser.parseInline(tokens)
       if (safe === undefined) return text
-      const titleAttribute = title == null ? "" : ` title="${escapeAttribute(title)}"`
+      const titleAttribute =
+        title === undefined || title === null ? "" : ` title="${escapeAttribute(title)}"`
       return `<a href="${escapeAttribute(safe)}"${titleAttribute}>${text}</a>`
     },
     image({ href, title, text }) {
       const safe = safeHref(href ?? "")
       if (safe === undefined) return escapeAttribute(text)
-      const titleAttribute = title == null ? "" : ` title="${escapeAttribute(title)}"`
+      const titleAttribute =
+        title === undefined || title === null ? "" : ` title="${escapeAttribute(title)}"`
       return `<img src="${escapeAttribute(safe)}" alt="${escapeAttribute(text)}"${titleAttribute}>`
     },
   },

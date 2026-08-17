@@ -1,6 +1,6 @@
 import { Layer } from "effect"
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient"
-import * as HttpRouter from "effect/unstable/http/HttpRouter"
+import type * as HttpRouter from "effect/unstable/http/HttpRouter"
 import { RpcClient, RpcSerialization, RpcServer } from "effect/unstable/rpc"
 
 import { AgentRpc } from "./AgentRpc.ts"

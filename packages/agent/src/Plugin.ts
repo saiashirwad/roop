@@ -1,13 +1,9 @@
-import { Context, Crypto, Effect, Layer, Scope } from "effect"
+import { Context, type Crypto, Effect, Layer, Scope } from "effect"
 import type { Toolkit } from "effect/unstable/ai"
 import type * as Tool from "effect/unstable/ai/Tool"
 
 import { AgentLive, type Agent } from "./Agent.ts"
-import {
-  AgentContext,
-  AgentContextLive,
-  type ConflictPolicy,
-} from "./AgentContext.ts"
+import { AgentContext, AgentContextLive, type ConflictPolicy } from "./AgentContext.ts"
 import { AgentHooks, layerNoop } from "./AgentHooks.ts"
 import type { ModelSpec } from "./ModelCatalog.ts"
 import { PluginId } from "./PluginId.ts"
@@ -75,10 +71,7 @@ export const make = <
       if (options.toolkit !== undefined) {
         if (options.handlers !== undefined) {
           const handlersCtx = yield* Layer.buildWithScope(options.handlers, scope)
-          const withHandler = yield* Effect.provide(
-            options.toolkit,
-            handlersCtx,
-          )
+          const withHandler = yield* Effect.provide(options.toolkit, handlersCtx)
           const erasedToolkit = eraseToolkit(withHandler)
           for (const tool of Object.values(withHandler.tools)) {
             yield* Effect.asVoid(
@@ -217,7 +210,10 @@ export const AgentPlugins = <const Plugins extends ReadonlyArray<Plugin<any, any
     }),
   )
 
-  const registryWithPlugins = installAll.pipe(Layer.provide(layerNoop), Layer.provideMerge(registry))
+  const registryWithPlugins = installAll.pipe(
+    Layer.provide(layerNoop),
+    Layer.provideMerge(registry),
+  )
 
   return Layer.fresh(AgentLive).pipe(
     Layer.orDie,

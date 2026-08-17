@@ -1,25 +1,25 @@
 import { Context, Crypto, Effect, Layer, Option, Ref, Stream } from "effect"
-import { Chat, Prompt, Toolkit } from "effect/unstable/ai"
+import { Chat, Prompt, type Toolkit } from "effect/unstable/ai"
 import type * as Tool from "effect/unstable/ai/Tool"
 
 import { AgentContext, AgentContextLive, registerStatics } from "./AgentContext.ts"
 import type { AgentEvent } from "./AgentEvent.ts"
 import { runLoop } from "./agentLoop.ts"
-import { eraseToolkit } from "./runStep.ts"
 import { capabilitiesFrom, type Capabilities } from "./Capabilities.ts"
-import { ModelNotFound, type ModelSpec } from "./ModelCatalog.ts"
-import { ModelId } from "./ModelId.ts"
-import { RunError, runError } from "./RunError.ts"
+import type { ModelNotFound, ModelSpec } from "./ModelCatalog.ts"
+import type { ModelId } from "./ModelId.ts"
+import { type RunError, runError } from "./RunError.ts"
 import type { RunPolicy } from "./RunPolicy.ts"
-import { RunNotFound, RunRegistry, RunRegistryLive, SessionBusy } from "./RunRegistry.ts"
+import { type RunNotFound, RunRegistry, RunRegistryLive, type SessionBusy } from "./RunRegistry.ts"
+import { eraseToolkit } from "./runStep.ts"
 import type { SessionEvent } from "./SessionEvent.ts"
 import { SessionId } from "./SessionId.ts"
 import {
-  SessionAlreadyExists,
-  SessionFormatError,
+  type SessionAlreadyExists,
+  type SessionFormatError,
   SessionIoError,
   SessionJournal,
-  SessionNotFound,
+  type SessionNotFound,
   type Session,
   type SessionMeta,
 } from "./SessionJournal.ts"
@@ -219,10 +219,7 @@ export const AgentLiveToolkit = <Tools extends Record<string, Tool.Any>>(
       const context = yield* AgentContext
       const scope = yield* Effect.scope
       const handlersCtx = yield* Effect.context<Tool.HandlersFor<Tools>>()
-      const withHandler = yield* Effect.provide(
-        toolkit,
-        handlersCtx,
-      )
+      const withHandler = yield* Effect.provide(toolkit, handlersCtx)
       const erasedToolkit = eraseToolkit(withHandler)
       for (const tool of Object.values(withHandler.tools)) {
         /* SAFETY: Register each tool with its closed handlers into AgentContext. */

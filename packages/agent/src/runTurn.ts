@@ -1,7 +1,7 @@
 import { Cause, Effect } from "effect"
 
 import type { AgentHooksInterface, RunContext } from "./AgentHooks.ts"
-import { RunError } from "./RunError.ts"
+import type { RunError } from "./RunError.ts"
 import type { ResolvedRunPolicy } from "./RunPolicy.ts"
 import type { InterruptSignal } from "./RunRegistry.ts"
 import type { StepOutcome } from "./runStep.ts"
@@ -52,7 +52,9 @@ export interface RunTurnOptions<E = never> {
 /**
  * Coordinates multiple steps within a single turn under turn and total step limits.
  */
-export const runTurn = <E = never>(options: RunTurnOptions<E>): Effect.Effect<TurnOutcome, E | RunError> => {
+export const runTurn = <E = never>(
+  options: RunTurnOptions<E>,
+): Effect.Effect<TurnOutcome, E | RunError> => {
   let started = false
   let closed = false
 

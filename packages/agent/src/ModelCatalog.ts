@@ -1,5 +1,5 @@
-import { Layer, Schema } from "effect"
-import { LanguageModel } from "effect/unstable/ai"
+import { type Layer, Schema } from "effect"
+import type { LanguageModel } from "effect/unstable/ai"
 
 import { ModelId } from "./ModelId.ts"
 

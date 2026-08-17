@@ -35,7 +35,7 @@ it("only talks to the agent through the rpc client", () => {
       expect(
         allowed.some((pattern) => pattern.test(specifier)),
         `${file} imports ${specifier}`,
-      ).toBe(true)
+      ).toBeTruthy()
     }
   }
 })

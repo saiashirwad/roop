@@ -1,5 +1,5 @@
 import { Context, Effect, Layer, Schema } from "effect"
-import { LanguageModel } from "effect/unstable/ai"
+import type { LanguageModel } from "effect/unstable/ai"
 import type * as Tool from "effect/unstable/ai/Tool"
 
 /** Per-call context threaded through every seam by the loop. */
@@ -77,7 +77,7 @@ export interface AgentHooksInterface {
  * loop-owned options (toolkit and concurrency) are reapplied afterward.
  */
 export type ModelRequest = Pick<
-  LanguageModel.GenerateTextOptions<Record<string, import("effect/unstable/ai/Tool").Any>>,
+  LanguageModel.GenerateTextOptions<Record<string, Tool.Any>>,
   "prompt" | "toolChoice"
 >
 

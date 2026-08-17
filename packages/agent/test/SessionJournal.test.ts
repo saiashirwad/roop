@@ -1,7 +1,7 @@
 import { NodeFileSystem } from "@effect/platform-node"
 import { assert, it } from "@effect/vitest"
 import { Effect, Exit, FileSystem, Layer, Option, Schema } from "effect"
-import { Prompt } from "effect/unstable/ai"
+import type { Prompt } from "effect/unstable/ai"
 
 import { cryptoWeb } from "../src/cryptoWeb.ts"
 import { deriveMessages, SESSION_FORMAT_VERSION, type SessionEvent } from "../src/SessionEvent.ts"
