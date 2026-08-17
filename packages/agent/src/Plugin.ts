@@ -1,12 +1,12 @@
-import { Context, type Crypto, Effect, Layer, Scope } from "effect"
-import type { Toolkit } from "effect/unstable/ai"
-import type * as Tool from "effect/unstable/ai/Tool"
+import { Context, type Crypto, Effect, Layer, Scope, type Schema } from "effect"
+import { Toolkit } from "effect/unstable/ai"
+import * as Tool from "effect/unstable/ai/Tool"
 
 import { AgentLive, type Agent } from "./Agent.ts"
 import { AgentContext, AgentContextLive, type ConflictPolicy } from "./AgentContext.ts"
 import { AgentHooks, layerNoop } from "./AgentHooks.ts"
+import { PluginId } from "./DomainIds.ts"
 import type { ModelSpec } from "./ModelCatalog.ts"
-import { PluginId } from "./PluginId.ts"
 import { RunRegistryLive } from "./RunRegistry.ts"
 import { eraseToolkit } from "./runStep.ts"
 import type { SessionJournal } from "./SessionJournal.ts"
@@ -159,8 +159,57 @@ export const make = <
   }
 }
 
+export interface PluginToolOptions<
+  Name extends string,
+  Parameters extends Schema.Constraint,
+  Success extends Schema.Constraint,
+  Failure extends Schema.Constraint,
+  Mode extends Tool.FailureMode,
+  Handler extends Effect.Effect<any, any, any>,
+> {
+  readonly name: Name
+  readonly description?: string | undefined
+  readonly parameters: Parameters
+  readonly success: Success
+  readonly failure?: Failure | undefined
+  readonly failureMode?: Mode | undefined
+  readonly dependencies?: ReadonlyArray<Context.Key<any, any>> | undefined
+  readonly handler: (params: Parameters["Type"]) => Handler
+  readonly plugin?: Omit<PluginOptions, "toolkit" | "handlers"> | undefined
+}
+
+/** Define one tool and install its handler as a plugin in one expression. */
+export const tool = <
+  const Name extends string,
+  Parameters extends Schema.Constraint,
+  Success extends Schema.Constraint,
+  Failure extends Schema.Constraint = typeof Schema.Never,
+  Mode extends Tool.FailureMode = "error",
+  Handler extends Effect.Effect<any, any, any> = Effect.Effect<any, any, any>,
+>(
+  options: PluginToolOptions<Name, Parameters, Success, Failure, Mode, Handler>,
+): Plugin<Effect.Services<Handler>, Effect.Error<Handler>> => {
+  const { handler, plugin, ...definition } = options
+  /* SAFETY: `definition` is exactly the runtime option subset accepted by Tool.make. */
+  const definitionTool = Tool.make(options.name, definition as never)
+  const toolkit = Toolkit.make(definitionTool)
+  /* SAFETY: Toolkit.make has one handler whose parameter and result types are supplied by `handler`. */
+  const handlers = toolkit.toLayer({
+    [options.name]: (params: Parameters["Type"]) => handler(params),
+  } as never)
+  const result: unknown = make({
+    ...plugin,
+    name: plugin?.name ?? options.name,
+    toolkit,
+    handlers,
+  })
+  /* SAFETY: the handler effect is the only open requirement/error channel introduced by this tool. */
+  return result as Plugin<Effect.Services<Handler>, Effect.Error<Handler>>
+}
+
 export const Plugin = Object.assign(make, {
   make,
+  tool,
 })
 
 /* oxlint-disable effecttsgo/any-unknown-in-error-context -- plugin lists are existentially typed: each element may require a distinct service union. */

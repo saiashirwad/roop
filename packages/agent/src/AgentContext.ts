@@ -3,9 +3,8 @@ import { AiError, LanguageModel } from "effect/unstable/ai"
 import type * as Tool from "effect/unstable/ai/Tool"
 
 import { hooksNoop, type AgentHooksInterface } from "./AgentHooks.ts"
+import { ModelId, PluginId } from "./DomainIds.ts"
 import { ModelNotFound, type ModelAd, type ModelSpec } from "./ModelCatalog.ts"
-import { ModelId } from "./ModelId.ts"
-import { PluginId } from "./PluginId.ts"
 import type { ErasedToolkit } from "./runStep.ts"
 import type { Skill } from "./Skills.ts"
 

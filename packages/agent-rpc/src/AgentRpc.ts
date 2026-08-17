@@ -1,5 +1,5 @@
 import { RunNotFound, SessionBusy } from "@roop/agent/Agent.ts"
-import { AgentEvent } from "@roop/agent/AgentEvent.ts"
+import { AgentEvent } from "@roop/agent/AgentEvents.ts"
 import { Capabilities } from "@roop/agent/Capabilities.ts"
 import { ModelNotFound } from "@roop/agent/ModelCatalog.ts"
 import { RunError } from "@roop/agent/RunError.ts"

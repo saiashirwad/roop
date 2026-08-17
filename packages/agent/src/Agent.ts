@@ -3,18 +3,16 @@ import { Chat, Prompt, type Toolkit } from "effect/unstable/ai"
 import type * as Tool from "effect/unstable/ai/Tool"
 
 import { AgentContext, AgentContextLive, registerStatics } from "./AgentContext.ts"
-import type { AgentEvent } from "./AgentEvent.ts"
+import type { AgentEvent, SessionEvent } from "./AgentEvents.ts"
 import { AgentHooks } from "./AgentHooks.ts"
 import { runLoop } from "./agentLoop.ts"
 import { capabilitiesFrom, type Capabilities } from "./Capabilities.ts"
+import { SessionId, type ModelId } from "./DomainIds.ts"
 import type { ModelNotFound, ModelSpec } from "./ModelCatalog.ts"
-import type { ModelId } from "./ModelId.ts"
 import { type RunError, runError } from "./RunError.ts"
 import type { RunPolicy } from "./RunPolicy.ts"
 import { type RunNotFound, RunRegistry, RunRegistryLive, type SessionBusy } from "./RunRegistry.ts"
 import { eraseToolkit } from "./runStep.ts"
-import type { SessionEvent } from "./SessionEvent.ts"
-import { SessionId } from "./SessionId.ts"
 import {
   type SessionAlreadyExists,
   type SessionFormatError,

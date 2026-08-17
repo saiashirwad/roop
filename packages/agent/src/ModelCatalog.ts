@@ -1,7 +1,7 @@
 import { type Layer, Schema } from "effect"
 import type { LanguageModel } from "effect/unstable/ai"
 
-import { ModelId } from "./ModelId.ts"
+import { ModelId } from "./DomainIds.ts"
 
 export const ModelAd = Schema.Struct({
   id: ModelId,

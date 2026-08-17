@@ -13,9 +13,8 @@ import {
 import { AgentRpc } from "@roop/agent-rpc/AgentRpc.ts"
 import { AgentRpcClientHttp } from "@roop/agent-rpc/AgentRpcHttp.ts"
 import { fromSessionEvents } from "@roop/agent-rpc/Transcript.ts"
-import type { AgentEvent } from "@roop/agent/AgentEvent.ts"
+import type { AgentEvent, SessionEvent } from "@roop/agent/AgentEvents.ts"
 import { cryptoWeb } from "@roop/agent/cryptoWeb.ts"
-import type { SessionEvent } from "@roop/agent/SessionEvent.ts"
 import { Cause, Clock, Crypto, Effect, FiberSet, Option, Queue, Stream } from "effect"
 import { RpcClient } from "effect/unstable/rpc"
 

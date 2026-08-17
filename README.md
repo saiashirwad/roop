@@ -74,7 +74,7 @@ import {
 } from "@effect/platform-node"
 import { AgentPlugins } from "@roop/agent/Plugin.ts"
 import { SessionJournalFs } from "@roop/agent/SessionJournal.ts"
-import { subagent } from "@roop/agent/subagent.ts"
+import { subagent } from "@roop/agent/Subagent.ts"
 import { CodingTools } from "@roop/coding-tools/CodingTools.ts"
 import { ExecutionWorld } from "@roop/coding-tools/ExecutionWorld.ts"
 import { Claude, Todos } from "@roop/plugins"

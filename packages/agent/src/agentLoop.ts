@@ -1,15 +1,13 @@
 import { Cause, Effect, Exit, Queue, Ref, Stream } from "effect"
 import { Prompt, type Chat, type LanguageModel } from "effect/unstable/ai"
 
-import type { AgentEvent } from "./AgentEvent.ts"
+import type { AgentEvent, SessionEvent } from "./AgentEvents.ts"
 import type { AgentHooksInterface } from "./AgentHooks.ts"
+import type { SessionId } from "./DomainIds.ts"
 import { type RunError, runError } from "./RunError.ts"
 import { resolveRunPolicy, type RunPolicy } from "./RunPolicy.ts"
 import type { InterruptSignal } from "./RunRegistry.ts"
-import { initialRunState, transition } from "./runStateMachine.ts"
 import { runStep, type ErasedToolkit } from "./runStep.ts"
-import type { SessionEvent } from "./SessionEvent.ts"
-import type { SessionId } from "./SessionId.ts"
 import { makeToolScheduler } from "./toolScheduler.ts"
 
 export type { ErasedToolkit } from "./runStep.ts"
@@ -38,26 +36,26 @@ export const runLoop = (options: LoopOptions): Stream.Stream<AgentEvent, RunErro
       const emit = (event: AgentEvent) => Queue.offer(queue, event)
       const policy = resolveRunPolicy(options.policy)
       const scheduler = yield* makeToolScheduler(policy.toolConcurrency)
-      let machine = initialRunState(policy)
+      let turn = 0
+      let step = 0
+      let totalSteps = 0
 
       while (true) {
-        const startDecision = transition(machine, { _tag: "StartTurn" })
-        machine = startDecision.state
-        const start = startDecision.commands[0]
-        if (start?._tag === "Finish") {
-          yield* emit({ _tag: "Finish", reason: start.reason })
+        if (turn >= policy.maxTurns) {
+          yield* emit({ _tag: "Finish", reason: "stopped" })
           return
         }
-        if (start?._tag !== "StartTurn") return
+        turn += 1
+        step = 0
         yield* options.append({ _tag: "turn/start" })
         turnOpen = true
 
-        let stepCommand = startDecision.commands.find((command) => command._tag === "RunStep")
-        while (stepCommand?._tag === "RunStep") {
+        while (true) {
+          step += 1
           const outcome = yield* runStep({
             sessionId: options.sessionId,
-            turn: stepCommand.turn,
-            step: stepCommand.step,
+            turn,
+            step,
             chat: options.chat,
             model: options.model,
             toolkit: options.toolkit,
@@ -67,59 +65,47 @@ export const runLoop = (options: LoopOptions): Stream.Stream<AgentEvent, RunErro
             emit,
             hooks: options.hooks,
             scheduler,
+            policy,
           })
           if (outcome._tag === "Interrupted") {
-            const interruption = transition(machine, { _tag: "Interrupted" })
-            machine = interruption.state
             yield* options.append({ _tag: "turn/end", reason: "interrupted" })
             turnOpen = false
-            const finish = interruption.commands.find((command) => command._tag === "Finish")
-            if (finish?._tag === "Finish") yield* emit({ _tag: "Finish", reason: finish.reason })
+            yield* emit({ _tag: "Finish", reason: "interrupted" })
             return
           }
-          const stepDecision = transition(machine, {
-            _tag: "StepCompleted",
-            toolCalls: outcome.toolCallCount,
-          })
-          machine = stepDecision.state
-          const next = stepDecision.commands[0]
-          if (next?._tag === "Finish") {
+
+          totalSteps += 1
+          const reachedLimit = totalSteps >= policy.maxTotalSteps || step >= policy.maxStepsPerTurn
+          if (reachedLimit && outcome._tag === "ToolCalls") {
             yield* options.append({ _tag: "turn/end", reason: "stopped" })
             turnOpen = false
-            yield* emit({ _tag: "Finish", reason: next.reason })
+            yield* emit({ _tag: "Finish", reason: "stopped" })
             return
           }
-          stepCommand = next?._tag === "RunStep" ? next : undefined
-          if (stepCommand === undefined && outcome._tag === "Stop") break
+          if (outcome._tag === "Stop" || reachedLimit) break
         }
 
-        const context = { sessionId: options.sessionId, turn: machine.turn, step: machine.step }
+        const context = { sessionId: options.sessionId, turn, step }
         const continuation = yield* Effect.raceFirst(
-          options.hooks.turnStopping(context, { reason: "completed", stepCount: machine.step }),
+          options.hooks.turnStopping(context, { reason: "completed", stepCount: step }),
           options.interrupt.await.pipe(Effect.map(() => null)),
         )
         if (continuation === null) {
-          const interruption = transition(machine, { _tag: "Interrupted" })
-          machine = interruption.state
           yield* options.append({ _tag: "turn/end", reason: "interrupted" })
           turnOpen = false
-          const finish = interruption.commands.find((command) => command._tag === "Finish")
-          if (finish?._tag === "Finish") yield* emit({ _tag: "Finish", reason: finish.reason })
+          yield* emit({ _tag: "Finish", reason: "interrupted" })
           return
         }
-        const endDecision = transition(machine, {
-          _tag: "TurnCompleted",
-          continuation: continuation !== undefined,
-        })
-        machine = endDecision.state
         yield* options.append({ _tag: "turn/end", reason: "completed" })
         turnOpen = false
-        const command = endDecision.commands[0]
-        if (command?._tag === "Finish") {
-          yield* emit({ _tag: "Finish", reason: command.reason })
+        if (continuation === undefined) {
+          yield* emit({ _tag: "Finish", reason: "completed" })
           return
         }
-        if (continuation === undefined || command?._tag !== "Continue") return
+        if (turn >= policy.maxTurns || totalSteps >= policy.maxTotalSteps) {
+          yield* emit({ _tag: "Finish", reason: "stopped" })
+          return
+        }
         yield* options.append({ _tag: "user/message", content: continuation.prompt })
         yield* Ref.update(options.chat.history, (history) =>
           Prompt.concat(history, Prompt.make(continuation.prompt)),

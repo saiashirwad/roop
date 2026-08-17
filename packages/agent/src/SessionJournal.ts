@@ -19,8 +19,8 @@ import {
   SESSION_FORMAT_VERSION,
   SessionEvent,
   SessionHeader,
-} from "./SessionEvent.ts"
-import { SessionId } from "./SessionId.ts"
+} from "./AgentEvents.ts"
+import { SessionId } from "./DomainIds.ts"
 
 export class SessionNotFound extends Schema.TaggedErrorClass<SessionNotFound>()("SessionNotFound", {
   sessionId: SessionId,

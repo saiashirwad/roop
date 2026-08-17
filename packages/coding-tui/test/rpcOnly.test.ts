@@ -15,8 +15,7 @@ declare global {
 
 const allowed = [
   /^@mariozechner\/pi-tui$/,
-  /^@roop\/agent\/AgentEvent\.ts$/,
-  /^@roop\/agent\/SessionEvent\.ts$/,
+  /^@roop\/agent\/AgentEvents\.ts$/,
   /^@roop\/agent\/cryptoWeb\.ts$/,
   /^@roop\/agent-rpc\//,
   /^effect$/,

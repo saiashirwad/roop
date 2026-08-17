@@ -4,11 +4,11 @@ import { Effect, Exit, Fiber, FileSystem, Layer, Option, Queue, Schema, Stream }
 import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
 
 import { Agent, AgentLiveToolkit } from "../src/Agent.ts"
+import { deriveMessages } from "../src/AgentEvents.ts"
 import { layerHook, layerNoop } from "../src/AgentHooks.ts"
-import { delegation } from "../src/agentTool.ts"
 import { cryptoWeb } from "../src/cryptoWeb.ts"
-import { deriveMessages } from "../src/SessionEvent.ts"
 import { SessionJournalFs, SessionJournalMemory } from "../src/SessionJournal.ts"
+import { delegation } from "../src/Subagent.ts"
 import { scripted } from "../src/Testing.ts"
 
 const Echo = Tool.make("echo", {

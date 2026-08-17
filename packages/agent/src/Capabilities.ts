@@ -1,8 +1,8 @@
 import { Schema } from "effect"
 import { Tool } from "effect/unstable/ai"
 
+import { ModelId } from "./DomainIds.ts"
 import { ModelAd } from "./ModelCatalog.ts"
-import { ModelId } from "./ModelId.ts"
 import { Skill } from "./Skills.ts"
 
 const ToolAd = Schema.Struct({

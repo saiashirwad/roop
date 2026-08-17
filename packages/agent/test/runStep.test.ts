@@ -1,12 +1,12 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Exit, Ref, Schema, Stream } from "effect"
+import { Duration, Effect, Exit, Fiber, Ref, Schema, Stream } from "effect"
+import { TestClock } from "effect/testing"
 import { AiError, Chat, LanguageModel, Prompt, Tool } from "effect/unstable/ai"
 
-import type { AgentEvent } from "../src/AgentEvent.ts"
+import type { AgentEvent, SessionEvent } from "../src/AgentEvents.ts"
 import { hooksNoop, ToolRejected } from "../src/AgentHooks.ts"
+import { SessionId } from "../src/DomainIds.ts"
 import { runStep, type ErasedToolkit } from "../src/runStep.ts"
-import type { SessionEvent } from "../src/SessionEvent.ts"
-import { SessionId } from "../src/SessionId.ts"
 import { scripted } from "../src/Testing.ts"
 import { makeToolScheduler } from "../src/toolScheduler.ts"
 
@@ -142,10 +142,10 @@ describe("runStep", () => {
       }
 
       const liveEvents = yield* Ref.get(live)
-      assert.ok(liveEvents.some((e) => e._tag === "ToolCall" && e.id === "call_echo_1"))
+      assert.ok(liveEvents.some((e) => e._tag === "ToolCall" && e.id === "step-test-2:1:1:echo:1"))
       assert.ok(
         liveEvents.some((e) => {
-          if (e._tag !== "ToolResult" || e.id !== "call_echo_1") return false
+          if (e._tag !== "ToolResult" || e.id !== "step-test-2:1:1:echo:1") return false
           /* SAFETY: Echo tool success returns { reply: string }. */
           const res = e.result as { readonly reply: string }
           return res.reply === "test note"
@@ -206,7 +206,7 @@ describe("runStep", () => {
 
       const liveEvents = yield* Ref.get(live)
       const toolResult = liveEvents.find(
-        (e) => e._tag === "ToolResult" && e.id === "call_echo_rejected",
+        (e) => e._tag === "ToolResult" && e.id === "step-test-3:1:1:echo:1",
       )
       assert.ok(toolResult !== undefined)
       if (toolResult && toolResult._tag === "ToolResult") {
@@ -227,7 +227,10 @@ describe("runStep", () => {
 
       const model = yield* LanguageModel.make({
         generateText: () => Effect.succeed([]),
-        streamText: () => Stream.fromEffect(Effect.never),
+        streamText: () =>
+          Stream.make({ type: "text-delta" as const, id: "timeout", delta: "start" }).pipe(
+            Stream.concat(Stream.never),
+          ),
       })
 
       const chat = yield* Chat.fromPrompt(Prompt.empty)
@@ -257,6 +260,65 @@ describe("runStep", () => {
         _tag: "step/end",
         reason: "interrupted",
       })
+    }),
+  )
+
+  it.effect("times out the complete model request stream", () =>
+    Effect.gen(function* () {
+      const model = yield* LanguageModel.make({
+        generateText: () => Effect.succeed([]),
+        streamText: () => Stream.never,
+      })
+      const chat = yield* Chat.fromPrompt(Prompt.empty)
+      const fiber = yield* runStep({
+        sessionId: SessionId.make("step-test-model-timeout"),
+        turn: 1,
+        step: 1,
+        chat,
+        model,
+        toolkit: Effect.succeed(makeEchoToolkit()),
+        interrupt: makeInterruptMock(false),
+        append: () => Effect.void,
+        emit: () => Effect.void,
+        hooks: hooksNoop,
+        scheduler: yield* makeToolScheduler("unbounded"),
+        policy: { modelTimeout: Duration.millis(20) },
+      }).pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      yield* TestClock.adjust(Duration.millis(20))
+      const exit = yield* Effect.exit(Fiber.join(fiber))
+      assert.ok(Exit.isFailure(exit))
+    }),
+  )
+
+  it.effect("times out complete tool result consumption", () =>
+    Effect.gen(function* () {
+      const model = yield* scripted([
+        [{ type: "tool-call", id: "slow", name: "echo", params: { note: "wait" } }],
+      ])
+      const chat = yield* Chat.fromPrompt(Prompt.empty)
+      const toolkit: ErasedToolkit = {
+        tools: { echo: Echo },
+        handle: () => Effect.succeed(Stream.never),
+      }
+      const fiber = yield* runStep({
+        sessionId: SessionId.make("step-test-tool-timeout"),
+        turn: 1,
+        step: 1,
+        chat,
+        model,
+        toolkit: Effect.succeed(toolkit),
+        interrupt: makeInterruptMock(false),
+        append: () => Effect.void,
+        emit: () => Effect.void,
+        hooks: hooksNoop,
+        scheduler: yield* makeToolScheduler("unbounded"),
+        policy: { toolTimeout: Duration.millis(20) },
+      }).pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      yield* TestClock.adjust(Duration.millis(20))
+      const exit = yield* Effect.exit(Fiber.join(fiber))
+      assert.ok(Exit.isFailure(exit))
     }),
   )
 
@@ -305,6 +367,43 @@ describe("runStep", () => {
       assert.strictEqual(last._tag, "step/end")
       if (last._tag === "step/end") {
         assert.strictEqual(last.reason, "failed")
+      }
+    }),
+  )
+
+  it.effect("bounds oversized encoded tool results and continues with a failed result", () =>
+    Effect.gen(function* () {
+      const sid = SessionId.make("step-test-large")
+      const journal = yield* Ref.make<Array<SessionEvent>>([])
+      const live = yield* Ref.make<Array<AgentEvent>>([])
+      const model = yield* scripted([
+        [{ type: "tool-call", id: "large", name: "echo", params: { note: "a long note" } }],
+      ])
+      const chat = yield* Chat.fromPrompt(Prompt.empty)
+      const toolkit = makeEchoToolkit()
+      const outcome = yield* runStep({
+        sessionId: sid,
+        turn: 1,
+        step: 1,
+        chat,
+        model,
+        toolkit: Effect.succeed(toolkit),
+        interrupt: makeInterruptMock(false),
+        append: (event) => Ref.update(journal, (all) => [...all, event]),
+        emit: (event) => Ref.update(live, (all) => [...all, event]),
+        hooks: hooksNoop,
+        scheduler: yield* makeToolScheduler("unbounded"),
+        policy: { maxToolOutputBytes: 8 },
+      })
+      assert.strictEqual(outcome._tag, "ToolCalls")
+      const result = (yield* Ref.get(live)).find((event) => event._tag === "ToolResult")
+      assert.ok(result !== undefined && result._tag === "ToolResult")
+      if (result?._tag === "ToolResult") {
+        assert.strictEqual(result.isFailure, true)
+        assert.deepStrictEqual(result.result, {
+          type: "tool-output-too-large",
+          message: "tool output exceeded 8 bytes",
+        })
       }
     }),
   )

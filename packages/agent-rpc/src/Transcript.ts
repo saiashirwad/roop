@@ -1,5 +1,4 @@
-import type { AgentEvent } from "@roop/agent/AgentEvent.ts"
-import { deriveMessages, type SessionEvent } from "@roop/agent/SessionEvent.ts"
+import { deriveMessages, type AgentEvent, type SessionEvent } from "@roop/agent/AgentEvents.ts"
 import { Option, Schema } from "effect"
 
 /**

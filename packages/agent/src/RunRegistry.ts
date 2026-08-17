@@ -13,7 +13,7 @@ import {
   Stream,
 } from "effect"
 
-import { SessionId } from "./SessionId.ts"
+import { SessionId } from "./DomainIds.ts"
 
 export class RunNotFound extends Schema.TaggedErrorClass<RunNotFound>()("RunNotFound", {
   sessionId: SessionId,

@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest"
 import { Deferred, Effect, Exit, Fiber, Option, Scope, Stream } from "effect"
 
+import { SessionId } from "../src/DomainIds.ts"
 import {
   make,
   type RunNotFound,
@@ -8,7 +9,6 @@ import {
   RunRegistryLive,
   type SessionBusy,
 } from "../src/RunRegistry.ts"
-import { SessionId } from "../src/SessionId.ts"
 
 it.layer(RunRegistryLive)("RunRegistry", (it) => {
   it.effect("unconsumed stream does not claim session", () =>

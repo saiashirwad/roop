@@ -2,12 +2,7 @@ import { assert, it } from "@effect/vitest"
 import { Effect, Schema } from "effect"
 
 import { cryptoWeb } from "../src/cryptoWeb.ts"
-import * as EventId from "../src/EventId.ts"
-import * as ModelId from "../src/ModelId.ts"
-import * as PluginId from "../src/PluginId.ts"
-import * as RunId from "../src/RunId.ts"
-import * as SessionId from "../src/SessionId.ts"
-import * as ToolCallId from "../src/ToolCallId.ts"
+import { EventId, ModelId, PluginId, RunId, SessionId, ToolCallId } from "../src/DomainIds.ts"
 
 it.effect("SessionId: creates, brands, validates, and generates", () =>
   Effect.gen(function* () {
@@ -16,7 +11,7 @@ it.effect("SessionId: creates, brands, validates, and generates", () =>
     assert.strictEqual(SessionId.is(id), true)
     assert.strictEqual(SessionId.is(123), false)
 
-    const decoded = yield* Schema.decodeEffect(SessionId.SessionId)("session-456")
+    const decoded = yield* Schema.decodeEffect(SessionId)("session-456")
     assert.strictEqual(decoded, "session-456")
     assert.strictEqual(SessionId.is(decoded), true)
 
@@ -34,7 +29,7 @@ it.effect("RunId: creates, brands, validates, and generates", () =>
     assert.strictEqual(RunId.is(id), true)
     assert.strictEqual(RunId.is(null), false)
 
-    const decoded = yield* Schema.decodeEffect(RunId.RunId)("run-456")
+    const decoded = yield* Schema.decodeEffect(RunId)("run-456")
     assert.strictEqual(decoded, "run-456")
 
     const generated = yield* RunId.generate
@@ -49,7 +44,7 @@ it.effect("EventId: creates, brands, validates, and generates", () =>
     assert.strictEqual(id, "event-123")
     assert.strictEqual(EventId.is(id), true)
 
-    const decoded = yield* Schema.decodeEffect(EventId.EventId)("event-456")
+    const decoded = yield* Schema.decodeEffect(EventId)("event-456")
     assert.strictEqual(decoded, "event-456")
 
     const generated = yield* EventId.generate
@@ -64,7 +59,7 @@ it.effect("ModelId: creates, brands, and validates", () =>
     assert.strictEqual(ModelId.is(id), true)
     assert.strictEqual(ModelId.is(42), false)
 
-    const decoded = yield* Schema.decodeEffect(ModelId.ModelId)("gpt-4o")
+    const decoded = yield* Schema.decodeEffect(ModelId)("gpt-4o")
     assert.strictEqual(decoded, "gpt-4o")
     assert.strictEqual(ModelId.is(decoded), true)
   }),
@@ -77,7 +72,7 @@ it.effect("PluginId: creates, brands, and validates", () =>
     assert.strictEqual(PluginId.is(id), true)
     assert.strictEqual(PluginId.is(false), false)
 
-    const decoded = yield* Schema.decodeEffect(PluginId.PluginId)("todo")
+    const decoded = yield* Schema.decodeEffect(PluginId)("todo")
     assert.strictEqual(decoded, "todo")
     assert.strictEqual(PluginId.is(decoded), true)
   }),
@@ -89,7 +84,7 @@ it.effect("ToolCallId: creates, brands, validates, and generates", () =>
     assert.strictEqual(id, "call-123")
     assert.strictEqual(ToolCallId.is(id), true)
 
-    const decoded = yield* Schema.decodeEffect(ToolCallId.ToolCallId)("call-456")
+    const decoded = yield* Schema.decodeEffect(ToolCallId)("call-456")
     assert.strictEqual(decoded, "call-456")
 
     const generated = yield* ToolCallId.generate

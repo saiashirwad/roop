@@ -1,26 +1,14 @@
-import type { AgentEvent } from "./AgentEvent.ts"
-
-export type SubagentEvent = Extract<AgentEvent, { readonly _tag: "Subagent" }>
-
-type ProviderCall = {
-  readonly id: string
-  readonly order: number
-}
+type ProviderCall = { readonly id: string; readonly token: string }
 
 export interface ToolCallCorrelator {
-  /** Allocate a unique invocation token when a local tool handler begins. */
   readonly allocateToken: (name: string) => string
-  /** Observe a provider-emitted tool-call part. */
   readonly observeProviderCall: (call: {
     readonly id: string
     readonly name: string
     readonly providerExecuted?: boolean | undefined
     readonly isKnownTool: boolean
-  }) => void
-  /** Staged a subagent event emitted under a specific invocation token. */
-  readonly stageSubagent: (token: string, event: SubagentEvent) => void
-  /** Drain staged subagent events grouped by provider parent-call order. */
-  readonly drainSubagentEvents: () => ReadonlyArray<AgentEvent>
+  }) => string | undefined
+  readonly tokenForProviderId: (id: string) => string | undefined
 }
 
 export const makeToolCallCorrelator = (options: {
@@ -29,64 +17,40 @@ export const makeToolCallCorrelator = (options: {
   readonly step: number
 }): ToolCallCorrelator => {
   let tokenSequence = 0
-  let providerSequence = 0
   const pendingTokensByName = new Map<string, Array<string>>()
   const pendingProviderCallsByName = new Map<string, Array<ProviderCall>>()
-  const tokenToProviderCall = new Map<string, ProviderCall>()
-  const stagedSubagents: Array<{ readonly token: string; readonly event: SubagentEvent }> = []
+  const providerIdToToken = new Map<string, string>()
+  const token = (name: string) =>
+    `${options.sessionId}:${options.turn}:${options.step}:${name}:${++tokenSequence}`
 
   return {
-    allocateToken: (name: string): string => {
-      const token = `${options.sessionId}:${options.turn}:${options.step}:${name}:${++tokenSequence}`
+    allocateToken: (name) => {
       const pendingCalls = pendingProviderCallsByName.get(name)
       if (pendingCalls !== undefined && pendingCalls.length > 0) {
         const call = pendingCalls.shift()!
-        tokenToProviderCall.set(token, call)
-      } else {
-        const tokens = pendingTokensByName.get(name) ?? []
-        tokens.push(token)
-        pendingTokensByName.set(name, tokens)
+        return call.token
       }
-      return token
+      const localToken = token(name)
+      const tokens = pendingTokensByName.get(name) ?? []
+      tokens.push(localToken)
+      pendingTokensByName.set(name, tokens)
+      return localToken
     },
-
     observeProviderCall: (call) => {
-      if (call.providerExecuted === true || !call.isKnownTool) return
-
-      const providerCall: ProviderCall = {
-        id: call.id,
-        order: ++providerSequence,
-      }
+      if (call.providerExecuted === true || !call.isKnownTool) return undefined
       const pendingTokens = pendingTokensByName.get(call.name)
       if (pendingTokens !== undefined && pendingTokens.length > 0) {
-        const token = pendingTokens.shift()!
-        tokenToProviderCall.set(token, providerCall)
-      } else {
-        const calls = pendingProviderCallsByName.get(call.name) ?? []
-        calls.push(providerCall)
-        pendingProviderCallsByName.set(call.name, calls)
+        const localToken = pendingTokens.shift()!
+        providerIdToToken.set(call.id, localToken)
+        return localToken
       }
+      const localToken = token(call.name)
+      providerIdToToken.set(call.id, localToken)
+      const calls = pendingProviderCallsByName.get(call.name) ?? []
+      calls.push({ id: call.id, token: localToken })
+      pendingProviderCallsByName.set(call.name, calls)
+      return localToken
     },
-
-    stageSubagent: (token: string, event: SubagentEvent) => {
-      stagedSubagents.push({ token, event })
-    },
-
-    drainSubagentEvents: (): ReadonlyArray<AgentEvent> =>
-      stagedSubagents
-        .map((staged, stageOrder) => ({
-          staged,
-          stageOrder,
-          call: tokenToProviderCall.get(staged.token),
-        }))
-        .sort(
-          (left, right) =>
-            (left.call?.order ?? Number.POSITIVE_INFINITY) -
-              (right.call?.order ?? Number.POSITIVE_INFINITY) || left.stageOrder - right.stageOrder,
-        )
-        .map(({ staged, call }) => {
-          const { toolCallId: _token, ...event } = staged.event
-          return call === undefined ? event : { ...event, toolCallId: call.id }
-        }),
+    tokenForProviderId: (id) => providerIdToToken.get(id),
   }
 }

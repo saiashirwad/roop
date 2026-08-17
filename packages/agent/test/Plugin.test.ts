@@ -4,12 +4,12 @@ import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
 
 import { Agent } from "../src/Agent.ts"
 import { AgentContext } from "../src/AgentContext.ts"
+import { deriveMessages } from "../src/AgentEvents.ts"
 import { layerHook } from "../src/AgentHooks.ts"
 import { cryptoWeb } from "../src/cryptoWeb.ts"
 import { AgentPlugins, Plugin } from "../src/Plugin.ts"
-import { deriveMessages } from "../src/SessionEvent.ts"
 import { SessionJournalMemory } from "../src/SessionJournal.ts"
-import { subagent } from "../src/subagent.ts"
+import { subagent } from "../src/Subagent.ts"
 import { scripted, scriptedPlugin } from "../src/Testing.ts"
 
 const EchoToolkit = Toolkit.make(
@@ -58,6 +58,21 @@ const Composed = AgentPlugins([
   ]),
 ]).pipe(Layer.provide(SessionJournalMemory), Layer.provide(cryptoWeb))
 
+const convenience = Plugin.tool({
+  name: "convenience",
+  parameters: Schema.Struct({ note: Schema.String }),
+  success: Schema.Struct({ reply: Schema.String }),
+  handler: ({ note }) => Effect.succeed({ reply: note }),
+})
+
+const ConvenienceAgent = AgentPlugins([
+  convenience,
+  scriptedPlugin("convenience-model", [
+    [{ type: "tool-call", id: "cc1", name: "convenience", params: { note: "hello" } }],
+    [{ type: "text-delta", id: "cc2", delta: "done" }],
+  ]),
+]).pipe(Layer.provide(SessionJournalMemory), Layer.provide(cryptoWeb))
+
 it.layer(Composed)("AgentPlugins", (it) => {
   it.effect("merges tools, models, skills, and prompts from plugins", () =>
     Effect.gen(function* () {
@@ -97,6 +112,19 @@ it.layer(Composed)("AgentPlugins", (it) => {
       const system = deriveMessages(session.events)[0]!
       assert.strictEqual(system.role, "system")
       assert.strictEqual(system.content, "echo things\n\nshout things")
+    }),
+  )
+})
+
+it.layer(ConvenienceAgent)("Plugin.tool", (it) => {
+  it.effect("creates and installs a typed tool plugin", () =>
+    Effect.gen(function* () {
+      const events = yield* collect(
+        (yield* Agent).prompt({ prompt: "go", sessionId: "plugin-tool" }),
+      )
+      const result = events.find((event) => event._tag === "ToolResult")
+      assert.ok(result !== undefined && result._tag === "ToolResult")
+      if (result?._tag === "ToolResult") assert.deepStrictEqual(result.result, { reply: "hello" })
     }),
   )
 })
@@ -235,7 +263,12 @@ it.layer(ConcurrentParent)("concurrent subagents", (it) => {
       assert.strictEqual(nested.length, 4)
       assert.deepStrictEqual(
         nested.map((event) => event.toolCallId),
-        ["p1", "p1", "p2", "p2"],
+        [
+          "concurrent-subagents:1:1:concurrent-worker:1",
+          "concurrent-subagents:1:1:concurrent-worker:1",
+          "concurrent-subagents:1:1:concurrent-worker:2",
+          "concurrent-subagents:1:1:concurrent-worker:2",
+        ],
       )
     }),
   )

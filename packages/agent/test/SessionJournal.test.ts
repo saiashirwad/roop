@@ -3,9 +3,9 @@ import { assert, it } from "@effect/vitest"
 import { Effect, Exit, FileSystem, Layer, Option, Schema } from "effect"
 import type { Prompt } from "effect/unstable/ai"
 
+import { deriveMessages, SESSION_FORMAT_VERSION, type SessionEvent } from "../src/AgentEvents.ts"
 import { cryptoWeb } from "../src/cryptoWeb.ts"
-import { deriveMessages, SESSION_FORMAT_VERSION, type SessionEvent } from "../src/SessionEvent.ts"
-import { SessionId } from "../src/SessionId.ts"
+import { SessionId } from "../src/DomainIds.ts"
 import {
   Session,
   SessionConflict,

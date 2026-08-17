@@ -9,13 +9,12 @@ import {
 } from "effect/unstable/ai"
 import type * as Tool from "effect/unstable/ai/Tool"
 
-import { AgentEmit } from "./AgentEmit.ts"
-import type { AgentEvent } from "./AgentEvent.ts"
+import { AgentEmit, type AgentEvent, type SessionEvent } from "./AgentEvents.ts"
 import type { StepRejected, AgentHooksInterface, RunContext } from "./AgentHooks.ts"
-import type { RunError } from "./RunError.ts"
+import type { SessionId } from "./DomainIds.ts"
+import { runError, type RunError } from "./RunError.ts"
+import type { ResolvedRunPolicy } from "./RunPolicy.ts"
 import type { InterruptSignal } from "./RunRegistry.ts"
-import type { SessionEvent } from "./SessionEvent.ts"
-import type { SessionId } from "./SessionId.ts"
 import { makeToolCallCorrelator } from "./toolCallCorrelator.ts"
 import type { ToolScheduler } from "./toolScheduler.ts"
 
@@ -72,6 +71,7 @@ export interface RunStepOptions {
   readonly emit: (event: AgentEvent) => Effect.Effect<void>
   readonly hooks: AgentHooksInterface
   readonly scheduler: ToolScheduler
+  readonly policy?: Pick<ResolvedRunPolicy, "modelTimeout" | "toolTimeout" | "maxToolOutputBytes">
 }
 
 const toEvent = (
@@ -81,7 +81,8 @@ const toEvent = (
     params: ToolCallParameters,
     id: string,
     providerExecuted: boolean,
-  ) => void,
+  ) => string | undefined,
+  onToolResult?: (id: string) => string | undefined,
 ): AgentEvent | undefined => {
   switch (part.type) {
     case "text-delta": {
@@ -92,10 +93,15 @@ const toEvent = (
     }
     case "tool-call": {
       /* SAFETY: Every tool-call part is decoded against the toolkit's parameter schema. */
-      onToolCall?.(part.name, part.params as ToolCallParameters, part.id, part.providerExecuted)
+      const localId = onToolCall?.(
+        part.name,
+        part.params as ToolCallParameters,
+        part.id,
+        part.providerExecuted,
+      )
       return {
         _tag: "ToolCall",
-        id: part.id,
+        id: localId ?? part.id,
         name: part.name,
         params: part.params,
         providerExecuted: part.providerExecuted,
@@ -109,7 +115,7 @@ const toEvent = (
           : undefined
       return {
         _tag: "ToolResult",
-        id: part.id,
+        id: onToolResult?.(part.id) ?? part.id,
         name: part.name,
         isFailure: part.isFailure,
         result: part.encodedResult,
@@ -216,6 +222,17 @@ const executionDenied = (reason: string) => {
   return { result: denied, encodedResult: denied, isFailure: true, preliminary: false }
 }
 
+/* oxlint-disable-next-line anti-slop/no-unknown-parameters -- encoded tool results are schema-erased at this boundary. */
+const encodedBytes = (value: unknown): number => {
+  const json = JSON.stringify(value)
+  return json === undefined ? 0 : new TextEncoder().encode(json).byteLength
+}
+
+const outputTooLarge = (maxBytes: number) => ({
+  type: "tool-output-too-large" as const,
+  message: `tool output exceeded ${maxBytes} bytes`,
+})
+
 /** `beforeToolExecute`/`afterToolExecute` seams: `WithHandler.handle` is the single choke point. */
 const interceptToolkit = (
   toolkit: ErasedToolkit,
@@ -224,6 +241,7 @@ const interceptToolkit = (
   emit: (event: AgentEvent) => Effect.Effect<void>,
   scheduler: ToolScheduler,
   correlator: ReturnType<typeof makeToolCallCorrelator>,
+  policy: Pick<ResolvedRunPolicy, "toolTimeout" | "maxToolOutputBytes">,
 ): ErasedToolkit => {
   /* SAFETY: The intercept preserves ErasedToolkit.handle while inserting hook seams. */
   return {
@@ -240,8 +258,7 @@ const interceptToolkit = (
             Effect.provideService(AgentEmit, {
               emit: (event) => {
                 if (event._tag === "Subagent") {
-                  correlator.stageSubagent(token, event)
-                  return Effect.void
+                  return emit({ ...event, toolCallId: token })
                 }
                 return emit(event)
               },
@@ -249,7 +266,27 @@ const interceptToolkit = (
             }),
           ),
         )
-        return Stream.tap(scheduled, (result) =>
+        const timed =
+          policy.toolTimeout === undefined
+            ? scheduled
+            : Stream.unwrap(
+                Effect.timeout(Stream.runCollect(scheduled), policy.toolTimeout).pipe(
+                  Effect.map((results) => Stream.fromIterable([...results])),
+                ),
+              )
+        const bounded =
+          policy.maxToolOutputBytes === undefined
+            ? timed
+            : Stream.map(timed, (result) => {
+                if (
+                  result.preliminary ||
+                  encodedBytes(result.encodedResult) <= policy.maxToolOutputBytes!
+                )
+                  return result
+                const failure = outputTooLarge(policy.maxToolOutputBytes!)
+                return { ...result, result: failure, encodedResult: failure, isFailure: true }
+              })
+        return Stream.tap(bounded, (result) =>
           result.preliminary === true
             ? Effect.void
             : hooks.afterToolExecute(
@@ -284,6 +321,7 @@ export const runStep = (
 
   let started = false
   let closed = false
+  const policy = options.policy ?? {}
 
   const execution = Effect.gen(function* () {
     yield* options.append({ _tag: "step/start", index: options.step })
@@ -310,7 +348,7 @@ export const runStep = (
     })
 
     const toolkit = yield* options.toolkit
-    const stepStream = options.chat
+    const modelStream = options.chat
       .streamText({
         prompt: [],
         toolkit: asClosedToolkit(
@@ -321,6 +359,7 @@ export const runStep = (
             options.emit,
             options.scheduler,
             correlator,
+            policy,
           ),
         ),
         concurrency: "unbounded",
@@ -332,22 +371,38 @@ export const runStep = (
         ),
         Stream.provideService(AgentEmit, { emit: options.emit }),
         Stream.tap((part) => {
-          const event = toEvent(part, (name, _params, id, providerExecuted) => {
-            correlator.observeProviderCall({
-              id,
-              name,
-              providerExecuted,
-              isKnownTool: toolkit.tools[name] !== undefined,
-            })
-          })
+          const event = toEvent(
+            part,
+            (name, _params, id, providerExecuted) =>
+              correlator.observeProviderCall({
+                id,
+                name,
+                providerExecuted,
+                isKnownTool: toolkit.tools[name] !== undefined,
+              }),
+            correlator.tokenForProviderId,
+          )
           return event === undefined ? Effect.void : options.emit(event)
         }),
-        Stream.runCollect,
-        Effect.map((parts) => [...parts]),
       )
+    const timedModelStream =
+      policy.modelTimeout === undefined
+        ? modelStream
+        : Stream.timeout(modelStream, policy.modelTimeout)
+    const requestStream = timedModelStream.pipe(
+      Stream.runCollect,
+      Effect.map((parts) => [...parts]),
+    )
+    const stepStream =
+      policy.modelTimeout === undefined
+        ? requestStream
+        : requestStream.pipe(Effect.timeout(policy.modelTimeout))
+    const timedStepStream = stepStream.pipe(
+      Effect.mapError((cause) => runError(cause, { sessionId: options.sessionId })),
+    )
 
     const outcome = yield* Effect.raceFirst(
-      stepStream,
+      timedStepStream,
       options.interrupt.await.pipe(Effect.map(() => null)),
     )
 
@@ -355,10 +410,6 @@ export const runStep = (
       yield* options.append({ _tag: "step/end", reason: "interrupted" })
       closed = true
       return { _tag: "Interrupted" as const }
-    }
-
-    for (const event of correlator.drainSubagentEvents()) {
-      yield* options.emit(event)
     }
 
     yield* appendStepEvents(options.append, outcome)
