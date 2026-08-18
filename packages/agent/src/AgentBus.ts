@@ -118,7 +118,10 @@ export interface AgentBusService {
   /**
    * Subscribes to live agent events, optionally filtering by sessionId.
    */
-  readonly subscribe: (sessionId?: SessionId | string) => Effect.Effect<Stream.Stream<AgentEvent>>
+  readonly subscribe: (
+    sessionId?: SessionId | string,
+    options?: { readonly liveOnly?: boolean | undefined },
+  ) => Effect.Effect<Stream.Stream<AgentEvent>>
 }
 
 export class AgentBus extends Context.Service<AgentBus, AgentBusService>()("roop/AgentBus") {
@@ -160,7 +163,7 @@ export class AgentBus extends Context.Service<AgentBus, AgentBusService>()("roop
               }),
             )
             .pipe(Effect.asVoid),
-        subscribe: (sessionId) => {
+        subscribe: (sessionId, options) => {
           const sid = sessionId !== undefined ? String(SessionId.make(sessionId)) : undefined
           return lock.withPermits(1)(
             Effect.gen(function* () {
@@ -171,7 +174,7 @@ export class AgentBus extends Context.Service<AgentBus, AgentBusService>()("roop
               for (let index = 0; index < entries.length; index += 1) {
                 if (entries[index]?._tag === "Finish") lastFinish = index
               }
-              const past = entries.slice(lastFinish + 1)
+              const past = options?.liveOnly === true ? [] : entries.slice(lastFinish + 1)
               yield* Ref.update(subscribers, (entries) => {
                 const next = new Map(entries)
                 next.set(id, { sessionId: sid, queue })

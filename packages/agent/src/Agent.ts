@@ -1,4 +1,4 @@
-import { Context, Crypto, Effect, Layer, Stream } from "effect"
+import { Context, Crypto, Effect, Layer, Ref, Stream } from "effect"
 import { Chat, type Toolkit } from "effect/unstable/ai"
 import type * as Tool from "effect/unstable/ai/Tool"
 
@@ -157,6 +157,7 @@ export const AgentLive: Layer.Layer<
                     ),
                   ).pipe(Effect.mapError((error) => runError(error, { sessionId })))
 
+                  const publishedFinish = yield* Ref.make(false)
                   return runLoop({
                     sessionId,
                     chat,
@@ -166,7 +167,27 @@ export const AgentLive: Layer.Layer<
                     interrupt: signal,
                     append,
                     hooks,
-                  }).pipe(Stream.tap((event) => bus.publish({ sessionId, event })))
+                  }).pipe(
+                    Stream.tap((event) =>
+                      Effect.gen(function* () {
+                        if (event._tag === "Finish") {
+                          yield* Ref.set(publishedFinish, true)
+                        }
+                        yield* bus.publish({ sessionId, event })
+                      }),
+                    ),
+                    // Prompt disconnect interrupts the producer before runLoop
+                    // can emit. Close bus subscribers with a terminal Finish.
+                    Stream.ensuring(
+                      Effect.gen(function* () {
+                        if (yield* Ref.get(publishedFinish)) return
+                        yield* bus.publish({
+                          sessionId,
+                          event: { _tag: "Finish", reason: "interrupted" },
+                        })
+                      }),
+                    ),
+                  )
                 }),
               ),
             )
@@ -182,9 +203,24 @@ export const AgentLive: Layer.Layer<
               // The bus owns an atomic history/live boundary for active runs.
               // Durable replay remains available through `history` and is used
               // below once the run has completed.
-              return (yield* bus.subscribe(sid)).pipe(
-                Stream.takeUntil((event) => event._tag === "Finish"),
+              const live = (yield* bus.subscribe(sid, {
+                liveOnly: options?.replayFromStep !== undefined,
+              })).pipe(Stream.takeUntil((event) => event._tag === "Finish"))
+              if (options?.replayFromStep === undefined) {
+                return live
+              }
+
+              const stored = yield* store.load(sid).pipe(
+                Effect.asSome,
+                Effect.catchTag("SessionNotFound", () => Effect.succeedNone),
               )
+              const replayed =
+                stored._tag === "None"
+                  ? []
+                  : sessionEventsToAgentEvents(stored.value.events, options.replayFromStep).filter(
+                      (event) => event._tag !== "Finish",
+                    )
+              return Stream.concat(Stream.fromIterable(replayed), live)
             }
 
             const session = yield* store.load(sid)
