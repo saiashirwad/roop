@@ -7,6 +7,7 @@ import { SessionJournalMemory } from "@roop/agent/SessionJournal.ts"
 import { scripted } from "@roop/agent/Testing.ts"
 import { CodingTools } from "@roop/coding-tools/CodingTools.ts"
 import { ExecutionWorld } from "@roop/coding-tools/ExecutionWorld.ts"
+import { Truncate } from "@roop/coding-tools/Truncate.ts"
 import { Effect, FileSystem, Layer, Path, Stream } from "effect"
 import { LanguageModel, type Response } from "effect/unstable/ai"
 
@@ -25,6 +26,7 @@ const agentLayer = (model: Effect.Effect<LanguageModel.Service>, root: string) =
   ]).pipe(
     Layer.provide(SessionJournalMemory),
     Layer.provide(cryptoWeb),
+    Layer.provide(Truncate.layer()),
     Layer.provide(ExecutionWorld.local(root)),
     Layer.provide(NodeChildProcessSpawner.layer),
     Layer.provide(NodeFileSystem.layer),
@@ -120,6 +122,7 @@ it.effect("server layer boots on an ephemeral port with and without a DeepSeek A
     Effect.gen(function* () {
       yield* Layer.build(server({ port: 0, root, deepseekApiKey: undefined }))
       yield* Layer.build(server({ port: 0, root, deepseekApiKey: "sk-test" }))
+      yield* Layer.build(server({ port: 0, root, safety: false }))
     }),
   ),
 )

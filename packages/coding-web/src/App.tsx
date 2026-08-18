@@ -11,6 +11,7 @@ import {
   capsAtom,
   forkSessionAtom,
   interruptAtom,
+  isBusyAtom,
   modelAtom,
   promptAtom,
   selectSessionAtom,
@@ -240,8 +241,7 @@ export const App = () => {
   const setSession = useAtomSet(sessionAtom)
   const [modelId, setModelId] = useAtom(modelAtom)
   const caps = useAtomValue(capsAtom)
-  const prompt = useAtomValue(promptAtom)
-  const busy = prompt.waiting
+  const busy = useAtomValue(isBusyAtom)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const bottom = useRef<HTMLDivElement>(null)
   useEffect(() => {

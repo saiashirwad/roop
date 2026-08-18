@@ -30,6 +30,23 @@ export const AgentRpc = RpcGroup.make(
     error: Schema.Union([ModelNotFound, SessionBusy, SessionFormatError, SessionIoError, RunError]),
     stream: true,
   }),
+  Rpc.make("SubscribeSession", {
+    payload: {
+      sessionId: Schema.String,
+      replayFromStep: Schema.optionalKey(Schema.Finite),
+    },
+    success: AgentEvent,
+    error: Schema.Union([SessionNotFound, SessionFormatError, SessionIoError]),
+    stream: true,
+  }),
+  Rpc.make("Steer", {
+    payload: {
+      sessionId: Schema.String,
+      message: Schema.String,
+    },
+    success: Schema.Void,
+    error: RunNotFound,
+  }),
   Rpc.make("Interrupt", {
     payload: {
       sessionId: Schema.String,

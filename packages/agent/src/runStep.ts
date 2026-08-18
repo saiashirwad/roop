@@ -1,4 +1,4 @@
-import { Cause, Effect, Stream } from "effect"
+import { Cause, Effect, Option, Stream } from "effect"
 import {
   type AiError,
   type Chat,
@@ -54,6 +54,11 @@ export type StepOutcome =
     }
   | {
       readonly _tag: "Interrupted"
+    }
+  | {
+      readonly _tag: "Steered"
+      readonly steerPrompt: string
+      readonly partialParts: ReadonlyArray<Response.StreamPart<Record<string, Tool.Any>>>
     }
 
 export interface RunStepOptions {
@@ -253,16 +258,23 @@ const interceptToolkit = (
         const token = correlator.allocateToken(name)
         const admitted = yield* hooks.beforeToolExecute(context(), { name, params })
         const scheduled = scheduler.scheduleEffect(
-          toolkit.handle(name, admitted.params).pipe(
-            Effect.provideService(AgentEmit, {
-              emit: (event) => {
-                if (event._tag === "Subagent") {
-                  return emit({ ...event, toolCallId: token })
-                }
-                return emit(event)
-              },
-              toolCallId: token,
-            }),
+          Effect.suspend(() =>
+            /* oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- Tool.Any's existential requirements channel is preserved through the generic execution hook. */
+            hooks.withToolExecution(
+              context(),
+              { name, params: admitted.params },
+              toolkit.handle(name, admitted.params).pipe(
+                Effect.provideService(AgentEmit, {
+                  emit: (event) => {
+                    if (event._tag === "Subagent") {
+                      return emit({ ...event, toolCallId: token })
+                    }
+                    return emit(event)
+                  },
+                  toolCallId: token,
+                }),
+              ),
+            ),
           ),
         )
         const timed =
@@ -307,6 +319,31 @@ const interceptToolkit = (
   }
 }
 
+/** Synthesizes standard end markers for any unclosed streaming text or reasoning tokens. */
+const closeOpenParts = (parts: Array<Response.StreamPart<Record<string, Tool.Any>>>): void => {
+  const openText = new Set<string>()
+  const openReasoning = new Set<string>()
+  for (const part of parts) {
+    if (part.type === "text-start") {
+      openText.add(part.id)
+    } else if (part.type === "text-end") {
+      openText.delete(part.id)
+    } else if (part.type === "reasoning-start") {
+      openReasoning.add(part.id)
+    } else if (part.type === "reasoning-end") {
+      openReasoning.delete(part.id)
+    }
+  }
+  for (const id of openText) {
+    /* SAFETY: Synthesizing standard text-end marker for unclosed streaming text ID. */
+    parts.push({ type: "text-end", id } as Response.StreamPart<Record<string, Tool.Any>>)
+  }
+  for (const id of openReasoning) {
+    /* SAFETY: Synthesizing standard reasoning-end marker for unclosed streaming reasoning ID. */
+    parts.push({ type: "reasoning-end", id } as Response.StreamPart<Record<string, Tool.Any>>)
+  }
+}
+
 /**
  * Executes a single step: one model request and its corresponding tool calls.
  */
@@ -327,14 +364,34 @@ export const runStep = (
     yield* options.append({ _tag: "step/start", index: options.step })
     started = true
 
+    const pendingSteer = yield* options.interrupt.pollSteer
+    if (Option.isSome(pendingSteer)) {
+      yield* options.append({ _tag: "step/end", reason: "interrupted" })
+      closed = true
+      return {
+        _tag: "Steered" as const,
+        steerPrompt: pendingSteer.value,
+        partialParts: [],
+      }
+    }
+
     const preStep = yield* Effect.raceFirst(
-      options.hooks.preStep(context),
-      options.interrupt.await.pipe(Effect.map(() => null)),
+      options.hooks.preStep(context).pipe(Effect.as({ _tag: "Ok" as const })),
+      options.interrupt.awaitSignal,
     )
-    if (preStep === null) {
+    if (preStep._tag === "Interrupted") {
       yield* options.append({ _tag: "step/end", reason: "interrupted" })
       closed = true
       return { _tag: "Interrupted" as const }
+    }
+    if (preStep._tag === "Steered") {
+      yield* options.append({ _tag: "step/end", reason: "interrupted" })
+      closed = true
+      return {
+        _tag: "Steered" as const,
+        steerPrompt: preStep.steerPrompt,
+        partialParts: [],
+      }
     }
 
     if (options.beforeRequest !== undefined) {
@@ -348,6 +405,8 @@ export const runStep = (
     })
 
     const toolkit = yield* options.toolkit
+    const collectedParts: Array<Response.StreamPart<Record<string, Tool.Any>>> = []
+
     const modelStream = options.chat
       .streamText({
         prompt: [],
@@ -371,6 +430,8 @@ export const runStep = (
         ),
         Stream.provideService(AgentEmit, { emit: options.emit }),
         Stream.tap((part) => {
+          collectedParts.push(part)
+
           const event = toEvent(
             part,
             (name, _params, id, providerExecuted) =>
@@ -385,38 +446,44 @@ export const runStep = (
           return event === undefined ? Effect.void : options.emit(event)
         }),
       )
-    const timedModelStream =
-      policy.modelTimeout === undefined
-        ? modelStream
-        : Stream.timeout(modelStream, policy.modelTimeout)
-    const requestStream = timedModelStream.pipe(
+    const collectStream = modelStream.pipe(
       Stream.runCollect,
       Effect.map((parts) => [...parts]),
     )
-    const stepStream =
+    const timedStepStream = (
       policy.modelTimeout === undefined
-        ? requestStream
-        : requestStream.pipe(Effect.timeout(policy.modelTimeout))
-    const timedStepStream = stepStream.pipe(
-      Effect.mapError((cause) => runError(cause, { sessionId: options.sessionId })),
-    )
+        ? collectStream
+        : collectStream.pipe(Effect.timeout(policy.modelTimeout))
+    ).pipe(Effect.mapError((cause) => runError(cause, { sessionId: options.sessionId })))
 
     const outcome = yield* Effect.raceFirst(
-      timedStepStream,
-      options.interrupt.await.pipe(Effect.map(() => null)),
+      timedStepStream.pipe(Effect.map((parts) => ({ _tag: "Done" as const, parts }))),
+      options.interrupt.awaitSignal,
     )
 
-    if (outcome === null) {
+    if (outcome._tag === "Interrupted") {
       yield* options.append({ _tag: "step/end", reason: "interrupted" })
       closed = true
       return { _tag: "Interrupted" as const }
     }
 
-    yield* appendStepEvents(options.append, outcome)
+    if (outcome._tag === "Steered") {
+      closeOpenParts(collectedParts)
+      yield* appendStepEvents(options.append, collectedParts)
+      yield* options.append({ _tag: "step/end", reason: "interrupted" })
+      closed = true
+      return {
+        _tag: "Steered" as const,
+        steerPrompt: outcome.steerPrompt,
+        partialParts: collectedParts,
+      }
+    }
+
+    yield* appendStepEvents(options.append, outcome.parts)
     yield* options.append({ _tag: "step/end", reason: "completed" })
     closed = true
 
-    const toolCalls = outcome.filter((part) => part.type === "tool-call")
+    const toolCalls = outcome.parts.filter((part) => part.type === "tool-call")
     if (toolCalls.length > 0) {
       return { _tag: "ToolCalls" as const, toolCallCount: toolCalls.length }
     }

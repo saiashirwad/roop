@@ -1,10 +1,22 @@
 import { NodeFileSystem } from "@effect/platform-node"
 import { assert, it } from "@effect/vitest"
-import { Effect, Exit, Fiber, FileSystem, Layer, Option, Queue, Schema, Stream } from "effect"
-import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
+import {
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  FileSystem,
+  Layer,
+  Option,
+  Queue,
+  Ref,
+  Schema,
+  Stream,
+} from "effect"
+import { LanguageModel, type Response, Tool, Toolkit } from "effect/unstable/ai"
 
 import { Agent, AgentLiveToolkit } from "../src/Agent.ts"
-import { deriveMessages } from "../src/AgentEvents.ts"
+import { type AgentEvent, deriveMessages } from "../src/AgentEvents.ts"
 import { layerHook, layerNoop } from "../src/AgentHooks.ts"
 import { cryptoWeb } from "../src/cryptoWeb.ts"
 import { SessionJournalFs, SessionJournalMemory } from "../src/SessionJournal.ts"
@@ -513,4 +525,218 @@ it.effect(
         ),
       ),
     ),
+)
+
+it.effect(
+  "steers active run mid-flight, preserving partial output and continuing in same stream",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const startedSteerTurn = yield* Deferred.make<void>()
+        const prompts = yield* Ref.make<Array<ReadonlyArray<unknown>>>([])
+
+        const modelService = yield* LanguageModel.make({
+          generateText: () => Effect.succeed([]),
+          streamText: (options: {
+            readonly prompt: { readonly content: ReadonlyArray<unknown> }
+          }) =>
+            Stream.unwrap(
+              Effect.gen(function* () {
+                yield* Ref.update(prompts, (p) => [...p, options.prompt.content])
+                const seen = yield* Ref.get(prompts)
+                if (seen.length === 1) {
+                  // Turn 1: emit partial delta and hang until steered
+                  const stream: Stream.Stream<Response.StreamPartEncoded> = Stream.make(
+                    { type: "text-start", id: "t1" },
+                    { type: "text-delta", id: "t1", delta: "I was working on " },
+                  ).pipe(Stream.concat(Stream.never))
+                  return stream
+                }
+                // Turn 2: response to steer
+                yield* Deferred.succeed(startedSteerTurn, undefined)
+                const stream: Stream.Stream<Response.StreamPartEncoded> = Stream.make(
+                  { type: "text-start", id: "t2" },
+                  { type: "text-delta", id: "t2", delta: "Steered reply!" },
+                  { type: "text-end", id: "t2" },
+                )
+                return stream
+              }),
+            ),
+        })
+
+        const appLayer = AgentLiveToolkit(EchoToolkit, {
+          models: [
+            {
+              id: "steer-model",
+              provider: "test",
+              layer: Layer.succeed(LanguageModel.LanguageModel, modelService),
+            },
+          ],
+        }).pipe(
+          Layer.provide(SessionJournalMemory),
+          Layer.provide(cryptoWeb),
+          Layer.provide(
+            EchoToolkit.toLayer({ echo: ({ note }) => Effect.succeed({ reply: note }) }),
+          ),
+        )
+
+        yield* Effect.gen(function* () {
+          const agent = yield* Agent
+          const sid = "steer-live-session"
+          const queue = yield* Queue.unbounded<AgentEvent>()
+
+          const fiber = yield* Effect.forkScoped(
+            Stream.runForEach(agent.prompt({ prompt: "initial task", sessionId: sid }), (e) =>
+              Queue.offer(queue, e),
+            ),
+          )
+
+          // Wait until initial TextDelta is emitted
+          const firstEvent = yield* Queue.take(queue)
+          assert.strictEqual(firstEvent._tag, "TextDelta")
+          /* SAFETY: Confirmed TextDelta carries the delta text string. */
+          assert.strictEqual((firstEvent as any).delta, "I was working on ")
+
+          // Steer the active agent
+          yield* agent.steer(sid, "Nevermind, do something else!")
+
+          // Wait for steer turn to start and produce output
+          yield* Deferred.await(startedSteerTurn)
+
+          // Collect all events until stream finishes
+          yield* Fiber.join(fiber)
+
+          const remainingEvents = yield* Queue.takeAll(queue)
+          const allDeltas = [firstEvent, ...remainingEvents]
+            .filter((e) => e._tag === "TextDelta")
+            .map((e) => {
+              /* SAFETY: Filtered TextDelta event carries delta string. */
+              return (e as any).delta as string
+            })
+          assert.deepStrictEqual(allDeltas, ["I was working on ", "Steered reply!"])
+
+          // Check session journal history
+          const session = yield* agent.history(sid)
+          const messages = deriveMessages(session.events)
+          assert.strictEqual(messages.length, 4)
+
+          const m0 = messages[0]
+          const m1 = messages[1]
+          const m2 = messages[2]
+          const m3 = messages[3]
+          assert.ok(m0 !== undefined && m0.role === "user")
+          assert.ok(m1 !== undefined && m1.role === "assistant")
+          assert.ok(m2 !== undefined && m2.role === "user")
+          assert.ok(m3 !== undefined && m3.role === "assistant")
+
+          /* SAFETY: User prompt message contents are arrays of text parts in test fixture. */
+          const content0 = m0.content as ReadonlyArray<{ text: string }>
+          /* SAFETY: Assistant message contents are arrays of text parts in test fixture. */
+          const content1 = m1.content as ReadonlyArray<{ text: string }>
+          /* SAFETY: Steer user message contents are arrays of text parts in test fixture. */
+          const content2 = m2.content as ReadonlyArray<{ text: string }>
+          /* SAFETY: Assistant steered message contents are arrays of text parts in test fixture. */
+          const content3 = m3.content as ReadonlyArray<{ text: string }>
+
+          assert.strictEqual(content0[0]?.text, "initial task")
+          assert.strictEqual(content1[0]?.text, "I was working on ")
+          assert.strictEqual(content2[0]?.text, "Nevermind, do something else!")
+          assert.strictEqual(content3[0]?.text, "Steered reply!")
+        }).pipe(Effect.provide(appLayer))
+      }),
+    ),
+)
+
+it.effect("processes multiple steer messages in rapid succession across turns", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const prompts = yield* Ref.make<Array<ReadonlyArray<unknown>>>([])
+      const secondSteerStarted = yield* Deferred.make<void>()
+
+      const modelService = yield* LanguageModel.make({
+        generateText: () => Effect.succeed([]),
+        streamText: (options: { readonly prompt: { readonly content: ReadonlyArray<unknown> } }) =>
+          Stream.unwrap(
+            Effect.gen(function* () {
+              yield* Ref.update(prompts, (p) => [...p, options.prompt.content])
+              const seen = yield* Ref.get(prompts)
+              if (seen.length === 1) {
+                // Initial prompt: emit delta and hang
+                const stream: Stream.Stream<Response.StreamPartEncoded> = Stream.make({
+                  type: "text-delta",
+                  id: "t1",
+                  delta: "starting...",
+                }).pipe(Stream.concat(Stream.never))
+                return stream
+              }
+              // Turn responding to steers
+              yield* Deferred.succeed(secondSteerStarted, undefined)
+              const stream: Stream.Stream<Response.StreamPartEncoded> = Stream.make(
+                { type: "text-delta", id: "t2", delta: "Finished after steers!" },
+                { type: "text-end", id: "t2" },
+              )
+              return stream
+            }),
+          ),
+      })
+
+      const appLayer = AgentLiveToolkit(EchoToolkit, {
+        models: [
+          {
+            id: "multi-steer-model",
+            provider: "test",
+            layer: Layer.succeed(LanguageModel.LanguageModel, modelService),
+          },
+        ],
+      }).pipe(
+        Layer.provide(SessionJournalMemory),
+        Layer.provide(cryptoWeb),
+        Layer.provide(EchoToolkit.toLayer({ echo: ({ note }) => Effect.succeed({ reply: note }) })),
+      )
+
+      yield* Effect.gen(function* () {
+        const agent = yield* Agent
+        const sid = "multi-steer-session"
+        const queue = yield* Queue.unbounded<AgentEvent>()
+
+        const fiber = yield* Effect.forkScoped(
+          Stream.runForEach(agent.prompt({ prompt: "initial", sessionId: sid }), (e) =>
+            Queue.offer(queue, e),
+          ),
+        )
+
+        // Wait for initial delta
+        const first = yield* Queue.take(queue)
+        assert.strictEqual(first._tag, "TextDelta")
+
+        // Queue 2 steer messages in rapid succession
+        yield* agent.steer(sid, "steer 1")
+        yield* agent.steer(sid, "steer 2")
+
+        yield* Deferred.await(secondSteerStarted)
+        yield* Fiber.join(fiber)
+
+        const session = yield* agent.history(sid)
+        const messages = deriveMessages(session.events)
+        const userMessages = messages.filter((m) => m.role === "user")
+        assert.strictEqual(userMessages.length, 3)
+
+        const u0 = userMessages[0]
+        const u1 = userMessages[1]
+        const u2 = userMessages[2]
+        assert.ok(u0 !== undefined && u1 !== undefined && u2 !== undefined)
+
+        /* SAFETY: User prompt message contents are arrays of text parts in test fixture. */
+        const content0 = u0.content as ReadonlyArray<{ text: string }>
+        /* SAFETY: First steer message contents are arrays of text parts in test fixture. */
+        const content1 = u1.content as ReadonlyArray<{ text: string }>
+        /* SAFETY: Second steer message contents are arrays of text parts in test fixture. */
+        const content2 = u2.content as ReadonlyArray<{ text: string }>
+
+        assert.strictEqual(content0[0]?.text, "initial")
+        assert.strictEqual(content1[0]?.text, "steer 1")
+        assert.strictEqual(content2[0]?.text, "steer 2")
+      }).pipe(Effect.provide(appLayer))
+    }),
+  ),
 )

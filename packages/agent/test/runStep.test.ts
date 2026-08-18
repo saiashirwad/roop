@@ -1,11 +1,12 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Duration, Effect, Exit, Fiber, Ref, Schema, Stream } from "effect"
+import { Deferred, Duration, Effect, Exit, Fiber, Queue, Ref, Schema, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { AiError, Chat, LanguageModel, Prompt, Tool } from "effect/unstable/ai"
 
 import type { AgentEvent, SessionEvent } from "../src/AgentEvents.ts"
 import { hooksNoop, ToolRejected } from "../src/AgentHooks.ts"
 import { SessionId } from "../src/DomainIds.ts"
+import { InterruptSignal } from "../src/RunRegistry.ts"
 import { runStep, type ErasedToolkit } from "../src/runStep.ts"
 import { scripted } from "../src/Testing.ts"
 import { makeToolScheduler } from "../src/toolScheduler.ts"
@@ -14,11 +15,6 @@ const Echo = Tool.make("echo", {
   description: "echo note",
   parameters: Schema.Struct({ note: Schema.String }),
   success: Schema.Struct({ reply: Schema.String }),
-})
-
-const makeInterruptMock = (isInterrupted = false) => ({
-  isInterrupted: Effect.succeed(isInterrupted),
-  await: Effect.never,
 })
 
 const makeEchoToolkit = (): ErasedToolkit => ({
@@ -68,7 +64,7 @@ describe("runStep", () => {
         chat,
         model,
         toolkit: Effect.succeed(toolkit),
-        interrupt: makeInterruptMock(false),
+        interrupt: InterruptSignal.noop(),
         append,
         emit,
         hooks: hooksNoop,
@@ -129,7 +125,7 @@ describe("runStep", () => {
         chat,
         model,
         toolkit: Effect.succeed(toolkit),
-        interrupt: makeInterruptMock(false),
+        interrupt: InterruptSignal.noop(),
         append,
         emit,
         hooks: hooksNoop,
@@ -192,7 +188,7 @@ describe("runStep", () => {
         chat,
         model,
         toolkit: Effect.succeed(toolkit),
-        interrupt: makeInterruptMock(false),
+        interrupt: InterruptSignal.noop(),
         append,
         emit,
         hooks: {
@@ -244,10 +240,7 @@ describe("runStep", () => {
         chat,
         model,
         toolkit: Effect.succeed(toolkit),
-        interrupt: {
-          isInterrupted: Effect.succeed(false),
-          await: Effect.void,
-        },
+        interrupt: InterruptSignal.interrupted(),
         append,
         emit: () => Effect.void,
         hooks: hooksNoop,
@@ -255,6 +248,237 @@ describe("runStep", () => {
       })
 
       assert.strictEqual(outcome._tag, "Interrupted")
+      const journalEvents = yield* Ref.get(journal)
+      assert.deepStrictEqual(journalEvents[journalEvents.length - 1], {
+        _tag: "step/end",
+        reason: "interrupted",
+      })
+    }),
+  )
+
+  it.effect("handles pre-step steer interruption", () =>
+    Effect.gen(function* () {
+      const sid = SessionId.make("step-steer-pre")
+      const journal = yield* Ref.make<Array<SessionEvent>>([])
+      const steerQueue = yield* Queue.unbounded<string>()
+      yield* Queue.offer(steerQueue, "Do this instead")
+
+      const model = yield* scripted([])
+      const chat = yield* Chat.fromPrompt(Prompt.empty)
+      const toolkit = makeEchoToolkit()
+      const scheduler = yield* makeToolScheduler("unbounded")
+
+      const outcome = yield* runStep({
+        sessionId: sid,
+        turn: 1,
+        step: 1,
+        chat,
+        model,
+        toolkit: Effect.succeed(toolkit),
+        interrupt: InterruptSignal.make({ steerQueue }),
+        append: (event) => Ref.update(journal, (all) => [...all, event]),
+        emit: () => Effect.void,
+        hooks: hooksNoop,
+        scheduler,
+      })
+
+      assert.strictEqual(outcome._tag, "Steered")
+      if (outcome._tag === "Steered") {
+        assert.strictEqual(outcome.steerPrompt, "Do this instead")
+        assert.deepStrictEqual(outcome.partialParts, [])
+      }
+      const journalEvents = yield* Ref.get(journal)
+      assert.deepStrictEqual(journalEvents[journalEvents.length - 1], {
+        _tag: "step/end",
+        reason: "interrupted",
+      })
+    }),
+  )
+
+  it.effect(
+    "handles mid-stream steer, closing unclosed text tokens and recording partial assistant output",
+    () =>
+      Effect.gen(function* () {
+        const sid = SessionId.make("step-steer-mid")
+        const journal = yield* Ref.make<Array<SessionEvent>>([])
+        const live = yield* Ref.make<Array<AgentEvent>>([])
+        const steerQueue = yield* Queue.unbounded<string>()
+
+        // Hanging model that emits partial text then waits
+        const model = yield* LanguageModel.make({
+          generateText: () => Effect.succeed([]),
+          streamText: () =>
+            Stream.make(
+              { type: "text-start" as const, id: "t1" },
+              { type: "text-delta" as const, id: "t1", delta: "Partial response " },
+            ).pipe(Stream.concat(Stream.never)),
+        })
+
+        const chat = yield* Chat.fromPrompt(Prompt.empty)
+        const toolkit = makeEchoToolkit()
+        const scheduler = yield* makeToolScheduler("unbounded")
+
+        const outcome = yield* runStep({
+          sessionId: sid,
+          turn: 1,
+          step: 1,
+          chat,
+          model,
+          toolkit: Effect.succeed(toolkit),
+          interrupt: InterruptSignal.make({ steerQueue }),
+          append: (event) => Ref.update(journal, (all) => [...all, event]),
+          emit: (event) =>
+            Effect.gen(function* () {
+              yield* Ref.update(live, (all) => [...all, event])
+              if (event._tag === "TextDelta") {
+                yield* Queue.offer(steerQueue, "Change direction")
+              }
+            }),
+          hooks: hooksNoop,
+          scheduler,
+        })
+
+        assert.strictEqual(outcome._tag, "Steered")
+        if (outcome._tag === "Steered") {
+          assert.strictEqual(outcome.steerPrompt, "Change direction")
+          assert.ok(outcome.partialParts.length >= 3)
+          // Verify synthetic text-end was added
+          const lastPart = outcome.partialParts[outcome.partialParts.length - 1]
+          assert.strictEqual(lastPart?.type, "text-end")
+          /* SAFETY: Synthetic text-end carries the open stream part ID. */
+          assert.strictEqual((lastPart as any)?.id, "t1")
+        }
+
+        const journalEvents = yield* Ref.get(journal)
+        const assistantMsg = journalEvents.find((e) => e._tag === "assistant/message")
+        assert.ok(assistantMsg !== undefined)
+        if (assistantMsg?._tag === "assistant/message") {
+          assert.deepStrictEqual(assistantMsg.parts, [{ type: "text", text: "Partial response " }])
+        }
+      }),
+  )
+
+  it.effect(
+    "handles mid-stream steer with unclosed reasoning tokens, synthesizing reasoning-end",
+    () =>
+      Effect.gen(function* () {
+        const sid = SessionId.make("step-steer-reasoning")
+        const journal = yield* Ref.make<Array<SessionEvent>>([])
+        const live = yield* Ref.make<Array<AgentEvent>>([])
+        const steerQueue = yield* Queue.unbounded<string>()
+
+        const model = yield* LanguageModel.make({
+          generateText: () => Effect.succeed([]),
+          streamText: () =>
+            Stream.make(
+              { type: "reasoning-start" as const, id: "r1" },
+              { type: "reasoning-delta" as const, id: "r1", delta: "Thinking deeply..." },
+            ).pipe(Stream.concat(Stream.never)),
+        })
+
+        const chat = yield* Chat.fromPrompt(Prompt.empty)
+        const toolkit = makeEchoToolkit()
+        const scheduler = yield* makeToolScheduler("unbounded")
+
+        const outcome = yield* runStep({
+          sessionId: sid,
+          turn: 1,
+          step: 1,
+          chat,
+          model,
+          toolkit: Effect.succeed(toolkit),
+          interrupt: InterruptSignal.make({ steerQueue }),
+          append: (event) => Ref.update(journal, (all) => [...all, event]),
+          emit: (event) =>
+            Effect.gen(function* () {
+              yield* Ref.update(live, (all) => [...all, event])
+              if (event._tag === "ReasoningDelta") {
+                yield* Queue.offer(steerQueue, "Stop thinking")
+              }
+            }),
+          hooks: hooksNoop,
+          scheduler,
+        })
+
+        assert.strictEqual(outcome._tag, "Steered")
+        if (outcome._tag === "Steered") {
+          assert.strictEqual(outcome.steerPrompt, "Stop thinking")
+          const lastPart = outcome.partialParts[outcome.partialParts.length - 1]
+          assert.strictEqual(lastPart?.type, "reasoning-end")
+          /* SAFETY: Synthetic reasoning-end carries the open stream part ID. */
+          assert.strictEqual((lastPart as any)?.id, "r1")
+        }
+
+        const journalEvents = yield* Ref.get(journal)
+        const assistantMsg = journalEvents.find((e) => e._tag === "assistant/message")
+        assert.ok(assistantMsg !== undefined)
+        if (assistantMsg?._tag === "assistant/message") {
+          assert.deepStrictEqual(assistantMsg.parts, [
+            { type: "reasoning", text: "Thinking deeply..." },
+          ])
+        }
+      }),
+  )
+
+  it.effect("interrupts active tool execution when steered", () =>
+    Effect.gen(function* () {
+      const sid = SessionId.make("step-steer-tool")
+      const journal = yield* Ref.make<Array<SessionEvent>>([])
+      const toolStarted = yield* Deferred.make<void>()
+      const toolInterrupted = yield* Deferred.make<void>()
+      const steerQueue = yield* Queue.unbounded<string>()
+
+      const BlockingEcho: ErasedToolkit = {
+        tools: { echo: Echo },
+        handle: () =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(toolStarted, undefined)
+            return Stream.fromEffect(
+              Effect.never.pipe(
+                Effect.onInterrupt(() => Deferred.succeed(toolInterrupted, undefined)),
+              ),
+            )
+          }),
+      }
+
+      const model = yield* scripted([
+        [{ type: "tool-call", id: "c1", name: "echo", params: { note: "hang" } }],
+      ])
+
+      const chat = yield* Chat.fromPrompt(Prompt.empty)
+      const scheduler = yield* makeToolScheduler("unbounded")
+
+      const stepFiber = yield* Effect.forkChild(
+        runStep({
+          sessionId: sid,
+          turn: 1,
+          step: 1,
+          chat,
+          model,
+          toolkit: Effect.succeed(BlockingEcho),
+          interrupt: InterruptSignal.make({ steerQueue }),
+          append: (event) => Ref.update(journal, (all) => [...all, event]),
+          emit: () => Effect.void,
+          hooks: hooksNoop,
+          scheduler,
+        }),
+      )
+
+      // Wait until tool starts executing
+      yield* Deferred.await(toolStarted)
+
+      // Steer while tool is in flight
+      yield* Queue.offer(steerQueue, "Abort tool and do this")
+
+      const outcome = yield* Fiber.join(stepFiber)
+      assert.strictEqual(outcome._tag, "Steered")
+      if (outcome._tag === "Steered") {
+        assert.strictEqual(outcome.steerPrompt, "Abort tool and do this")
+      }
+
+      // Verify tool execution was interrupted
+      yield* Deferred.await(toolInterrupted)
+
       const journalEvents = yield* Ref.get(journal)
       assert.deepStrictEqual(journalEvents[journalEvents.length - 1], {
         _tag: "step/end",
@@ -277,7 +501,7 @@ describe("runStep", () => {
         chat,
         model,
         toolkit: Effect.succeed(makeEchoToolkit()),
-        interrupt: makeInterruptMock(false),
+        interrupt: InterruptSignal.noop(),
         append: () => Effect.void,
         emit: () => Effect.void,
         hooks: hooksNoop,
@@ -308,7 +532,7 @@ describe("runStep", () => {
         chat,
         model,
         toolkit: Effect.succeed(toolkit),
-        interrupt: makeInterruptMock(false),
+        interrupt: InterruptSignal.noop(),
         append: () => Effect.void,
         emit: () => Effect.void,
         hooks: hooksNoop,
@@ -352,7 +576,7 @@ describe("runStep", () => {
           chat,
           model,
           toolkit: Effect.succeed(toolkit),
-          interrupt: makeInterruptMock(false),
+          interrupt: InterruptSignal.noop(),
           append,
           emit: () => Effect.void,
           hooks: hooksNoop,
@@ -388,7 +612,7 @@ describe("runStep", () => {
         chat,
         model,
         toolkit: Effect.succeed(toolkit),
-        interrupt: makeInterruptMock(false),
+        interrupt: InterruptSignal.noop(),
         append: (event) => Ref.update(journal, (all) => [...all, event]),
         emit: (event) => Ref.update(live, (all) => [...all, event]),
         hooks: hooksNoop,

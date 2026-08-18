@@ -1,5 +1,6 @@
 import { Cause, Effect, Exit, Queue, Ref, Stream } from "effect"
-import { Prompt, type Chat, type LanguageModel } from "effect/unstable/ai"
+import { Prompt, type Chat, type LanguageModel, type Response } from "effect/unstable/ai"
+import type * as Tool from "effect/unstable/ai/Tool"
 
 import type { AgentEvent, SessionEvent } from "./AgentEvents.ts"
 import type { AgentHooksInterface } from "./AgentHooks.ts"
@@ -32,23 +33,38 @@ export interface LoopOptions {
 export const runLoop = (options: LoopOptions): Stream.Stream<AgentEvent, RunError> =>
   Stream.callback<AgentEvent, RunError>((queue) => {
     let turnOpen = false
+    const emit = (event: AgentEvent) => Queue.offer(queue, event)
+
+    const appendUserPrompt = (
+      prompt: string,
+      partialParts?: ReadonlyArray<Response.StreamPart<Record<string, Tool.Any>>>,
+    ) =>
+      Effect.gen(function* () {
+        yield* options.append({ _tag: "user/message", content: prompt })
+        const promptObj = Prompt.make(prompt)
+        if (partialParts && partialParts.length > 0) {
+          const partialPrompt = Prompt.fromResponseParts(partialParts)
+          yield* Ref.update(options.chat.history, (history) =>
+            Prompt.concat(Prompt.concat(history, partialPrompt), promptObj),
+          )
+        } else {
+          yield* Ref.update(options.chat.history, (history) => Prompt.concat(history, promptObj))
+        }
+      })
+
     const body = Effect.gen(function* () {
-      const emit = (event: AgentEvent) => Queue.offer(queue, event)
       const policy = resolveRunPolicy(options.policy)
       const scheduler = yield* makeToolScheduler(policy.toolConcurrency)
       let turn = 0
-      let step = 0
       let totalSteps = 0
 
-      while (true) {
-        if (turn >= policy.maxTurns) {
-          yield* emit({ _tag: "Finish", reason: "stopped" })
-          return
-        }
+      while (turn < policy.maxTurns) {
         turn += 1
-        step = 0
+        let step = 0
         yield* options.append({ _tag: "turn/start" })
         turnOpen = true
+
+        let turnEnded = false
 
         while (true) {
           step += 1
@@ -73,6 +89,13 @@ export const runLoop = (options: LoopOptions): Stream.Stream<AgentEvent, RunErro
             yield* emit({ _tag: "Finish", reason: "interrupted" })
             return
           }
+          if (outcome._tag === "Steered") {
+            yield* options.append({ _tag: "turn/end", reason: "interrupted" })
+            turnOpen = false
+            yield* appendUserPrompt(outcome.steerPrompt, outcome.partialParts)
+            turnEnded = true
+            break
+          }
 
           totalSteps += 1
           const reachedLimit = totalSteps >= policy.maxTotalSteps || step >= policy.maxStepsPerTurn
@@ -85,20 +108,35 @@ export const runLoop = (options: LoopOptions): Stream.Stream<AgentEvent, RunErro
           if (outcome._tag === "Stop" || reachedLimit) break
         }
 
+        if (turnEnded) {
+          continue
+        }
+
         const context = { sessionId: options.sessionId, turn, step }
-        const continuation = yield* Effect.raceFirst(
-          options.hooks.turnStopping(context, { reason: "completed", stepCount: step }),
-          options.interrupt.await.pipe(Effect.map(() => null)),
+        const turnContinuation = yield* Effect.raceFirst(
+          options.hooks
+            .turnStopping(context, { reason: "completed", stepCount: step })
+            .pipe(Effect.map((continuation) => ({ _tag: "Continue" as const, continuation }))),
+          options.interrupt.awaitSignal,
         )
-        if (continuation === null) {
+
+        if (turnContinuation._tag === "Interrupted") {
           yield* options.append({ _tag: "turn/end", reason: "interrupted" })
           turnOpen = false
           yield* emit({ _tag: "Finish", reason: "interrupted" })
           return
         }
+
+        if (turnContinuation._tag === "Steered") {
+          yield* options.append({ _tag: "turn/end", reason: "interrupted" })
+          turnOpen = false
+          yield* appendUserPrompt(turnContinuation.steerPrompt)
+          continue
+        }
+
         yield* options.append({ _tag: "turn/end", reason: "completed" })
         turnOpen = false
-        if (continuation === undefined) {
+        if (turnContinuation.continuation === undefined) {
           yield* emit({ _tag: "Finish", reason: "completed" })
           return
         }
@@ -106,11 +144,9 @@ export const runLoop = (options: LoopOptions): Stream.Stream<AgentEvent, RunErro
           yield* emit({ _tag: "Finish", reason: "stopped" })
           return
         }
-        yield* options.append({ _tag: "user/message", content: continuation.prompt })
-        yield* Ref.update(options.chat.history, (history) =>
-          Prompt.concat(history, Prompt.make(continuation.prompt)),
-        )
+        yield* appendUserPrompt(turnContinuation.continuation.prompt)
       }
+      yield* emit({ _tag: "Finish", reason: "stopped" })
     })
     return body.pipe(
       Effect.catchCause((cause) => {

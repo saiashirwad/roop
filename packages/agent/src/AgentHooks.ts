@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Schema, type Stream } from "effect"
 import type { LanguageModel } from "effect/unstable/ai"
 import type * as Tool from "effect/unstable/ai/Tool"
 
@@ -55,6 +55,12 @@ export interface AgentHooksInterface {
     context: RunContext,
     call: ToolCallInfo,
   ) => Effect.Effect<ToolCallInfo, ToolRejected>
+  /** Wraps the actual scheduled tool stream, after the scheduler admits it. */
+  readonly withToolExecution: <A, E, R>(
+    context: RunContext,
+    call: ToolCallInfo,
+    execute: Effect.Effect<Stream.Stream<A, E, R>, E, R>,
+  ) => Effect.Effect<Stream.Stream<A, E, R>, E, R>
   /** Notification after a final (non-preliminary) tool result. */
   readonly afterToolExecute: (
     context: RunContext,
@@ -85,6 +91,7 @@ export const hooksNoop: AgentHooksInterface = {
   preStep: () => Effect.void,
   beforeRequest: (_context, request) => Effect.succeed(request),
   beforeToolExecute: (_context, call) => Effect.succeed(call),
+  withToolExecution: (_context, _call, execute) => execute,
   afterToolExecute: () => Effect.void,
   turnStopping: () => Effect.as(Effect.void, undefined),
 }

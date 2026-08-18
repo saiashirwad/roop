@@ -13,6 +13,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 
 import { CodingTools } from "../src/CodingTools.ts"
 import { ExecutionWorld } from "../src/ExecutionWorld.ts"
+import { Truncate } from "../src/Truncate.ts"
 
 const nodePlatform = Layer.mergeAll(
   NodeFileSystem.layer,
@@ -117,6 +118,7 @@ it.effect("CodingTools.edit: applies targeted replacements and validates uniquen
       ]).pipe(
         Layer.provide(SessionJournalMemory),
         Layer.provide(cryptoWeb),
+        Layer.provide(Truncate.memory()),
         Layer.provide(
           ExecutionWorld.memory({
             root: "/virtual",
@@ -221,6 +223,7 @@ it.effect("CodingTools.find and grep: searches workspace file paths and line con
       ]).pipe(
         Layer.provide(SessionJournalMemory),
         Layer.provide(cryptoWeb),
+        Layer.provide(Truncate.memory()),
         Layer.provide(
           ExecutionWorld.memory({
             root: "/workspace",
@@ -304,6 +307,7 @@ it.effect("ExecutionWorld.local: Node-backed ExecutionWorld executes file and ba
           ]).pipe(
             Layer.provide(SessionJournalMemory),
             Layer.provide(cryptoWeb),
+            Layer.provide(Truncate.layer()),
             Layer.provide(ExecutionWorld.local(root)),
           )
         }),
@@ -359,6 +363,7 @@ it.effect("ExecutionWorld: prevents path escaping outside workspace root", () =>
           ]).pipe(
             Layer.provide(SessionJournalMemory),
             Layer.provide(cryptoWeb),
+            Layer.provide(Truncate.layer()),
             Layer.provide(ExecutionWorld.local(root)),
           )
         }),
@@ -464,6 +469,7 @@ it.effect("ExecutionWorld: rejects symlink escapes for file and search tools", (
           ]).pipe(
             Layer.provide(SessionJournalMemory),
             Layer.provide(cryptoWeb),
+            Layer.provide(Truncate.layer()),
             Layer.provide(ExecutionWorld.local(root)),
           )
         }),
@@ -531,6 +537,7 @@ it.effect("ExecutionWorld.memory: runs in-memory without host disk access", () =
       ]).pipe(
         Layer.provide(SessionJournalMemory),
         Layer.provide(cryptoWeb),
+        Layer.provide(Truncate.memory()),
         Layer.provide(
           ExecutionWorld.memory({
             root: "/virtual-workspace",
@@ -587,6 +594,7 @@ it.effect("ExecutionWorld.memory: fails missing files through error channel as T
       ]).pipe(
         Layer.provide(SessionJournalMemory),
         Layer.provide(cryptoWeb),
+        Layer.provide(Truncate.memory()),
         Layer.provide(
           ExecutionWorld.memory({
             root: "/virtual-workspace",
@@ -664,6 +672,7 @@ it.effect(
           ]).pipe(
             Layer.provide(SessionJournalMemory),
             Layer.provide(cryptoWeb),
+            Layer.provide(Truncate.layer()),
             Layer.provide(
               ExecutionWorld.worktree({
                 baseRepo,
@@ -789,6 +798,7 @@ it.effect(
       ]).pipe(
         Layer.provide(SessionJournalMemory),
         Layer.provide(cryptoWeb),
+        Layer.provide(Truncate.layer()),
         Layer.provide(ExecutionWorld.local(baseRepo)),
         Layer.provide(nodePlatform),
       )

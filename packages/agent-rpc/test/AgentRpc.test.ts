@@ -114,6 +114,31 @@ it.layer(AgentRpcServer.pipe(Layer.provide(TestLayer)))("AgentRpc", (it) => {
         (Option.getOrThrow(Exit.findErrorOption(duplicateFork)) as any)._tag,
         "SessionAlreadyExists",
       )
+
+      const notFoundExit = yield* Effect.exit(client.Interrupt({ sessionId: "s2" }))
+      assert.ok(Exit.isFailure(notFoundExit))
+      /* SAFETY: Exit.findErrorOption is present after the preceding failure assertion. */
+      assert.strictEqual(
+        (Option.getOrThrow(Exit.findErrorOption(notFoundExit)) as any)._tag,
+        "RunNotFound",
+      )
+
+      const steerNotFoundExit = yield* Effect.exit(
+        client.Steer({ sessionId: "s2", message: "steer msg" }),
+      )
+      assert.ok(Exit.isFailure(steerNotFoundExit))
+      /* SAFETY: Exit.findErrorOption is present after the preceding failure assertion. */
+      assert.strictEqual(
+        (Option.getOrThrow(Exit.findErrorOption(steerNotFoundExit)) as any)._tag,
+        "RunNotFound",
+      )
+
+      // Verify SubscribeSession replays all events from session s1
+      const subscribed = yield* Stream.runCollect(client.SubscribeSession({ sessionId: "s1" }))
+      assert.deepStrictEqual(
+        [...subscribed].map((event) => event._tag),
+        ["ToolCall", "ToolResult", "Finish"],
+      )
     }),
   )
 
