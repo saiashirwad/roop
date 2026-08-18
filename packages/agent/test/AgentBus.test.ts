@@ -71,6 +71,26 @@ describe("AgentBus", () => {
     assert.deepStrictEqual(projected[4], { _tag: "Finish", reason: "completed" })
   })
 
+  it("replayFromStep uses step/start index as a session-global cursor", () => {
+    const projected = sessionEventsToAgentEvents(
+      [
+        { _tag: "step/start", index: 1 },
+        { _tag: "assistant/message", parts: [{ type: "text", text: "turn1-step1" }] },
+        { _tag: "turn/end", reason: "completed" },
+        { _tag: "step/start", index: 2 },
+        { _tag: "assistant/message", parts: [{ type: "text", text: "turn2-step1" }] },
+        { _tag: "turn/end", reason: "completed" },
+      ],
+      2,
+    )
+
+    assert.deepStrictEqual(
+      projected.map((event) => event._tag),
+      ["TextDelta", "Finish"],
+    )
+    assert.deepStrictEqual(projected[0], { _tag: "TextDelta", delta: "turn2-step1" })
+  })
+
   it("projects only the terminal turn/end as Finish", () => {
     const projected = sessionEventsToAgentEvents([
       { _tag: "step/start", index: 1 },

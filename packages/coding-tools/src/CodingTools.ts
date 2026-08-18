@@ -69,6 +69,69 @@ const isIgnoredWorkspacePath = (file: string): boolean =>
     .split("/")
     .some((segment) => segment === ".git" || segment === "node_modules" || segment === ".roop")
 
+interface LineWindow {
+  readonly content: string
+  readonly totalLines: number
+  readonly nextOffset?: number | undefined
+}
+
+const splitLines = (text: string): Array<string> => text.split(/\r?\n/)
+
+const windowFromText = (raw: string, offset: number, limit: number | undefined): LineWindow => {
+  const lines = splitLines(raw)
+  const selected = lines.slice(offset, limit === undefined ? undefined : offset + limit)
+  const nextOffset = offset + (limit ?? lines.length)
+  return {
+    content: selected.join("\n"),
+    totalLines: lines.length,
+    nextOffset: nextOffset < lines.length ? nextOffset : undefined,
+  }
+}
+
+/** Scan a byte stream for a line window without holding the rest of the file. */
+const windowFromStream = <E, R>(
+  bytes: Stream.Stream<Uint8Array, E, R>,
+  offset: number,
+  limit: number | undefined,
+) =>
+  Effect.gen(function* () {
+    let carry = ""
+    let lineIndex = 0
+    const selected: Array<string> = []
+    const take = (line: string) => {
+      if (lineIndex >= offset && (limit === undefined || selected.length < limit)) {
+        selected.push(line)
+      }
+      lineIndex += 1
+    }
+    yield* Stream.runForEach(Stream.decodeText(bytes), (chunk) =>
+      Effect.sync(() => {
+        const parts = splitLines(carry + chunk)
+        carry = parts.pop() ?? ""
+        for (const line of parts) take(line)
+      }),
+    )
+    take(carry)
+    const nextOffset = offset + (limit ?? lineIndex)
+    return {
+      content: selected.join("\n"),
+      totalLines: lineIndex,
+      nextOffset: nextOffset < lineIndex ? nextOffset : undefined,
+    }
+  })
+
+const readLineWindow = (
+  filesystem: ExecutionWorldService["filesystem"],
+  path: string,
+  offset: number,
+  limit: number | undefined,
+) =>
+  windowFromStream(filesystem.stream(path), offset, limit).pipe(
+    Effect.catchCause(() =>
+      filesystem.readFileString(path).pipe(Effect.map((raw) => windowFromText(raw, offset, limit))),
+    ),
+  )
+
 /** Resolve an entry returned by readDirectory, which is relative to targetDir. */
 const resolveDirectoryEntry = (world: ExecutionWorldService, targetDir: string, entry: string) =>
   world.resolvePath(`${targetDir.replace(/[\\/]$/, "")}/${entry}`)
@@ -236,17 +299,17 @@ export const CodingTools = (): Plugin<ExecutionWorld | Truncate> => {
           const world = yield* ExecutionWorld
           const trunc = yield* Truncate
           const file = yield* asFailure(world.resolvePath(path))
-          const raw = yield* asFailure(world.filesystem.readFileString(file))
-          const lines = raw.split(/\r?\n/)
           const lineOffset = offset ?? 0
-          const selected =
-            offset === undefined && limit === undefined
-              ? raw
-              : lines
-                  .slice(lineOffset, limit === undefined ? undefined : lineOffset + limit)
-                  .join("\n")
+          const windowed = offset !== undefined || limit !== undefined
+          const selected = windowed
+            ? yield* asFailure(readLineWindow(world.filesystem, file, lineOffset, limit))
+            : {
+                content: yield* asFailure(world.filesystem.readFileString(file)),
+                totalLines: undefined,
+                nextOffset: undefined,
+              }
           const res = yield* asFailure(
-            trunc.truncate(selected, {
+            trunc.truncate(selected.content, {
               key: `file-${path.replaceAll(/[/\\]/g, "_")}`,
               hintContext: `readFile for '${path}'`,
             }),
@@ -257,11 +320,10 @@ export const CodingTools = (): Plugin<ExecutionWorld | Truncate> => {
             if (res.spillPath !== undefined) response.spillPath = res.spillPath
             if (res.hint !== undefined) response.hint = res.hint
           }
-          if (offset !== undefined || limit !== undefined) {
+          if (windowed) {
             response.lineOffset = lineOffset
-            response.totalLines = lines.length
-            const nextOffset = lineOffset + (limit ?? lines.length)
-            if (nextOffset < lines.length) response.nextOffset = nextOffset
+            response.totalLines = selected.totalLines
+            if (selected.nextOffset !== undefined) response.nextOffset = selected.nextOffset
           }
           return response
         }),

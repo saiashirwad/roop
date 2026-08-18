@@ -65,6 +65,8 @@ export interface RunStepOptions {
   readonly sessionId: SessionId | string
   readonly turn: number
   readonly step: number
+  /** Monotonic session step index journaled on `step/start`. Defaults to `step`. */
+  readonly stepIndex?: number | undefined
   readonly chat: Chat.Service
   readonly model: LanguageModel.Service
   /** A request-bound capability snapshot. */
@@ -361,7 +363,7 @@ export const runStep = (
   const policy = options.policy ?? {}
 
   const execution = Effect.gen(function* () {
-    yield* options.append({ _tag: "step/start", index: options.step })
+    yield* options.append({ _tag: "step/start", index: options.stepIndex ?? options.step })
     started = true
 
     const pendingSteer = yield* options.interrupt.pollSteer

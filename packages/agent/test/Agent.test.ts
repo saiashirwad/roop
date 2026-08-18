@@ -178,6 +178,29 @@ it.layer(Main(hanging))("Agent kernel concurrency", (it) => {
     }),
   )
 
+  it.effect("publishes Finish to subscribers when the prompt fiber is interrupted", () =>
+    Effect.gen(function* () {
+      const agent = yield* Agent
+      const { fiber } = yield* startRun(agent, "work", "s-sub-interrupt")
+      const incoming = yield* Queue.unbounded<AgentEvent>()
+
+      yield* Effect.forkScoped(
+        Stream.runForEach(agent.subscribe("s-sub-interrupt"), (event) =>
+          Queue.offer(incoming, event),
+        ),
+      )
+      const first = yield* Queue.take(incoming)
+      assert.strictEqual(first._tag, "TextDelta")
+
+      yield* Fiber.interrupt(fiber)
+      const finish = yield* Queue.take(incoming)
+      assert.strictEqual(finish._tag, "Finish")
+      if (finish._tag === "Finish") {
+        assert.strictEqual(finish.reason, "interrupted")
+      }
+    }),
+  )
+
   it.effect("persists the user prompt even when interrupted", () =>
     Effect.gen(function* () {
       const agent = yield* Agent
@@ -525,6 +548,54 @@ it.effect(
         ),
       ),
     ),
+)
+
+it.effect("journals monotonic step/start indexes across continued turns", () =>
+  Effect.gen(function* () {
+    const agent = yield* Agent
+    yield* collect(
+      agent.prompt({
+        prompt: "start",
+        sessionId: "step-index-test",
+        policy: { maxTurns: 2 },
+      }),
+    )
+    const session = yield* agent.history("step-index-test")
+    const stepStarts = session.events.filter((event) => event._tag === "step/start")
+    assert.deepStrictEqual(
+      stepStarts.map((event) => event.index),
+      [1, 2],
+    )
+  }).pipe(
+    Effect.provide(
+      AgentLiveToolkit(EchoToolkit, {
+        models: [
+          {
+            id: "test",
+            provider: "test",
+            layer: modelLayer(
+              scripted([
+                [{ type: "text-delta" as const, id: "t1", delta: "turn 1" }],
+                [{ type: "text-delta" as const, id: "t2", delta: "turn 2" }],
+              ]),
+            ),
+          },
+        ],
+      }).pipe(
+        Layer.provide(
+          layerHook("always-continue", (downstream) =>
+            Effect.succeed({
+              ...downstream,
+              turnStopping: () => Effect.succeed({ prompt: "keep going" }),
+            }),
+          ).pipe(Layer.provide(layerNoop)),
+        ),
+        Layer.provide(SessionJournalMemory),
+        Layer.provide(cryptoWeb),
+        Layer.provide(EchoToolkit.toLayer({ echo: ({ note }) => Effect.succeed({ reply: note }) })),
+      ),
+    ),
+  ),
 )
 
 it.effect(

@@ -57,6 +57,7 @@ export const runLoop = (options: LoopOptions): Stream.Stream<AgentEvent, RunErro
       const scheduler = yield* makeToolScheduler(policy.toolConcurrency)
       let turn = 0
       let totalSteps = 0
+      let stepIndex = 0
 
       while (turn < policy.maxTurns) {
         turn += 1
@@ -68,10 +69,12 @@ export const runLoop = (options: LoopOptions): Stream.Stream<AgentEvent, RunErro
 
         while (true) {
           step += 1
+          stepIndex += 1
           const outcome = yield* runStep({
             sessionId: options.sessionId,
             turn,
             step,
+            stepIndex,
             chat: options.chat,
             model: options.model,
             toolkit: options.toolkit,
@@ -170,7 +173,16 @@ export const runLoop = (options: LoopOptions): Stream.Stream<AgentEvent, RunErro
             yield* Queue.fail(queue, runError(cleanup.cause, { sessionId: options.sessionId }))
             return
           }
-          if (!interrupted) {
+          // A Prompt consumer drop interrupts this fiber. Publish Finish so
+          // session subscribers are not left waiting on takeUntil(Finish).
+          if (interrupted) {
+            yield* emit({ _tag: "Finish", reason: "interrupted" }).pipe(Effect.ignore)
+          } else {
+            yield* emit({
+              _tag: "Finish",
+              reason: "failed",
+              message: Cause.pretty(cause).trim(),
+            }).pipe(Effect.ignore)
             yield* Queue.fail(queue, runError(cause, { sessionId: options.sessionId }))
           }
         })

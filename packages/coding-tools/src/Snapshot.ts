@@ -328,6 +328,8 @@ export interface SnapshotHookOptions {
   readonly mutatingTools?: ReadonlyArray<string>
   /** Revert the matching snapshot when a tool fails. Requires serialized mutating tools for safety. */
   readonly autoRevertOnFailure?: boolean | undefined
+  /** Record a shadow snapshot before each mutating tool even when auto-revert is off. */
+  readonly trackMutations?: boolean | undefined
 }
 
 const defaultMutatingTools = ["writeFile", "edit", "applyPatch", "bash"]
@@ -342,17 +344,30 @@ export const SnapshotHooks = (
     Effect.gen(function* () {
       const snapshot = yield* Snapshot
       const pending = yield* Ref.make<Map<string, ReadonlyArray<TreeHash>>>(new Map())
-      const executionLock = yield* Semaphore.make(1)
+      const locks = yield* Ref.make(new Map<string, Semaphore.Semaphore>())
       const keyFor = (
         context: { readonly sessionId: string; readonly turn: number; readonly step: number },
         name: string,
       ) => `${context.sessionId}:${context.turn}:${context.step}:${name}`
+      const lockFor = (sessionId: string) =>
+        Effect.gen(function* () {
+          const existing = (yield* Ref.get(locks)).get(sessionId)
+          if (existing !== undefined) return existing
+          const created = yield* Semaphore.make(1)
+          return yield* Ref.modify(locks, (map) => {
+            const raced = map.get(sessionId)
+            if (raced !== undefined) return [raced, map] as const
+            const next = new Map(map)
+            next.set(sessionId, created)
+            return [created, next] as const
+          })
+        })
 
       return {
         ...downstream,
         beforeToolExecute: (context, call) =>
           Effect.gen(function* () {
-            if (options?.autoRevertOnFailure === true) {
+            if (options?.autoRevertOnFailure === true || options?.trackMutations !== true) {
               return yield* downstream.beforeToolExecute(context, call)
             }
             if (!mutatingTools.has(call.name))
@@ -382,43 +397,52 @@ export const SnapshotHooks = (
             }
 
             // The scheduler has already admitted this effect. Hold the
-            // snapshot transaction lock for the complete tool stream, so a
+            // per-session snapshot lock for the complete tool stream, so a
             // failure can only revert its own immediately preceding state.
-            yield* executionLock.take(1)
-            const treeHash = yield* snapshot
-              .track({
-                label: `before-${call.name}-t${context.turn}-s${context.step}`,
-                turn: context.turn,
-                step: context.step,
-                toolCallName: call.name,
-              })
-              .pipe(Effect.orElseSucceed(() => undefined))
-
-            if (treeHash === undefined) {
-              yield* executionLock.release(1)
-              return yield* execute
-            }
-
-            const key = keyFor(context, call.name)
-            yield* Ref.update(pending, (entries) => {
-              const next = new Map(entries)
-              next.set(key, [...(next.get(key) ?? []), treeHash])
-              return next
-            })
-
-            const release = executionLock.release(1)
-            const stream = yield* execute.pipe(
-              Effect.onExit((exit) =>
-                Exit.isFailure(exit)
-                  ? snapshot.revert(treeHash).pipe(Effect.ignore, Effect.andThen(release))
-                  : Effect.void,
-              ),
+            const lock = yield* lockFor(context.sessionId)
+            const released = yield* Ref.make(false)
+            const releaseOnce = Ref.modify(released, (done) => [done, true] as const).pipe(
+              Effect.flatMap((done) => (done ? Effect.void : lock.release(1))),
             )
-            return stream.pipe(
-              Stream.onExit((exit) =>
-                Exit.isFailure(exit) ? snapshot.revert(treeHash).pipe(Effect.ignore) : Effect.void,
-              ),
-              Stream.ensuring(release),
+
+            return yield* Effect.uninterruptibleMask((restore) =>
+              Effect.gen(function* () {
+                yield* lock.take(1)
+                return yield* restore(
+                  Effect.gen(function* () {
+                    const treeHash = yield* snapshot
+                      .track({
+                        label: `before-${call.name}-t${context.turn}-s${context.step}`,
+                        turn: context.turn,
+                        step: context.step,
+                        toolCallName: call.name,
+                      })
+                      .pipe(Effect.orElseSucceed(() => undefined))
+
+                    if (treeHash === undefined) {
+                      return (yield* execute).pipe(Stream.ensuring(releaseOnce))
+                    }
+
+                    const key = keyFor(context, call.name)
+                    yield* Ref.update(pending, (entries) => {
+                      const next = new Map(entries)
+                      next.set(key, [...(next.get(key) ?? []), treeHash])
+                      return next
+                    })
+
+                    return (yield* execute).pipe(
+                      Stream.onExit((exit) =>
+                        Exit.isFailure(exit)
+                          ? snapshot.revert(treeHash).pipe(Effect.ignore)
+                          : Effect.void,
+                      ),
+                      Stream.ensuring(releaseOnce),
+                    )
+                  }).pipe(
+                    Effect.onExit((exit) => (Exit.isFailure(exit) ? releaseOnce : Effect.void)),
+                  ),
+                )
+              }),
             )
           }),
         afterToolExecute: (context, call, isFailure) =>

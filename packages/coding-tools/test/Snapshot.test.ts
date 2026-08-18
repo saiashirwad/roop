@@ -56,7 +56,31 @@ describe("Snapshot", () => {
     ),
   )
 
-  it.effect("SnapshotHooks: takes pre-tool shadow snapshots for mutating tools", () =>
+  it.effect("SnapshotHooks: default policy does not snapshot mutating tools", () =>
+    Effect.gen(function* () {
+      const snapshot = yield* Snapshot
+      const hooks = yield* AgentHooks
+      const dummyCtx: RunContext = { sessionId: "s1", turn: 1, step: 1 }
+      const writeCall: ToolCallInfo = {
+        name: "writeFile",
+        params: { path: "a.ts", content: "data" },
+      }
+
+      yield* hooks.beforeToolExecute(dummyCtx, writeCall)
+      assert.strictEqual((yield* snapshot.history).length, 0)
+    }).pipe(
+      Effect.provide(
+        SnapshotHooks().pipe(
+          Layer.provideMerge(Snapshot.memory()),
+          Layer.provideMerge(ExecutionWorld.memory({ root: "/workspace" })),
+          Layer.provideMerge(NodePath.layer),
+          Layer.provideMerge(layerNoop),
+        ),
+      ),
+    ),
+  )
+
+  it.effect("SnapshotHooks: takes pre-tool shadow snapshots when trackMutations is on", () =>
     Effect.gen(function* () {
       const snapshot = yield* Snapshot
       const hooks = yield* AgentHooks
@@ -80,7 +104,7 @@ describe("Snapshot", () => {
       assert.strictEqual(history[0]?.toolCallName, "writeFile")
     }).pipe(
       Effect.provide(
-        SnapshotHooks().pipe(
+        SnapshotHooks({ trackMutations: true }).pipe(
           Layer.provideMerge(Snapshot.memory()),
           Layer.provideMerge(ExecutionWorld.memory({ root: "/workspace" })),
           Layer.provideMerge(NodePath.layer),

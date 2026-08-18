@@ -552,6 +552,66 @@ it.effect("ExecutionWorld.memory: runs in-memory without host disk access", () =
   ),
 )
 
+it.effect("CodingTools.readFile: offset and limit return a line window", () =>
+  Effect.gen(function* () {
+    const agent = yield* Agent
+    const events = yield* Stream.runCollect(
+      agent.prompt({ prompt: "read a slice", sessionId: "s-read-window" }),
+    ).pipe(Effect.map((chunk) => [...chunk]))
+
+    /* SAFETY: the filter checks the discriminant before narrowing this test fixture. */
+    const toolResults = events.filter(isToolResult) as ReadonlyArray<any>
+    assert.strictEqual(toolResults.length, 1)
+    assert.strictEqual(toolResults[0].isFailure, false)
+    assert.strictEqual(toolResults[0].result.content, "line-2\nline-3")
+    assert.strictEqual(toolResults[0].result.lineOffset, 1)
+    assert.strictEqual(toolResults[0].result.totalLines, 4)
+    assert.strictEqual(toolResults[0].result.nextOffset, 3)
+  }).pipe(
+    Effect.provide(
+      AgentPlugins([
+        CodingTools(),
+        Plugin({
+          name: "model",
+          models: [
+            {
+              id: "fake",
+              provider: "test",
+              layer: Layer.effect(
+                LanguageModel.LanguageModel,
+                scripted([
+                  [
+                    {
+                      type: "tool-call",
+                      id: "c1",
+                      name: "readFile",
+                      params: { path: "lines.txt", offset: 1, limit: 2 },
+                    },
+                  ],
+                  [{ type: "text-delta", id: "t1", delta: "done" }],
+                ]),
+              ),
+            },
+          ],
+        }),
+      ]).pipe(
+        Layer.provide(SessionJournalMemory),
+        Layer.provide(cryptoWeb),
+        Layer.provide(Truncate.memory()),
+        Layer.provide(
+          ExecutionWorld.memory({
+            root: "/virtual-workspace",
+            files: {
+              "/virtual-workspace/lines.txt": "line-1\nline-2\nline-3\nline-4",
+            },
+          }),
+        ),
+        Layer.provide(NodePath.layer),
+      ),
+    ),
+  ),
+)
+
 it.effect("ExecutionWorld.memory: fails missing files through error channel as ToolFailure", () =>
   Effect.gen(function* () {
     const agent = yield* Agent
