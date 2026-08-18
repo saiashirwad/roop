@@ -8,7 +8,7 @@ import {
   type RunContext,
   type ToolCallInfo,
 } from "@roop/agent/AgentHooks.ts"
-import { Effect, FileSystem, Layer } from "effect"
+import { Effect, FileSystem, Layer, Stream } from "effect"
 
 import { ExecutionWorld } from "../src/ExecutionWorld.ts"
 import { Snapshot, SnapshotHooks } from "../src/Snapshot.ts"
@@ -81,6 +81,53 @@ describe("Snapshot", () => {
     }).pipe(
       Effect.provide(
         SnapshotHooks().pipe(
+          Layer.provideMerge(Snapshot.memory()),
+          Layer.provideMerge(ExecutionWorld.memory({ root: "/workspace" })),
+          Layer.provideMerge(NodePath.layer),
+          Layer.provideMerge(layerNoop),
+        ),
+      ),
+    ),
+  )
+
+  it.effect("SnapshotHooks: serializes auto-revert transactions", () =>
+    Effect.gen(function* () {
+      const world = yield* ExecutionWorld
+      const hooks = yield* AgentHooks
+      const call: ToolCallInfo = {
+        name: "writeFile",
+        params: { path: "a.ts", content: "ignored" },
+      }
+
+      yield* world.filesystem.writeFileString("/workspace/a.ts", "initial")
+
+      const run = (step: number, content: string, isFailure: boolean) =>
+        Effect.gen(function* () {
+          const context: RunContext = { sessionId: "s1", turn: 1, step }
+          const stream = yield* hooks.withToolExecution(
+            context,
+            call,
+            Effect.succeed(
+              Stream.fromEffect(
+                world.filesystem
+                  .writeFileString("/workspace/a.ts", content)
+                  .pipe(Effect.as({ isFailure })),
+              ),
+            ),
+          )
+          yield* Stream.runDrain(
+            stream.pipe(Stream.tap(() => hooks.afterToolExecute(context, call, isFailure))),
+          )
+        })
+
+      yield* Effect.all([run(1, "failed", true), run(2, "successful", false)], {
+        concurrency: "unbounded",
+      })
+
+      assert.strictEqual(yield* world.filesystem.readFileString("/workspace/a.ts"), "successful")
+    }).pipe(
+      Effect.provide(
+        SnapshotHooks({ autoRevertOnFailure: true }).pipe(
           Layer.provideMerge(Snapshot.memory()),
           Layer.provideMerge(ExecutionWorld.memory({ root: "/workspace" })),
           Layer.provideMerge(NodePath.layer),

@@ -258,16 +258,23 @@ const interceptToolkit = (
         const token = correlator.allocateToken(name)
         const admitted = yield* hooks.beforeToolExecute(context(), { name, params })
         const scheduled = scheduler.scheduleEffect(
-          toolkit.handle(name, admitted.params).pipe(
-            Effect.provideService(AgentEmit, {
-              emit: (event) => {
-                if (event._tag === "Subagent") {
-                  return emit({ ...event, toolCallId: token })
-                }
-                return emit(event)
-              },
-              toolCallId: token,
-            }),
+          Effect.suspend(() =>
+            /* oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- Tool.Any's existential requirements channel is preserved through the generic execution hook. */
+            hooks.withToolExecution(
+              context(),
+              { name, params: admitted.params },
+              toolkit.handle(name, admitted.params).pipe(
+                Effect.provideService(AgentEmit, {
+                  emit: (event) => {
+                    if (event._tag === "Subagent") {
+                      return emit({ ...event, toolCallId: token })
+                    }
+                    return emit(event)
+                  },
+                  toolCallId: token,
+                }),
+              ),
+            ),
           ),
         )
         const timed =

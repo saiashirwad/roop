@@ -1,5 +1,5 @@
 import { type AgentHooks, layerHook } from "@roop/agent/AgentHooks.ts"
-import { Clock, Context, Effect, Layer, Path, Ref, Schema, Semaphore, Stream } from "effect"
+import { Clock, Context, Effect, Exit, Layer, Path, Ref, Schema, Semaphore, Stream } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 
 import { ExecutionWorld } from "./ExecutionWorld.ts"
@@ -342,6 +342,7 @@ export const SnapshotHooks = (
     Effect.gen(function* () {
       const snapshot = yield* Snapshot
       const pending = yield* Ref.make<Map<string, ReadonlyArray<TreeHash>>>(new Map())
+      const executionLock = yield* Semaphore.make(1)
       const keyFor = (
         context: { readonly sessionId: string; readonly turn: number; readonly step: number },
         name: string,
@@ -351,6 +352,9 @@ export const SnapshotHooks = (
         ...downstream,
         beforeToolExecute: (context, call) =>
           Effect.gen(function* () {
+            if (options?.autoRevertOnFailure === true) {
+              return yield* downstream.beforeToolExecute(context, call)
+            }
             if (!mutatingTools.has(call.name))
               return yield* downstream.beforeToolExecute(context, call)
             const treeHash = yield* snapshot
@@ -361,7 +365,7 @@ export const SnapshotHooks = (
                 toolCallName: call.name,
               })
               .pipe(Effect.orElseSucceed(() => undefined))
-            if (treeHash !== undefined && options?.autoRevertOnFailure === true) {
+            if (treeHash !== undefined) {
               const key = keyFor(context, call.name)
               yield* Ref.update(pending, (entries) => {
                 const next = new Map(entries)
@@ -370,6 +374,52 @@ export const SnapshotHooks = (
               })
             }
             return yield* downstream.beforeToolExecute(context, call)
+          }),
+        withToolExecution: (context, call, execute) =>
+          Effect.gen(function* () {
+            if (options?.autoRevertOnFailure !== true || !mutatingTools.has(call.name)) {
+              return yield* execute
+            }
+
+            // The scheduler has already admitted this effect. Hold the
+            // snapshot transaction lock for the complete tool stream, so a
+            // failure can only revert its own immediately preceding state.
+            yield* executionLock.take(1)
+            const treeHash = yield* snapshot
+              .track({
+                label: `before-${call.name}-t${context.turn}-s${context.step}`,
+                turn: context.turn,
+                step: context.step,
+                toolCallName: call.name,
+              })
+              .pipe(Effect.orElseSucceed(() => undefined))
+
+            if (treeHash === undefined) {
+              yield* executionLock.release(1)
+              return yield* execute
+            }
+
+            const key = keyFor(context, call.name)
+            yield* Ref.update(pending, (entries) => {
+              const next = new Map(entries)
+              next.set(key, [...(next.get(key) ?? []), treeHash])
+              return next
+            })
+
+            const release = executionLock.release(1)
+            const stream = yield* execute.pipe(
+              Effect.onExit((exit) =>
+                Exit.isFailure(exit)
+                  ? snapshot.revert(treeHash).pipe(Effect.ignore, Effect.andThen(release))
+                  : Effect.void,
+              ),
+            )
+            return stream.pipe(
+              Stream.onExit((exit) =>
+                Exit.isFailure(exit) ? snapshot.revert(treeHash).pipe(Effect.ignore) : Effect.void,
+              ),
+              Stream.ensuring(release),
+            )
           }),
         afterToolExecute: (context, call, isFailure) =>
           Effect.gen(function* () {

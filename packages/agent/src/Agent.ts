@@ -176,21 +176,21 @@ export const AgentLive: Layer.Layer<
         Stream.unwrap(
           Effect.gen(function* () {
             const sid = SessionId.make(sessionId)
-            const session = yield* store.load(sid)
             const isActive = yield* runs.isActive(sid)
 
-            const replayed = sessionEventsToAgentEvents(session.events, options?.replayFromStep)
-            const pastStream = Stream.fromIterable(replayed)
-
-            if (!isActive) {
-              return pastStream
+            if (isActive) {
+              // The bus owns an atomic history/live boundary for active runs.
+              // Durable replay remains available through `history` and is used
+              // below once the run has completed.
+              return (yield* bus.subscribe(sid)).pipe(
+                Stream.takeUntil((event) => event._tag === "Finish"),
+              )
             }
 
-            const liveStream = bus
-              .subscribe(sid)
-              .pipe(Stream.takeUntil((event) => event._tag === "Finish"))
-
-            return Stream.concat(pastStream, liveStream)
+            const session = yield* store.load(sid)
+            return Stream.fromIterable(
+              sessionEventsToAgentEvents(session.events, options?.replayFromStep),
+            )
           }),
         ),
       steer: (sessionId, message) => runs.steer(sessionId, message),

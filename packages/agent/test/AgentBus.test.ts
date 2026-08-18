@@ -71,21 +71,55 @@ describe("AgentBus", () => {
     assert.deepStrictEqual(projected[4], { _tag: "Finish", reason: "completed" })
   })
 
+  it("projects only the terminal turn/end as Finish", () => {
+    const projected = sessionEventsToAgentEvents([
+      { _tag: "step/start", index: 1 },
+      { _tag: "assistant/message", parts: [{ type: "text", text: "first" }] },
+      { _tag: "turn/end", reason: "completed" },
+      { _tag: "user/message", content: "continue" },
+      { _tag: "step/start", index: 2 },
+      { _tag: "assistant/message", parts: [{ type: "text", text: "second" }] },
+      { _tag: "turn/end", reason: "completed" },
+    ])
+
+    assert.deepStrictEqual(
+      projected.map((event) => event._tag),
+      ["TextDelta", "TextDelta", "Finish"],
+    )
+    assert.deepStrictEqual(projected[2], { _tag: "Finish", reason: "completed" })
+  })
+
   it.effect("AgentBus publishes and distributes events to active session subscribers", () =>
     Effect.gen(function* () {
       const bus = yield* AgentBus
 
+      const historyEvent: AgentEvent = { _tag: "TextDelta", delta: "already published" }
       const testEvent: AgentEvent = { _tag: "TextDelta", delta: "streaming text" }
 
-      const streamFiber = yield* Effect.forkChild(
-        Stream.runCollect(bus.subscribe("session-123").pipe(Stream.take(1))),
-      )
+      yield* bus.publish({ sessionId: SessionId.make("session-123"), event: historyEvent })
+      const stream = yield* bus.subscribe("session-123")
+      const streamFiber = yield* Effect.forkChild(Stream.runCollect(stream.pipe(Stream.take(2))))
 
       yield* Effect.yieldNow
       yield* bus.publish({ sessionId: SessionId.make("session-123"), event: testEvent })
 
       const collected = yield* Fiber.join(streamFiber)
-      assert.deepStrictEqual([...collected], [testEvent])
+      assert.deepStrictEqual([...collected], [historyEvent, testEvent])
+    }).pipe(Effect.scoped, Effect.provide(AgentBusMemory)),
+  )
+
+  it.effect("AgentBus starts a fresh history after a completed run", () =>
+    Effect.gen(function* () {
+      const bus = yield* AgentBus
+      const sessionId = SessionId.make("session-reused")
+
+      yield* bus.publish({ sessionId, event: { _tag: "TextDelta", delta: "old" } })
+      yield* bus.publish({ sessionId, event: { _tag: "Finish", reason: "completed" } })
+      yield* bus.publish({ sessionId, event: { _tag: "TextDelta", delta: "new" } })
+
+      const stream = yield* bus.subscribe(sessionId)
+      const collected = yield* Stream.runCollect(stream.pipe(Stream.take(1)))
+      assert.deepStrictEqual([...collected], [{ _tag: "TextDelta", delta: "new" }])
     }).pipe(Effect.scoped, Effect.provide(AgentBusMemory)),
   )
 
