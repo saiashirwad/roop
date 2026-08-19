@@ -616,10 +616,11 @@ it.effect(
                 yield* Ref.update(prompts, (p) => [...p, options.prompt.content])
                 const seen = yield* Ref.get(prompts)
                 if (seen.length === 1) {
-                  // Turn 1: emit partial delta and hang until steered
+                  // Turn 1: finish one text part and hang until steered
                   const stream: Stream.Stream<Response.StreamPartEncoded> = Stream.make(
                     { type: "text-start", id: "t1" },
                     { type: "text-delta", id: "t1", delta: "I was working on " },
+                    { type: "text-end", id: "t1" },
                   ).pipe(Stream.concat(Stream.never))
                   return stream
                 }
@@ -677,6 +678,22 @@ it.effect(
           // Collect all events until stream finishes
           yield* Fiber.join(fiber)
 
+          const requests = yield* Ref.get(prompts)
+          assert.strictEqual(requests.length, 2)
+          /* SAFETY: Captured model prompts contain Effect Prompt messages and parts. */
+          const steeredRequest = requests[1] as ReadonlyArray<{
+            readonly role: string
+            readonly content: ReadonlyArray<{ readonly type: string; readonly text?: string }>
+          }>
+          assert.deepStrictEqual(
+            steeredRequest.map((message) => message.role),
+            ["user", "assistant", "user"],
+          )
+          assert.deepStrictEqual(
+            steeredRequest[1]?.content.map((part) => ({ type: part.type, text: part.text })),
+            [{ type: "text", text: "I was working on " }],
+          )
+
           const remainingEvents = yield* Queue.takeAll(queue)
           const allDeltas = [firstEvent, ...remainingEvents]
             .filter((e) => e._tag === "TextDelta")
@@ -716,6 +733,102 @@ it.effect(
         }).pipe(Effect.provide(appLayer))
       }),
     ),
+)
+
+it.effect("presents a steered tool call exactly once to the next model request", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const startedSteerTurn = yield* Deferred.make<void>()
+      const prompts = yield* Ref.make<Array<ReadonlyArray<unknown>>>([])
+
+      const modelService = yield* LanguageModel.make({
+        generateText: () => Effect.succeed([]),
+        streamText: (options: { readonly prompt: { readonly content: ReadonlyArray<unknown> } }) =>
+          Stream.unwrap(
+            Effect.gen(function* () {
+              yield* Ref.update(prompts, (all) => [...all, options.prompt.content])
+              const seen = yield* Ref.get(prompts)
+              if (seen.length === 1) {
+                const stream: Stream.Stream<Response.StreamPartEncoded> = Stream.make({
+                  type: "tool-call" as const,
+                  id: "steered-call",
+                  name: "echo",
+                  params: { note: "before steer" },
+                })
+                return stream
+              }
+              yield* Deferred.succeed(startedSteerTurn, undefined)
+              const stream: Stream.Stream<Response.StreamPartEncoded> = Stream.make(
+                { type: "text-start" as const, id: "after-steer" },
+                { type: "text-delta" as const, id: "after-steer", delta: "Changed course" },
+                { type: "text-end" as const, id: "after-steer" },
+              )
+              return stream
+            }),
+          ),
+      })
+
+      const appLayer = AgentLiveToolkit(EchoToolkit, {
+        models: [
+          {
+            id: "steer-tool-model",
+            provider: "test",
+            layer: Layer.succeed(LanguageModel.LanguageModel, modelService),
+          },
+        ],
+      }).pipe(
+        Layer.provide(SessionJournalMemory),
+        Layer.provide(cryptoWeb),
+        Layer.provide(EchoToolkit.toLayer({ echo: () => Effect.never })),
+      )
+
+      yield* Effect.gen(function* () {
+        const agent = yield* Agent
+        const sid = "steer-tool-session"
+        const queue = yield* Queue.unbounded<AgentEvent>()
+
+        const fiber = yield* Effect.forkScoped(
+          Stream.runForEach(agent.prompt({ prompt: "initial task", sessionId: sid }), (event) =>
+            Queue.offer(queue, event),
+          ),
+        )
+
+        const firstEvent = yield* Queue.take(queue)
+        assert.strictEqual(firstEvent._tag, "ToolCall")
+        yield* agent.steer(sid, "Use another approach")
+
+        yield* Deferred.await(startedSteerTurn)
+        yield* Fiber.join(fiber)
+
+        const requests = yield* Ref.get(prompts)
+        assert.strictEqual(requests.length, 2)
+        /* SAFETY: Captured model prompts contain Effect Prompt messages and parts. */
+        const steeredRequest = requests[1] as ReadonlyArray<{
+          readonly role: string
+          readonly content: ReadonlyArray<{
+            readonly type: string
+            readonly id?: string
+            readonly name?: string
+          }>
+        }>
+        assert.deepStrictEqual(
+          steeredRequest.map((message) => message.role),
+          ["user", "assistant", "user"],
+        )
+        assert.deepStrictEqual(
+          steeredRequest[1]?.content.map((part) => ({
+            type: part.type,
+            id: part.id,
+            name: part.name,
+          })),
+          [{ type: "tool-call", id: "steered-call", name: "echo" }],
+        )
+
+        const session = yield* agent.history(sid)
+        assert.strictEqual(session.events.filter((event) => event._tag === "tool/call").length, 1)
+      }).pipe(Effect.provide(appLayer))
+    }),
+  ),
 )
 
 it.effect("processes multiple steer messages in rapid succession across turns", () =>

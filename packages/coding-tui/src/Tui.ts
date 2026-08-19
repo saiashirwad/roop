@@ -18,6 +18,7 @@ import { cryptoWeb } from "@roop/agent/cryptoWeb.ts"
 import { Cause, Clock, Crypto, Effect, FiberSet, Option, Queue, Stream } from "effect"
 import { RpcClient } from "effect/unstable/rpc"
 
+import { ensureSessionId, forkSessionRequest } from "./sessionIdentity.ts"
 import { bold, cyan, dim, editorTheme, markdownTheme, red, reasoningTextStyle } from "./theme.ts"
 import { renderToolCall } from "./toolViews.ts"
 
@@ -40,7 +41,7 @@ const main = Effect.gen(function* () {
   const client = yield* RpcClient.make(AgentRpc).pipe(Effect.provide(AgentRpcClientHttp(url)))
   const caps = yield* client.Capabilities()
   const crypto = yield* Crypto.Crypto
-  let sessionId = yield* Effect.orDie(crypto.randomUUIDv4)
+  let sessionId: string | undefined
   let modelId: string = caps.defaultModelId
   const actions = yield* Queue.unbounded<Action>()
 
@@ -65,10 +66,12 @@ const main = Effect.gen(function* () {
     }
     return undefined
   })
-  const headerText = () =>
-    `${bold("roop")} ${dim(`— ${url}`)} ${cyan(`[${sessionId.slice(0, 8)}]`)}\n${dim(
+  const headerText = () => {
+    const session = sessionId === undefined ? dim("[unsaved]") : cyan(`[${sessionId.slice(0, 8)}]`)
+    return `${bold("roop")} ${dim(`— ${url}`)} ${session}\n${dim(
       `model ${modelId} · tools ${caps.tools.map((tool) => tool.name).join(", ")} · enter to send · esc to interrupt · ctrl+c to quit`,
     )}`
+  }
   const header = new Text(headerText(), 0, 1)
   tui.addChild(header)
   tui.addChild(chat)
@@ -265,11 +268,12 @@ const main = Effect.gen(function* () {
           return
         }
         case "fork": {
-          const forkResult = yield* Effect.exit(
-            arg !== undefined && arg.trim() !== ""
-              ? client.ForkSession({ fromSessionId: sessionId, toSessionId: arg.trim() })
-              : client.ForkSession({ fromSessionId: sessionId }),
-          )
+          const request = forkSessionRequest(sessionId, arg)
+          if (request === undefined) {
+            info(dim("no saved session to fork"))
+            return
+          }
+          const forkResult = yield* Effect.exit(client.ForkSession(request))
           if (forkResult._tag === "Failure") {
             info(red(`failed to fork session: ${String(forkResult.cause)}`))
             return
@@ -280,10 +284,10 @@ const main = Effect.gen(function* () {
           return
         }
         case "new": {
-          sessionId = yield* Effect.orDie(crypto.randomUUIDv4)
+          sessionId = undefined
           chat.clear()
           header.setText(headerText())
-          info(dim("new session"))
+          tui.requestRender()
           return
         }
         case "help": {
@@ -300,7 +304,7 @@ const main = Effect.gen(function* () {
       }
     })
 
-  const run = (prompt: string) =>
+  const run = (prompt: string, sessionId: string) =>
     Effect.gen(function* () {
       chat.addChild(new Text(`${cyan("❯")} ${bold(prompt)}`, 0, 1))
       const loader = new Loader(tui, dim, dim, "working")
@@ -470,16 +474,27 @@ const main = Effect.gen(function* () {
               ),
             )
           }
-          activePromptSessionId = sessionId
-          return Effect.forkScoped(
-            run(action.text).pipe(
-              Effect.ensuring(
-                Effect.sync(() => {
-                  activePromptSessionId = undefined
-                }),
+          return Effect.gen(function* () {
+            const promptSessionId = yield* ensureSessionId(
+              sessionId,
+              Effect.orDie(crypto.randomUUIDv4),
+            )
+            if (sessionId === undefined) {
+              sessionId = promptSessionId
+              header.setText(headerText())
+              tui.requestRender()
+            }
+            activePromptSessionId = promptSessionId
+            yield* Effect.forkScoped(
+              run(action.text, promptSessionId).pipe(
+                Effect.ensuring(
+                  Effect.sync(() => {
+                    activePromptSessionId = undefined
+                  }),
+                ),
               ),
-            ),
-          )
+            )
+          })
         }
         case "Interrupt": {
           const target = activePromptSessionId

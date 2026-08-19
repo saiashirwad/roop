@@ -15,6 +15,7 @@ export default defineConfig({
     },
   },
   server: {
+    allowedHosts: process.env.AMP_ORB === "1" ? true : [],
     proxy: { "/rpc": harnessUrl },
   },
 })

@@ -285,7 +285,6 @@ describe("runStep", () => {
       assert.strictEqual(outcome._tag, "Steered")
       if (outcome._tag === "Steered") {
         assert.strictEqual(outcome.steerPrompt, "Do this instead")
-        assert.deepStrictEqual(outcome.partialParts, [])
       }
       const journalEvents = yield* Ref.get(journal)
       assert.deepStrictEqual(journalEvents[journalEvents.length - 1], {
@@ -341,12 +340,6 @@ describe("runStep", () => {
         assert.strictEqual(outcome._tag, "Steered")
         if (outcome._tag === "Steered") {
           assert.strictEqual(outcome.steerPrompt, "Change direction")
-          assert.ok(outcome.partialParts.length >= 3)
-          // Verify synthetic text-end was added
-          const lastPart = outcome.partialParts[outcome.partialParts.length - 1]
-          assert.strictEqual(lastPart?.type, "text-end")
-          /* SAFETY: Synthetic text-end carries the open stream part ID. */
-          assert.strictEqual((lastPart as any)?.id, "t1")
         }
 
         const journalEvents = yield* Ref.get(journal)
@@ -403,10 +396,6 @@ describe("runStep", () => {
         assert.strictEqual(outcome._tag, "Steered")
         if (outcome._tag === "Steered") {
           assert.strictEqual(outcome.steerPrompt, "Stop thinking")
-          const lastPart = outcome.partialParts[outcome.partialParts.length - 1]
-          assert.strictEqual(lastPart?.type, "reasoning-end")
-          /* SAFETY: Synthetic reasoning-end carries the open stream part ID. */
-          assert.strictEqual((lastPart as any)?.id, "r1")
         }
 
         const journalEvents = yield* Ref.get(journal)
