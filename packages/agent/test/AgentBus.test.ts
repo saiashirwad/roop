@@ -128,7 +128,37 @@ describe("AgentBus", () => {
     }).pipe(Effect.scoped, Effect.provide(AgentBusMemory)),
   )
 
-  it.effect("AgentBus starts a fresh history after a completed run", () =>
+  it.effect("AgentBus delivers Finish to a live subscriber", () =>
+    Effect.gen(function* () {
+      const bus = yield* AgentBus
+      const sessionId = SessionId.make("session-live-finish")
+      const finish: AgentEvent = { _tag: "Finish", reason: "completed" }
+      const stream = yield* bus.subscribe(sessionId)
+
+      yield* bus.publish({ sessionId, event: finish })
+
+      const collected = yield* Stream.runCollect(stream.pipe(Stream.take(1)))
+      assert.deepStrictEqual([...collected], [finish])
+    }).pipe(Effect.scoped, Effect.provide(AgentBusMemory)),
+  )
+
+  it.effect("AgentBus retains no completed-run events for subscribers joining after Finish", () =>
+    Effect.gen(function* () {
+      const bus = yield* AgentBus
+      const sessionId = SessionId.make("session-after-finish")
+      const freshEvent: AgentEvent = { _tag: "TextDelta", delta: "fresh" }
+
+      yield* bus.publish({ sessionId, event: { _tag: "TextDelta", delta: "completed" } })
+      yield* bus.publish({ sessionId, event: { _tag: "Finish", reason: "completed" } })
+      const stream = yield* bus.subscribe(sessionId)
+      yield* bus.publish({ sessionId, event: freshEvent })
+
+      const collected = yield* Stream.runCollect(stream.pipe(Stream.take(1)))
+      assert.deepStrictEqual([...collected], [freshEvent])
+    }).pipe(Effect.scoped, Effect.provide(AgentBusMemory)),
+  )
+
+  it.effect("AgentBus replays only the new run after a completed run", () =>
     Effect.gen(function* () {
       const bus = yield* AgentBus
       const sessionId = SessionId.make("session-reused")

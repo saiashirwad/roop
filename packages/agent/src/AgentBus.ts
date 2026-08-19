@@ -126,8 +126,8 @@ export interface AgentBusService {
 
 export class AgentBus extends Context.Service<AgentBus, AgentBusService>()("roop/AgentBus") {
   /**
-   * In-memory session log plus live queues. Registration and publishing share
-   * one lock, so a subscriber gets an atomic history/live boundary.
+   * In-progress session histories plus live queues. Registration and publishing
+   * share one lock, so a subscriber gets an atomic history/live boundary.
    */
   static readonly memory: Layer.Layer<AgentBus> = Layer.effect(
     AgentBus,
@@ -149,9 +149,11 @@ export class AgentBus extends Context.Service<AgentBus, AgentBusService>()("roop
                 const sid = String(envelope.sessionId)
                 yield* Ref.update(history, (entries) => {
                   const next = new Map(entries)
-                  const previous = next.get(sid) ?? []
-                  const base = previous.at(-1)?._tag === "Finish" ? [] : previous
-                  next.set(sid, [...base, envelope.event])
+                  if (envelope.event._tag === "Finish") {
+                    next.delete(sid)
+                  } else {
+                    next.set(sid, [...(next.get(sid) ?? []), envelope.event])
+                  }
                   return next
                 })
                 const current = yield* Ref.get(subscribers)
@@ -170,11 +172,7 @@ export class AgentBus extends Context.Service<AgentBus, AgentBusService>()("roop
               const queue = yield* Queue.unbounded<AgentEvent>()
               const id = yield* Ref.modify(nextId, (value) => [value, value + 1] as const)
               const entries = sid === undefined ? [] : ((yield* Ref.get(history)).get(sid) ?? [])
-              let lastFinish = -1
-              for (let index = 0; index < entries.length; index += 1) {
-                if (entries[index]?._tag === "Finish") lastFinish = index
-              }
-              const past = options?.liveOnly === true ? [] : entries.slice(lastFinish + 1)
+              const past = options?.liveOnly === true ? [] : entries
               yield* Ref.update(subscribers, (entries) => {
                 const next = new Map(entries)
                 next.set(id, { sessionId: sid, queue })

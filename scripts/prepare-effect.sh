@@ -9,6 +9,8 @@ repo_revision="fbefa850fab2f0a302c20614496aeaaa2a8b5590"
 if [ ! -d "$repo_dir/.git" ]; then
   mkdir -p ".repos"
   git clone --no-checkout "$repo_url" "$repo_dir"
+  git -C "$repo_dir" fetch --depth=1 origin "$repo_revision"
+  git -C "$repo_dir" checkout --detach "$repo_revision"
 fi
 
 is_clean_checkout() {

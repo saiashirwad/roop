@@ -1,4 +1,4 @@
-import { Cause, Effect, Option, Stream } from "effect"
+import { Cause, Effect, Option, Ref, Stream } from "effect"
 import {
   type AiError,
   type Chat,
@@ -58,7 +58,6 @@ export type StepOutcome =
   | {
       readonly _tag: "Steered"
       readonly steerPrompt: string
-      readonly partialParts: ReadonlyArray<Response.StreamPart<Record<string, Tool.Any>>>
     }
 
 export interface RunStepOptions {
@@ -373,7 +372,6 @@ export const runStep = (
       return {
         _tag: "Steered" as const,
         steerPrompt: pendingSteer.value,
-        partialParts: [],
       }
     }
 
@@ -392,7 +390,6 @@ export const runStep = (
       return {
         _tag: "Steered" as const,
         steerPrompt: preStep.steerPrompt,
-        partialParts: [],
       }
     }
 
@@ -408,6 +405,7 @@ export const runStep = (
 
     const toolkit = yield* options.toolkit
     const collectedParts: Array<Response.StreamPart<Record<string, Tool.Any>>> = []
+    const preStepHistory = yield* Ref.get(options.chat.history)
 
     const modelStream = options.chat
       .streamText({
@@ -471,13 +469,16 @@ export const runStep = (
 
     if (outcome._tag === "Steered") {
       closeOpenParts(collectedParts)
+      yield* Ref.set(
+        options.chat.history,
+        Prompt.concat(preStepHistory, Prompt.fromResponseParts(collectedParts)),
+      )
       yield* appendStepEvents(options.append, collectedParts)
       yield* options.append({ _tag: "step/end", reason: "interrupted" })
       closed = true
       return {
         _tag: "Steered" as const,
         steerPrompt: outcome.steerPrompt,
-        partialParts: collectedParts,
       }
     }
 

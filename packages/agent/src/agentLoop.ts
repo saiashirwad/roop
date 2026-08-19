@@ -1,6 +1,5 @@
 import { Cause, Effect, Exit, Queue, Ref, Stream } from "effect"
-import { Prompt, type Chat, type LanguageModel, type Response } from "effect/unstable/ai"
-import type * as Tool from "effect/unstable/ai/Tool"
+import { Prompt, type Chat, type LanguageModel } from "effect/unstable/ai"
 
 import type { AgentEvent, SessionEvent } from "./AgentEvents.ts"
 import type { AgentHooksInterface } from "./AgentHooks.ts"
@@ -35,21 +34,11 @@ export const runLoop = (options: LoopOptions): Stream.Stream<AgentEvent, RunErro
     let turnOpen = false
     const emit = (event: AgentEvent) => Queue.offer(queue, event)
 
-    const appendUserPrompt = (
-      prompt: string,
-      partialParts?: ReadonlyArray<Response.StreamPart<Record<string, Tool.Any>>>,
-    ) =>
+    const appendUserPrompt = (prompt: string) =>
       Effect.gen(function* () {
         yield* options.append({ _tag: "user/message", content: prompt })
         const promptObj = Prompt.make(prompt)
-        if (partialParts && partialParts.length > 0) {
-          const partialPrompt = Prompt.fromResponseParts(partialParts)
-          yield* Ref.update(options.chat.history, (history) =>
-            Prompt.concat(Prompt.concat(history, partialPrompt), promptObj),
-          )
-        } else {
-          yield* Ref.update(options.chat.history, (history) => Prompt.concat(history, promptObj))
-        }
+        yield* Ref.update(options.chat.history, (history) => Prompt.concat(history, promptObj))
       })
 
     const body = Effect.gen(function* () {
@@ -95,7 +84,7 @@ export const runLoop = (options: LoopOptions): Stream.Stream<AgentEvent, RunErro
           if (outcome._tag === "Steered") {
             yield* options.append({ _tag: "turn/end", reason: "interrupted" })
             turnOpen = false
-            yield* appendUserPrompt(outcome.steerPrompt, outcome.partialParts)
+            yield* appendUserPrompt(outcome.steerPrompt)
             turnEnded = true
             break
           }
