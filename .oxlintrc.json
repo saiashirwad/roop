@@ -25,7 +25,7 @@
     "arrow-body-style": "off",
     "capitalized-comments": "off",
     "typescript/consistent-return": "off",
-    "default-case": "off",
+    "effecttsgo/any-unknown-in-error-context": "off",
     "effecttsgo/async-function": "off",
     "effecttsgo/crypto-random-uuid-in-effect": "off",
     "effecttsgo/crypto-random-uuid": "off",

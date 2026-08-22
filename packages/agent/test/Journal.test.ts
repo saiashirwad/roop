@@ -89,7 +89,9 @@ it.layer(JournalMemory)("JournalMemory", (it) => {
         } as never),
       )
       assert.ok(Exit.isFailure(futureExit))
-      assert.ok(Schema.is(JournalFutureVersion)(Option.getOrThrow(Exit.findErrorOption(futureExit))))
+      assert.ok(
+        Schema.is(JournalFutureVersion)(Option.getOrThrow(Exit.findErrorOption(futureExit))),
+      )
 
       // SAFETY: Tests unknown event structure rejection branch.
       const invalidExit = yield* Effect.exit(

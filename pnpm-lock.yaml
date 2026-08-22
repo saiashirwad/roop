@@ -23,6 +23,9 @@ importers:
       '@types/node':
         specifier: ^26.1.1
         version: 26.1.1
+      effect:
+        specifier: 4.0.0-beta.97
+        version: 4.0.0-beta.97
       oxfmt:
         specifier: ^0.58.0
         version: 0.58.0
