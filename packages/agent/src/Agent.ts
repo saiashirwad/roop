@@ -6,8 +6,7 @@ import { AgentBus, AgentBusMemory, sessionEventsToAgentEvents } from "./AgentBus
 import { AgentConfig, layer as agentConfigLayer } from "./AgentConfig.ts"
 import type { AgentEvent, SessionEvent } from "./AgentEvents.ts"
 import { AgentHooks } from "./AgentHooks.ts"
-import { runLoop } from "./agentLoop.ts"
-import { AgentTools } from "./AgentTools.ts"
+import { AgentTools, eraseToolkit } from "./AgentTools.ts"
 import { capabilitiesFrom, type Capabilities } from "./Capabilities.ts"
 import { SessionId, type ModelId } from "./DomainIds.ts"
 import {
@@ -16,10 +15,10 @@ import {
   type ModelSpec,
   layer as modelCatalogLayer,
 } from "./ModelCatalog.ts"
+import { run } from "./run.ts"
 import { type RunError, runError } from "./RunError.ts"
 import type { RunPolicy } from "./RunPolicy.ts"
 import { type RunNotFound, RunRegistry, RunRegistryLive, type SessionBusy } from "./RunRegistry.ts"
-import { eraseToolkit } from "./runStep.ts"
 import {
   type SessionAlreadyExists,
   type SessionFormatError,
@@ -158,7 +157,7 @@ export const AgentLive: Layer.Layer<
                   ).pipe(Effect.mapError((error) => runError(error, { sessionId })))
 
                   const publishedFinish = yield* Ref.make(false)
-                  return runLoop({
+                  return run({
                     sessionId,
                     chat,
                     model,

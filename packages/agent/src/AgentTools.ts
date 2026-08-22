@@ -2,7 +2,19 @@ import { Context, Effect, Layer } from "effect"
 import type { Toolkit } from "effect/unstable/ai"
 import type * as Tool from "effect/unstable/ai/Tool"
 
-import { eraseToolkit, type ErasedToolkit } from "./runStep.ts"
+export type ErasedToolkit = Toolkit.WithHandler<Record<string, Tool.Any>>
+
+/**
+ * Erase a toolkit's name-to-parameter relationship after its handlers have
+ * been built. Toolkit itself still validates every call before dispatching it.
+ */
+export const eraseToolkit = <Tools extends Record<string, Tool.Any>>(
+  toolkit: Toolkit.WithHandler<Tools>,
+): ErasedToolkit => {
+  /* SAFETY: Tool names originate from `toolkit.tools`; Toolkit validates the
+   * corresponding parameters before invoking the handler. */
+  return { tools: toolkit.tools, handle: toolkit.handle } as ErasedToolkit
+}
 
 /** The complete, immutable toolkit for one agent instance. */
 export class AgentTools extends Context.Service<AgentTools, ErasedToolkit>()("roop/AgentTools") {}
