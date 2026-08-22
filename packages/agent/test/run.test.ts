@@ -172,6 +172,93 @@ describe("run", () => {
     }),
   )
 
+  it.effect("correlates out-of-order tool results by provider call", () =>
+    Effect.gen(function* () {
+      const releaseSlow = yield* Deferred.make<void>()
+      const Slow = Tool.make("slow", {
+        description: "wait for release",
+        parameters: Schema.Struct({ note: Schema.String }),
+        success: Schema.Struct({ reply: Schema.String }),
+      })
+      const Fast = Tool.make("fast", {
+        description: "return immediately",
+        parameters: Schema.Struct({ note: Schema.String }),
+        success: Schema.Struct({ reply: Schema.String }),
+      })
+      const toolkit: ErasedToolkit = {
+        tools: { slow: Slow, fast: Fast },
+        handle: (name, params) => {
+          /* SAFETY: Both definitions use the same note and reply schemas. */
+          const { note } = params as { readonly note: string }
+          const ready = name === "slow" ? Deferred.await(releaseSlow) : Effect.void
+          return Effect.succeed(
+            Stream.fromEffect(
+              ready.pipe(
+                Effect.as({
+                  result: { reply: note },
+                  encodedResult: { reply: note },
+                  isFailure: false,
+                  preliminary: false,
+                }),
+              ),
+            ),
+          )
+        },
+      }
+      const model = yield* scripted([
+        [
+          { type: "tool-call", id: "provider-slow", name: "slow", params: { note: "slow" } },
+          { type: "tool-call", id: "provider-fast", name: "fast", params: { note: "fast" } },
+        ],
+        [
+          { type: "text-start", id: "done" },
+          { type: "text-end", id: "done" },
+        ],
+      ])
+      const h = yield* makeHarness(model, { toolkit })
+
+      yield* h.collect((event) =>
+        event._tag === "ToolResult" && event.name === "fast"
+          ? Deferred.succeed(releaseSlow, undefined).pipe(Effect.asVoid)
+          : Effect.void,
+      )
+
+      const live = yield* Ref.get(h.events)
+      const calls = live.filter((event) => event._tag === "ToolCall")
+      const results = live.filter((event) => event._tag === "ToolResult")
+      assert.deepStrictEqual(
+        calls.map((event) => event.name),
+        ["slow", "fast"],
+      )
+      assert.notStrictEqual(calls[0]!.id, "provider-slow")
+      assert.notStrictEqual(calls[1]!.id, "provider-fast")
+      assert.deepStrictEqual(
+        results.map((event) => event.name),
+        ["fast", "slow"],
+      )
+      for (const result of results) {
+        const call = calls.find((candidate) => candidate.name === result.name)
+        assert.ok(call !== undefined)
+        assert.strictEqual(result.id, call.id)
+      }
+
+      const journal = yield* Ref.get(h.journal)
+      const journalCalls = journal.filter((event) => event._tag === "tool/call")
+      const journalResults = journal.filter((event) => event._tag === "tool/result")
+      assert.deepStrictEqual(
+        journalCalls.map((event) => [event.name, event.id]),
+        [
+          ["slow", "provider-slow"],
+          ["fast", "provider-fast"],
+        ],
+      )
+      for (const result of journalResults) {
+        assert.ok(journalCalls.some((call) => call.id === result.id && call.name === result.name))
+      }
+      assert.strictEqual((yield* h.lastEvent("Finish"))?.reason, "completed")
+    }),
+  )
+
   it.effect("surfaces ToolRejected hook vetoes as execution-denied results", () =>
     Effect.gen(function* () {
       const model = yield* scripted([
@@ -249,6 +336,7 @@ describe("run", () => {
   it.effect("closes unclosed text tokens when steered mid-stream, recording partial output", () =>
     Effect.gen(function* () {
       const steerQueue = yield* Queue.unbounded<string>()
+      const modelFinalizers = yield* Ref.make(0)
       let calls = 0
       const model = yield* LanguageModel.make({
         generateText: () => Effect.succeed([]),
@@ -258,7 +346,10 @@ describe("run", () => {
             ? Stream.make(
                 { type: "text-start" as const, id: "t1" },
                 { type: "text-delta" as const, id: "t1", delta: "Partial response " },
-              ).pipe(Stream.concat(Stream.never))
+              ).pipe(
+                Stream.concat(Stream.never),
+                Stream.ensuring(Ref.update(modelFinalizers, (count) => count + 1)),
+              )
             : Stream.empty
         },
       })
@@ -278,6 +369,7 @@ describe("run", () => {
         ),
       )
       assert.strictEqual((yield* h.lastEvent("Finish"))?.reason, "completed")
+      assert.strictEqual(yield* Ref.get(modelFinalizers), 1)
     }),
   )
 
@@ -321,16 +413,16 @@ describe("run", () => {
       const steerQueue = yield* Queue.unbounded<string>()
       const toolStarted = yield* Deferred.make<void>()
       const toolInterrupted = yield* Deferred.make<void>()
+      const toolFinalizers = yield* Ref.make(0)
 
       const BlockingEcho: ErasedToolkit = {
         tools: { echo: Echo },
         handle: () =>
           Effect.gen(function* () {
             yield* Deferred.succeed(toolStarted, undefined)
-            return Stream.fromEffect(
-              Effect.never.pipe(
-                Effect.onInterrupt(() => Deferred.succeed(toolInterrupted, undefined)),
-              ),
+            return Stream.fromEffect(Effect.never).pipe(
+              Stream.ensuring(Deferred.succeed(toolInterrupted, undefined)),
+              Stream.ensuring(Ref.update(toolFinalizers, (count) => count + 1)),
             )
           }),
       }
@@ -365,6 +457,7 @@ describe("run", () => {
           (event) => event._tag === "user/message" && event.content === "Abort tool and do this",
         ),
       )
+      assert.strictEqual(yield* Ref.get(toolFinalizers), 1)
     }),
   )
 

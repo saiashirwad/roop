@@ -1,115 +1,74 @@
-# roop
+# Roop
 
-An Effect-native framework for durable AI agents: an Effect-idiomatic take on the agent-harness
-layer. Compose an agent from models, tools, hooks, and subagents; every session is a durable,
-resumable, forkable event journal; the kernel runs anywhere Effect runs (Node, Cloudflare Workers,
-browsers).
+Roop is an Effect-native agent runtime. It provides a portable agent loop, typed failures, scoped
+resources, and replaceable services through Effect Layers.
 
-The core agent loop (`@roop/agent`) is portable and depends only on `effect` and
-`effect/unstable/ai`. Models, tools, and persistence are Effect layers — bring your own, or use the
-in-box ones.
+Roop is the framework only. It does not provide a model provider, database, UI, sandbox, coding
+tool, deployment system, or channel integration.
 
-## Quick Start
+## Workspace
 
-### Prerequisites
+The repository keeps two packages:
+
+- [`@roop/agent`](./packages/agent) is the portable kernel.
+- [`@roop/agent-rpc`](./packages/agent-rpc) is a host example that serves the kernel over Effect
+  RPC.
+
+The kernel source may import only `effect`, `effect/unstable/ai`, and local modules. The portability
+and workerd tests enforce this rule.
+
+## Current refactor boundary
+
+The current branch is the behavior baseline for the Effect-native kernel refactor. It keeps the
+existing interpreter while its dependency boundaries are changed in small units.
+
+The target public model is:
+
+- an explicit `Agent` value;
+- effectful modules that contribute ordered instructions and typed tools;
+- models, journals, and domain services supplied through Effect Layers;
+- typed around middleware at model, tool, step, and turn boundaries; and
+- a scoped run `Stream` whose interruption owns run cleanup.
+
+The current behavior contract is tested without API keys or a local model command. It covers text
+and reasoning streaming, model-tool-model loops, concurrent tools, provider and live correlation
+IDs, timeouts, interruption, policy limits, prompt rewriting, tool rejection, provider-executed
+tools, and durable message derivation.
+
+## Architecture records
+
+The accepted decisions and baseline commits are in
+[`docs/architecture/README.md`](./docs/architecture/README.md). The baseline commits are:
+
+- `83e4cc7` — runtime correctness fixes;
+- `3b3dcdf` — consolidated loop and step execution;
+- `7fec88b` — product package cut;
+- `ae58ea1` — dead identifier and export cleanup.
+
+## Development
+
+Requirements:
 
 - Node.js 24 (`24.15.0`)
 - pnpm 11
 - Git
 
-### Installation
-
 ```bash
-git clone https://github.com/saiashirwad/roop.git
-cd roop
-
 corepack enable
 pnpm install
+pnpm check
 ```
 
-## Architecture
-
-The kernel decouples the agent loop from models, storage, and I/O:
-
-```mermaid
-flowchart LR
-    Client["Any client\n(RPC / library)"] -->|Effect RPC or direct| Agent["@roop/agent"]
-    Agent --> Models["Models\n(any effect/unstable/ai LanguageModel)"]
-    Agent --> Tools["Toolkit\n(plugins + hooks)"]
-    Agent --> Store["SessionJournal\n(fs / memory)"]
-```
-
-Capabilities follow a three-role service pattern:
-
-1. **Definition**: Service tag (`SessionJournal`, `ModelCatalog`).
-2. **Consumer**: Tools and handlers declare requirements in their environment.
-3. **Provider**: Application layers provide the implementation (durable fs journal vs. in-memory,
-   scripted test model vs. live provider).
-
-### Composing an Agent
-
-A complete agent is one composition. This is the same shape proven inside Cloudflare Workers by
-`packages/agent/test-workerd/`:
-
-```ts
-import { Agent, AgentLiveToolkit } from "@roop/agent/Agent.ts"
-import { cryptoWeb } from "@roop/agent/cryptoWeb.ts"
-import { SessionJournalMemory } from "@roop/agent/SessionJournal.ts"
-import { Effect, Layer, Schema } from "effect"
-import { Tool, Toolkit } from "effect/unstable/ai"
-
-const Ping = Tool.make("ping", {
-  description: "reply with ok",
-  parameters: Schema.Struct({}),
-  success: Schema.Struct({ ok: Schema.Boolean }),
-})
-
-const PingToolkit = Toolkit.make(Ping)
-
-export const agentLayer = AgentLiveToolkit(PingToolkit, {
-  systemPrompt: "You ping things.",
-  models: [
-    {
-      id: "my-model",
-      provider: "any",
-      layer: myLanguageModelLayer, // any LanguageModel layer, e.g. @effect/ai-openai
-    },
-  ],
-}).pipe(
-  Layer.provide(SessionJournalMemory),
-  Layer.provide(cryptoWeb),
-  Layer.provide(
-    PingToolkit.toLayer({
-      ping: () => Effect.succeed({ ok: true }),
-    }),
-  ),
-)
-
-// Usage: yield* Agent.prompt({ prompt: "ping it", sessionId: "s1" })
-```
-
-Swap `SessionJournalMemory` for `SessionJournalFs(".roop/sessions")` for durable journals that
-resume after restarts. Compose `Plugin`s for richer toolkits, `AgentHooks` for lifecycle
-interception, and `subagent()` for delegation — see `packages/agent/test/` for worked examples.
-
-## Packages
-
-| Package                                   | Description                                                      |
-| ----------------------------------------- | ---------------------------------------------------------------- |
-| [`@roop/agent`](./packages/agent)         | Portable agent loop, sessions, hooks, and subagent orchestration |
-| [`@roop/agent-rpc`](./packages/agent-rpc) | RPC schema and HTTP/NDJSON transport for any composed agent      |
-
-## Development
+Other useful commands:
 
 ```bash
-pnpm check      # Run typecheck, tests, and linter
-pnpm test       # Run test suite
-pnpm lint       # Run oxlint
-pnpm format     # Run oxfmt
+pnpm test
+pnpm lint
+pnpm format:check
 ```
 
-`@roop/agent` is checked for environment portability and may only import `effect`,
-`effect/unstable/ai`, and local modules.
+The Effect source used for local API questions is checked out at `./.repos/effect` by the install
+script.
 
 ## License
 
