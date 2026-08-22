@@ -26,6 +26,7 @@ import {
   type TurnRunInput,
 } from "../Middleware.ts"
 import { resolveRunPolicy, type ResolvedRunPolicy, type RunPolicy } from "../RunPolicy.ts"
+import { ToolExecutionContext, type ToolExecutionContextService } from "../ToolExecutionContext.ts"
 import type { FinalizedToolkit, InvalidToolName, ToolConflict } from "../ToolRegistry.ts"
 import {
   modelAttempt,
@@ -192,6 +193,7 @@ const interceptToolkit = (
   policy: Pick<ResolvedRunPolicy, "toolTimeout" | "maxToolOutputBytes">,
   append: (event: SessionEvent) => Effect.Effect<void, RunError | JournalAppendError>,
   onToolDispatch: () => Effect.Effect<void>,
+  runId?: RunId | undefined,
 ): ErasedToolkit => {
   /* SAFETY: The intercept preserves ErasedToolkit.handle while inserting hook seams. */
   return {
@@ -217,19 +219,34 @@ const interceptToolkit = (
           params,
           providerExecuted: false,
         })
+        const toolExecutionContext: ToolExecutionContextService = {
+          sessionId: context().sessionId,
+          runId: runId ?? (context().sessionId as unknown as RunId),
+          turn: context().turn,
+          step: context().step,
+          callId: token,
+        }
+        const emitService = {
+          emit: (event: AgentEvent) => {
+            if (event._tag === "Subagent") {
+              return emit({ ...event, toolCallId: token })
+            }
+            return emit(event)
+          },
+          toolCallId: token,
+        }
         const baseToolCall = (input: ToolCallInput) =>
           scheduler.scheduleEffect(
             Effect.suspend(() =>
               toolkit.handle(input.name, input.params).pipe(
-                Effect.provideService(AgentEmit, {
-                  emit: (event) => {
-                    if (event._tag === "Subagent") {
-                      return emit({ ...event, toolCallId: token })
-                    }
-                    return emit(event)
-                  },
-                  toolCallId: token,
-                }),
+                Effect.map((stream) =>
+                  stream.pipe(
+                    Stream.provideService(ToolExecutionContext, toolExecutionContext),
+                    Stream.provideService(AgentEmit, emitService),
+                  ),
+                ),
+                Effect.provideService(ToolExecutionContext, toolExecutionContext),
+                Effect.provideService(AgentEmit, emitService),
               ),
             ),
           )
@@ -405,6 +422,7 @@ export const run = <R = never, E = never>(
             policy,
             options.append,
             () => Ref.update(attemptStateRef, (state) => ({ ...state, toolDispatchStarted: true })),
+            options.runId,
           ),
         )
         const logicalRequest: LogicalModelRequest | undefined =

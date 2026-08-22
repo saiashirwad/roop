@@ -113,11 +113,18 @@ export function when<M extends ModuleInput>(
   module: M,
 ): Module<Requirements<M>, Errors<M>>
 export function when<M extends ModuleInput, R, E>(
+  condition: Effect.Effect<boolean, E, R>,
+  module: M,
+): Module<Requirements<M> | R, Errors<M> | E>
+export function when<M extends ModuleInput, R, E>(
   condition: (context: AgentContext) => Effect.Effect<boolean, E, R>,
   module: M,
 ): Module<Requirements<M> | R, Errors<M> | E>
 export function when<M extends ModuleInput, R, E>(
-  condition: boolean | ((context: AgentContext) => boolean | Effect.Effect<boolean, E, R>),
+  condition:
+    | boolean
+    | Effect.Effect<boolean, E, R>
+    | ((context: AgentContext) => boolean | Effect.Effect<boolean, E, R>),
   module: M,
 ): Module<Requirements<M> | R, Errors<M> | E> {
   return make((context) => {

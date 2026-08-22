@@ -18,14 +18,7 @@ export const doomLoop = (limit: number): Effect.Effect<Middleware.Middleware> =>
               return [nextState, nextState] as const
             })
             if (state.count <= limit) return next(input)
-            const denied = {
-              result: { type: "execution-denied", reason: "repeating tool call" },
-              encodedResult: { type: "execution-denied", reason: "repeating tool call" },
-              isFailure: true,
-              preliminary: false,
-            }
-            /* SAFETY: tool middleware runs only around Effect AI handler-result streams. */
-            return Stream.make(denied as never)
+            return Middleware.denyTool("repeating tool call")
           }),
         ),
     })

@@ -1,11 +1,11 @@
 # Roop
 
-Roop is an Effect-native agent runtime where agents and extensions compose as explicit effects,
-modules, middleware, services, and layers.
+Roop is an Effect-native agent framework where agents, capabilities, tools, and extensions compose
+as explicit Effect values, typed services, streams, and layers.
 
 ```ts
-import { Agent, JournalMemory, Module, Runtime } from "@roop/agent"
-import { Context, Effect, Layer, Schema, Stream } from "effect"
+import { Agent, Journal, Roop } from "@roop/agent"
+import { Context, Effect, Layer, Schema } from "effect"
 import { type LanguageModel, Tool } from "effect/unstable/ai"
 
 class Orders extends Context.Service<
@@ -19,28 +19,37 @@ const OrdersLive = Layer.succeed(Orders, {
 
 declare const ModelLive: Layer.Layer<LanguageModel.LanguageModel>
 
-const lookup = Tool.make("lookup_order", {
+const lookupTool = Tool.make("lookup_order", {
   parameters: Schema.Struct({ id: Schema.String }),
   success: Schema.String,
   dependencies: [Orders],
 })
 
-const agent = Agent.make(
-  "support",
-  Module.all(
-    Module.instructions("Help with orders."),
-    Module.tool(lookup, ({ id }) =>
-      Effect.gen(function* () {
-        return yield* (yield* Orders).lookup(id)
-      }),
-    ),
-  ),
+const lookup = Agent.tool(lookupTool, ({ id }) =>
+  Effect.gen(function* () {
+    const orders = yield* Orders
+    return yield* orders.lookup(id)
+  }),
 )
 
-const events = Runtime.runAgent(agent, {
+const agent = Agent.make({
+  name: "support",
+  instructions: "Help with orders.",
+  tools: [lookup],
+})
+
+const Live = Layer.mergeAll(
+  Roop.layer({
+    model: ModelLive,
+    journal: Journal.memory,
+  }),
+  OrdersLive,
+)
+
+export const result = Agent.run(agent, {
   sessionId: "support-42",
   prompt: "Where is order 42?",
-}).pipe(Stream.provide(Layer.mergeAll(JournalMemory.JournalMemory, OrdersLive, ModelLive)))
+}).pipe(Effect.provide(Live))
 ```
 
 `ModelLive` supplies an `effect/unstable/ai` `LanguageModel`. Roop does not select a provider.

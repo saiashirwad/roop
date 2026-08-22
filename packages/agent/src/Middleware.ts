@@ -1,4 +1,6 @@
-import { Context, Effect, Layer, type Scope, type Stream } from "effect"
+/* oxlint-disable anti-slop/no-unknown-parameters -- middleware helpers accept arbitrary denial payloads across boundaries. */
+
+import { Context, Effect, Layer, type Scope, Stream } from "effect"
 import type { LanguageModel, Prompt } from "effect/unstable/ai"
 import type * as Tool from "effect/unstable/ai/Tool"
 
@@ -60,6 +62,22 @@ export const make = <R = never, E = never>(value: Partial<Middleware<R, E>>): Mi
   step: value.step ?? empty.step,
   turn: value.turn ?? empty.turn,
 })
+
+/**
+ * Return a model-visible failure result rejecting a tool call without executing its handler.
+ */
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- callers may pass custom domain-specific rejection structures.
+export const denyTool = (reason: string, result?: unknown): Stream.Stream<any, never, never> => {
+  const payload = result ?? { type: "execution-denied", reason }
+  const part = {
+    result: payload,
+    encodedResult: payload,
+    isFailure: true,
+    preliminary: false,
+  }
+  /* SAFETY: tool middleware produces handler result parts for Effect AI stream consumers. */
+  return Stream.make(part as never)
+}
 
 /**
  * Compose middleware in declaration order. The leftmost value is outermost,

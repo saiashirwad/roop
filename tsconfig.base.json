@@ -48,6 +48,7 @@
     "verbatimModuleSyntax": true,
     "paths": {
       "@roop/agent": ["./packages/agent/src/index.ts"],
+      "@roop/agent/testing": ["./packages/agent/src/testing/index.ts"],
       "@roop/agent/*": ["./packages/agent/src/*"],
       "@roop/agent-rpc": ["./packages/agent-rpc/src/index.ts"],
       "@roop/agent-rpc/*": ["./packages/agent-rpc/src/*"]

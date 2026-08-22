@@ -1,7 +1,7 @@
-import { Context, Effect, Layer, Schema, Stream } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 import { type LanguageModel, Tool } from "effect/unstable/ai"
 
-import { Agent, JournalMemory, Module, Runtime } from "../src/index.ts"
+import { Agent, Journal, Roop } from "../src/index.ts"
 
 class Orders extends Context.Service<
   Orders,
@@ -14,25 +14,34 @@ const OrdersLive = Layer.succeed(Orders, {
 
 declare const ModelLive: Layer.Layer<LanguageModel.LanguageModel>
 
-const lookup = Tool.make("lookup_order", {
+const lookupTool = Tool.make("lookup_order", {
   parameters: Schema.Struct({ id: Schema.String }),
   success: Schema.String,
   dependencies: [Orders],
 })
 
-const agent = Agent.make(
-  "support",
-  Module.all(
-    Module.instructions("Help with orders."),
-    Module.tool(lookup, ({ id }) =>
-      Effect.gen(function* () {
-        return yield* (yield* Orders).lookup(id)
-      }),
-    ),
-  ),
+const lookup = Agent.tool(lookupTool, ({ id }) =>
+  Effect.gen(function* () {
+    const orders = yield* Orders
+    return yield* orders.lookup(id)
+  }),
 )
 
-export const readmeExample = Runtime.runAgent(agent, {
+const agent = Agent.make({
+  name: "support",
+  instructions: "Help with orders.",
+  tools: [lookup],
+})
+
+const Live = Layer.mergeAll(
+  Roop.layer({
+    model: ModelLive,
+    journal: Journal.memory,
+  }),
+  OrdersLive,
+)
+
+export const readmeExample = Agent.run(agent, {
   sessionId: "support-42",
   prompt: "Where is order 42?",
-}).pipe(Stream.provide(Layer.mergeAll(JournalMemory.JournalMemory, OrdersLive, ModelLive)))
+}).pipe(Effect.provide(Live))

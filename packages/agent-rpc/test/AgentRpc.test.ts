@@ -91,7 +91,12 @@ it.effect("starts a direct hosted run and reads durable history", () =>
       )
       assert.strictEqual(yield* Ref.get(started), true)
       const history = yield* supervisor.history("rpc-history")
-      assert.ok(history.events.some((event) => event._tag === "run" && event.state === "completed"))
+      assert.ok(
+        history.events.some(
+          (event: { readonly _tag: string; readonly state?: unknown }) =>
+            event._tag === "run" && event.state === "completed",
+        ),
+      )
     }).pipe(Effect.scoped, Effect.provide(live(started)))
   }),
 )
@@ -170,8 +175,9 @@ it.effect("round-trips an RPC stream over HTTP NDJSON", () =>
     const serverLayer = AgentRpcServerHttp("/rpc").pipe(Layer.provide(hostLive(finiteModel)))
     const { handler, dispose } = HttpRouter.toWebHandler(serverLayer, { disableLogger: true })
     yield* Effect.addFinalizer(() => Effect.promise(() => dispose()))
+    /* SAFETY: web fetch test harness converts standard fetch arguments to web handler input */
     const fetchWithHandler: typeof fetch = (input, init) =>
-      handler(input instanceof Request ? input : new Request(input, init))
+      (handler as any)(input instanceof Request ? input : new Request(input, init))
     const clientLayer = AgentRpcClientHttp("http://localhost/rpc").pipe(
       Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetchWithHandler)),
     )
@@ -196,8 +202,9 @@ it.effect("HTTP stream disconnect interrupts the owned model producer", () =>
     )
     const { handler, dispose } = HttpRouter.toWebHandler(serverLayer, { disableLogger: true })
     yield* Effect.addFinalizer(() => Effect.promise(() => dispose()))
+    /* SAFETY: web fetch test harness converts standard fetch arguments to web handler input */
     const fetchWithHandler: typeof fetch = (input, init) =>
-      handler(input instanceof Request ? input : new Request(input, init))
+      (handler as any)(input instanceof Request ? input : new Request(input, init))
     const clientLayer = AgentRpcClientHttp("http://localhost/rpc").pipe(
       Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetchWithHandler)),
     )

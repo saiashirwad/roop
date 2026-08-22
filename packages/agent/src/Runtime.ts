@@ -28,7 +28,7 @@ import {
   type Middleware,
   MiddlewareService,
 } from "./Middleware.ts"
-import type { RunPolicy } from "./RunPolicy.ts"
+import { mergePolicy, type RunPolicy } from "./RunPolicy.ts"
 import { ToolRegistry, type InvalidToolName, type ToolConflict } from "./ToolRegistry.ts"
 
 /** Input for one direct, scoped kernel run. */
@@ -390,12 +390,13 @@ const runtimeRun = <R, E, RM = never, EM = never>(
         chat,
         model,
         toolkit: Effect.succeed(emptyToolkit.toolkit),
-        policy: request.policy,
+        policy: mergePolicy(agent.policy, request.policy),
         append,
         /* SAFETY: runtimeRun restores the middleware R and E channels in its
          * public Stream type after the internal interpreter erasure. */
         middleware: allMiddleware(
           installedMiddleware,
+          (agent.middleware ?? emptyMiddleware) as Middleware,
           (request.middleware ?? emptyMiddleware) as Middleware,
         ),
       }) as Stream.Stream<AgentEvent, RuntimeError<E | EM>, R | RM>

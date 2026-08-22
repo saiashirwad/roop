@@ -1,23 +1,31 @@
-import { Agent, JournalMemory, Module, Runtime } from "@roop/agent"
+import { Agent, Journal, Roop } from "@roop/agent"
 import { scripted } from "@roop/agent/testing"
-import { Effect, Layer, Stream } from "effect"
-import { LanguageModel } from "effect/unstable/ai"
+import { Effect } from "effect"
 
 const program = Effect.gen(function* () {
-  const model = yield* scripted([[{ type: "text-delta", id: "text", delta: "ok" }]])
-  const events = yield* Runtime.runAgent(Agent.make("packed", Module.empty), {
-    sessionId: "packed",
-    prompt: "hello",
-  }).pipe(
-    Stream.runCollect,
-    Effect.provide(
-      Layer.mergeAll(
-        JournalMemory.JournalMemory,
-        Layer.succeed(LanguageModel.LanguageModel, model),
-      ),
-    ),
-  )
-  if (!events.some((event) => event._tag === "Finish")) throw new Error("missing Finish")
+  const model = yield* scripted([[{ type: "text-delta", id: "text", delta: "hello consumer" }]])
+
+  const assistant = Agent.make({
+    name: "consumer-agent",
+    instructions: "Answer concisely.",
+  })
+
+  const Live = Roop.layer({
+    model,
+    journal: Journal.memory,
+  })
+
+  const result = yield* Agent.run(assistant, {
+    sessionId: "consumer-session-1",
+    prompt: "hi",
+  }).pipe(Effect.provide(Live))
+
+  if (result.text !== "hello consumer") {
+    throw new Error(`Unexpected result text: ${result.text}`)
+  }
+  if (result.finishReason !== "completed") {
+    throw new Error(`Unexpected finish reason: ${result.finishReason}`)
+  }
 })
 
 await Effect.runPromise(program)
