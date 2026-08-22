@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest"
 import {
   Agent as AgentPackage,
+  DomainIds,
   Journal as JournalPackage,
   JournalMemory as JournalMemoryPackage,
   Middleware,
@@ -121,8 +122,8 @@ it.effect("subagent uses a stable independent journal session", () =>
     })
     const snapshot = yield* Effect.gen(function* () {
       const built = yield* subagent(Agent.make("child", Module.empty), "child-stable").build({
-        sessionId: "parent",
-        runId: "parent-run",
+        sessionId: DomainIds.SessionId.make("parent"),
+        runId: DomainIds.RunId.make("parent-run"),
         turn: 1,
         step: 1,
         history: Prompt.empty,
@@ -162,8 +163,8 @@ it.effect("subagent returns child failures as a declared tool failure", () =>
         Agent.make("child-failure", Module.empty),
         "child-failure",
       ).build({
-        sessionId: "parent",
-        runId: "parent-run",
+        sessionId: DomainIds.SessionId.make("parent"),
+        runId: DomainIds.RunId.make("parent-run"),
         turn: 1,
         step: 1,
         history: Prompt.empty,

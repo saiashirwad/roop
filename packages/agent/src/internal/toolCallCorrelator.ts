@@ -1,3 +1,5 @@
+import { Option } from "effect"
+
 type ProviderCall = { readonly id: string; readonly token: string }
 
 export interface ToolCallCorrelator {
@@ -7,8 +9,8 @@ export interface ToolCallCorrelator {
     readonly name: string
     readonly providerExecuted?: boolean | undefined
     readonly isKnownTool: boolean
-  }) => string | undefined
-  readonly tokenForProviderId: (id: string) => string | undefined
+  }) => Option.Option<string>
+  readonly tokenForProviderId: (id: string) => Option.Option<string>
 }
 
 export const makeToolCallCorrelator = (options: {
@@ -37,20 +39,20 @@ export const makeToolCallCorrelator = (options: {
       return localToken
     },
     observeProviderCall: (call) => {
-      if (call.providerExecuted === true || !call.isKnownTool) return undefined
+      if (call.providerExecuted === true || !call.isKnownTool) return Option.none()
       const pendingTokens = pendingTokensByName.get(call.name)
       if (pendingTokens !== undefined && pendingTokens.length > 0) {
         const localToken = pendingTokens.shift()!
         providerIdToToken.set(call.id, localToken)
-        return localToken
+        return Option.some(localToken)
       }
       const localToken = token(call.name)
       providerIdToToken.set(call.id, localToken)
       const calls = pendingProviderCallsByName.get(call.name) ?? []
       calls.push({ id: call.id, token: localToken })
       pendingProviderCallsByName.set(call.name, calls)
-      return localToken
+      return Option.some(localToken)
     },
-    tokenForProviderId: (id) => providerIdToToken.get(id),
+    tokenForProviderId: (id) => Option.fromNullishOr(providerIdToToken.get(id)),
   }
 }

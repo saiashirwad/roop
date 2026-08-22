@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
+import { Option } from "effect"
 
 import { makeToolCallCorrelator } from "../src/internal/toolCallCorrelator.ts"
 
@@ -10,18 +11,23 @@ describe("toolCallCorrelator", () => {
       name: "worker",
       isKnownTool: true,
     })
-    assert.ok(token !== undefined)
-    assert.strictEqual(correlator.allocateToken("worker"), token)
-    assert.strictEqual(correlator.tokenForProviderId("provider-1"), token)
+    assert.ok(Option.isSome(token))
+    if (Option.isSome(token)) {
+      assert.strictEqual(correlator.allocateToken("worker"), token.value)
+      assert.deepStrictEqual(correlator.tokenForProviderId("provider-1"), token)
+    }
   })
 
   it("matches handler-first and provider-first calls by tool name", () => {
     const correlator = makeToolCallCorrelator({ sessionId: "sess-1", turn: 1, step: 1 })
     const first = correlator.allocateToken("read")
     const second = correlator.observeProviderCall({ id: "call-1", name: "read", isKnownTool: true })
-    assert.strictEqual(first, second)
+    assert.deepStrictEqual(Option.some(first), second)
     const third = correlator.observeProviderCall({ id: "call-2", name: "read", isKnownTool: true })
-    assert.strictEqual(correlator.allocateToken("read"), third)
+    assert.ok(Option.isSome(third))
+    if (Option.isSome(third)) {
+      assert.strictEqual(correlator.allocateToken("read"), third.value)
+    }
   })
 
   it("keeps distinct provider calls correlated when handlers finish out of order", () => {
@@ -37,30 +43,32 @@ describe("toolCallCorrelator", () => {
       isKnownTool: true,
     })
 
-    assert.ok(slow !== undefined)
-    assert.ok(fast !== undefined)
-    // Handler completion order is fast, then slow. Correlation uses the
-    // provider call and tool name, not completion order.
-    assert.strictEqual(correlator.allocateToken("fast"), fast)
-    assert.strictEqual(correlator.allocateToken("slow"), slow)
-    assert.strictEqual(correlator.tokenForProviderId("provider-fast"), fast)
-    assert.strictEqual(correlator.tokenForProviderId("provider-slow"), slow)
+    assert.ok(Option.isSome(slow))
+    assert.ok(Option.isSome(fast))
+    if (Option.isSome(slow) && Option.isSome(fast)) {
+      // Handler completion order is fast, then slow. Correlation uses the
+      // provider call and tool name, not completion order.
+      assert.strictEqual(correlator.allocateToken("fast"), fast.value)
+      assert.strictEqual(correlator.allocateToken("slow"), slow.value)
+      assert.deepStrictEqual(correlator.tokenForProviderId("provider-fast"), fast)
+      assert.deepStrictEqual(correlator.tokenForProviderId("provider-slow"), slow)
+    }
   })
 
   it("does not allocate local ids for provider-executed or unknown calls", () => {
     const correlator = makeToolCallCorrelator({ sessionId: "sess-1", turn: 1, step: 1 })
-    assert.strictEqual(
+    assert.deepStrictEqual(
       correlator.observeProviderCall({
         id: "p",
         name: "web",
         providerExecuted: true,
         isKnownTool: true,
       }),
-      undefined,
+      Option.none(),
     )
-    assert.strictEqual(
+    assert.deepStrictEqual(
       correlator.observeProviderCall({ id: "u", name: "missing", isKnownTool: false }),
-      undefined,
+      Option.none(),
     )
   })
 })

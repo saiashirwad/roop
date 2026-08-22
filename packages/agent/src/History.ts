@@ -1,5 +1,6 @@
 /* oxlint-disable anti-slop/require-safety-comment-for-type-assertion -- SAFETY: legacy SessionEvent values cross the temporary compatibility JSON boundary; the new JournalEvent path is schema-validated. */
 
+import { Option } from "effect"
 import { Prompt } from "effect/unstable/ai"
 
 import type { SessionEvent } from "./AgentEvents.ts"
@@ -40,20 +41,20 @@ const isSpanEvent = (event: JournalEvent): event is SpanEvent =>
   event._tag === "model/attempt" ||
   event._tag === "tool"
 
-const spanKey = (event: JournalEvent): string | undefined => {
+const spanKey = (event: JournalEvent): Option.Option<string> => {
   switch (event._tag) {
     case "run":
-      return `run:${event.runId}`
+      return Option.some(`run:${event.runId}`)
     case "turn":
-      return `turn:${event.runId}:${event.turn}`
+      return Option.some(`turn:${event.runId}:${event.turn}`)
     case "step":
-      return `step:${event.runId}:${event.turn}:${event.step}`
+      return Option.some(`step:${event.runId}:${event.turn}:${event.step}`)
     case "model/attempt":
-      return `attempt:${event.runId}:${event.turn}:${event.step}:${event.attempt}`
+      return Option.some(`attempt:${event.runId}:${event.turn}:${event.step}:${event.attempt}`)
     case "tool":
-      return `tool:${event.runId}:${event.turn}:${event.step}:${event.id}`
+      return Option.some(`tool:${event.runId}:${event.turn}:${event.step}:${event.id}`)
     default:
-      return undefined
+      return Option.none()
   }
 }
 
@@ -132,16 +133,16 @@ const appendMessages = (events: ReadonlyArray<JournalEvent>): ReadonlyArray<Prom
   return messages
 }
 
-const legacyToJournal = (event: SessionEvent): JournalEvent | undefined => {
+const legacyToJournal = (event: SessionEvent): Option.Option<JournalEvent> => {
   switch (event._tag) {
     case "system/message":
-      return { _tag: "system/message", version: EVENT_VERSION, content: event.content }
+      return Option.some({ _tag: "system/message", version: EVENT_VERSION, content: event.content })
     case "user/message":
-      return { _tag: "user/message", version: EVENT_VERSION, content: event.content }
+      return Option.some({ _tag: "user/message", version: EVENT_VERSION, content: event.content })
     case "assistant/message":
-      return { _tag: "assistant/message", version: EVENT_VERSION, parts: event.parts }
+      return Option.some({ _tag: "assistant/message", version: EVENT_VERSION, parts: event.parts })
     case "tool/call":
-      return {
+      return Option.some({
         _tag: "tool/call",
         version: EVENT_VERSION,
         id: event.id,
@@ -150,9 +151,9 @@ const legacyToJournal = (event: SessionEvent): JournalEvent | undefined => {
         ...(event.providerExecuted === undefined
           ? undefined
           : { providerExecuted: event.providerExecuted }),
-      }
+      })
     case "tool/result":
-      return {
+      return Option.some({
         _tag: "tool/result",
         version: EVENT_VERSION,
         id: event.id,
@@ -162,9 +163,9 @@ const legacyToJournal = (event: SessionEvent): JournalEvent | undefined => {
         ...(event.providerExecuted === undefined
           ? undefined
           : { providerExecuted: event.providerExecuted }),
-      }
+      })
     case "model/request":
-      return {
+      return Option.some({
         _tag: "model/request",
         version: EVENT_VERSION,
         runId: "legacy",
@@ -176,17 +177,25 @@ const legacyToJournal = (event: SessionEvent): JournalEvent | undefined => {
         promptFingerprint: "legacy",
         toolFingerprint: "legacy",
         toolNames: [],
-      }
+      })
     default:
-      return undefined
+      return Option.none()
   }
 }
 
 const normalize = (events: ReadonlyArray<HistoryEvent>): Array<JournalEvent> => {
-  const normalized = events.flatMap((event) =>
-    isJournalEvent(event) ? [event] : [legacyToJournal(event)].filter(Boolean),
-  )
-  return normalized.filter((event): event is JournalEvent => event !== undefined)
+  const normalized: Array<JournalEvent> = []
+  for (const event of events) {
+    if (isJournalEvent(event)) {
+      normalized.push(event)
+    } else {
+      const converted = legacyToJournal(event)
+      if (Option.isSome(converted)) {
+        normalized.push(converted.value)
+      }
+    }
+  }
+  return normalized
 }
 
 /**
@@ -197,9 +206,10 @@ export const fromEvents = (events: ReadonlyArray<HistoryEvent>): History => {
   const normalized = normalize(events)
   const open = new Set<string>()
   for (const event of normalized) {
-    const key = spanKey(event)
-    if (key === undefined) continue
+    const keyOpt = spanKey(event)
+    if (Option.isNone(keyOpt)) continue
     if (!isSpanEvent(event)) continue
+    const key = keyOpt.value
     if (event.state === "started") open.add(key)
     else if (isTerminal(event.state)) open.delete(key)
   }
@@ -217,26 +227,26 @@ const isHistory = (input: History | ReadonlyArray<HistoryEvent>): input is Histo
 export const toPrompt = (history: History | ReadonlyArray<HistoryEvent>): Prompt.Prompt =>
   Prompt.fromMessages(fromEvents(isHistory(history) ? history.events : history).messages)
 
-const recoveredState = (event: JournalEvent): JournalEvent | undefined => {
+const recoveredState = (event: JournalEvent): Option.Option<JournalEvent> => {
   switch (event._tag) {
     case "run":
-      return { ...event, state: "recovered", reason: "interrupted" }
+      return Option.some({ ...event, state: "recovered", reason: "interrupted" })
     case "turn":
-      return { ...event, state: "recovered", reason: "interrupted" }
+      return Option.some({ ...event, state: "recovered", reason: "interrupted" })
     case "step":
-      return { ...event, state: "recovered", reason: "interrupted" }
+      return Option.some({ ...event, state: "recovered", reason: "interrupted" })
     case "model/attempt":
-      return { ...event, state: "recovered", message: "recovered before completion" }
+      return Option.some({ ...event, state: "recovered", message: "recovered before completion" })
     case "tool":
-      return {
+      return Option.some({
         ...event,
         state: "recovered",
         isFailure: true,
         result: { type: "execution-unknown" },
         failureReason: "execution-unknown",
-      }
+      })
     default:
-      return undefined
+      return Option.none()
   }
 }
 
@@ -249,8 +259,9 @@ export const recoveryEvents = (
   const calls = new Map<string, Extract<JournalEvent, { readonly _tag: "tool/call" }>>()
   const results = new Set<string>()
   for (const event of normalized) {
-    const key = spanKey(event)
-    if (key !== undefined && isSpanEvent(event)) {
+    const keyOpt = spanKey(event)
+    if (Option.isSome(keyOpt) && isSpanEvent(event)) {
+      const key = keyOpt.value
       if (event.state === "started") open.set(key, event)
       else if (isTerminal(event.state)) open.delete(key)
     }
@@ -289,8 +300,8 @@ export const recoveryEvents = (
     return rank(left) - rank(right)
   })
   for (const event of ordered) {
-    const closure = recoveredState(event)
-    if (closure !== undefined) recovered.push(closure)
+    const closureOpt = recoveredState(event)
+    if (Option.isSome(closureOpt)) recovered.push(closureOpt.value)
   }
   return recovered
 }

@@ -15,7 +15,7 @@ import type { AgentDefinition } from "../Agent.ts"
 import type { AgentContext } from "../AgentContext.ts"
 import { AgentEmit, type AgentEvent, type SessionEvent } from "../AgentEvents.ts"
 import { toPrompt as planToPrompt } from "../AgentPlan.ts"
-import type { SessionId } from "../DomainIds.ts"
+import type { RunId, SessionId } from "../DomainIds.ts"
 import { UnsafeModelRetry } from "../Error.ts"
 import type { JournalAppendError } from "../Journal.ts"
 import {
@@ -27,17 +27,13 @@ import {
 import { runError, type RunError } from "../RunError.ts"
 import { resolveRunPolicy, type ResolvedRunPolicy, type RunPolicy } from "../RunPolicy.ts"
 import type { ControlSignal, InterruptSignal } from "../RunSignal.ts"
-import type {
-  FinalizedToolkit,
-  InvalidToolName,
-  ToolConflict,
-} from "../ToolRegistry.ts"
+import type { FinalizedToolkit, InvalidToolName, ToolConflict } from "../ToolRegistry.ts"
 import { modelAttempt, requestFingerprint, type LogicalModelRequest } from "./effectAiAdapter.ts"
 import { makeToolCallCorrelator } from "./toolCallCorrelator.ts"
 import { makeToolScheduler, type ToolScheduler } from "./toolScheduler.ts"
 
 export interface RunOptions<R = never, E = never> {
-  readonly sessionId: SessionId | string
+  readonly sessionId: SessionId
   readonly chat: Chat.Service
   readonly model: LanguageModel.Service
   /** A request-bound capability snapshot. */
@@ -49,11 +45,11 @@ export interface RunOptions<R = never, E = never> {
   /** Explicit agent used by the staged logical-plan interpreter path. */
   readonly agent?: AgentDefinition<R, E> | undefined
   /** Stable run identity supplied to the agent renderer. */
-  readonly runId?: string | undefined
+  readonly runId?: RunId | undefined
 }
 
 interface RunContext {
-  readonly sessionId: SessionId | string
+  readonly sessionId: SessionId
   readonly turn: number
   readonly step: number
 }
@@ -85,49 +81,56 @@ const toEvent = (
     params: ToolCallParameters,
     id: string,
     providerExecuted: boolean,
-  ) => string | undefined,
-  onToolResult?: (id: string) => string | undefined,
-): AgentEvent | undefined => {
+  ) => Option.Option<string>,
+  onToolResult?: (id: string) => Option.Option<string>,
+): Option.Option<AgentEvent> => {
   switch (part.type) {
     case "text-delta": {
-      return { _tag: "TextDelta", delta: part.delta }
+      return Option.some({ _tag: "TextDelta", delta: part.delta })
     }
     case "reasoning-delta": {
-      return { _tag: "ReasoningDelta", delta: part.delta }
+      return Option.some({ _tag: "ReasoningDelta", delta: part.delta })
     }
     case "tool-call": {
       /* SAFETY: Every tool-call part is decoded against the toolkit's parameter schema. */
-      const localId = onToolCall?.(
+      const localIdOpt = onToolCall?.(
         part.name,
         part.params as ToolCallParameters,
         part.id,
         part.providerExecuted,
       )
-      return {
+      const localId = Option.isSome(localIdOpt ?? Option.none())
+        ? (localIdOpt as Option.Some<string>).value
+        : part.id
+      return Option.some({
         _tag: "ToolCall",
-        id: localId ?? part.id,
+        id: localId,
         name: part.name,
         params: part.params,
         providerExecuted: part.providerExecuted,
-      }
+      })
     }
     case "tool-result": {
-      if (part.preliminary === true) return undefined
+      if (part.preliminary === true) return Option.none()
       const providerExecuted =
         "providerExecuted" in part && typeof part.providerExecuted === "boolean"
           ? part.providerExecuted
           : undefined
-      return {
+      const localIdOpt = onToolResult?.(part.id)
+      const localId = Option.isSome(localIdOpt ?? Option.none())
+        ? (localIdOpt as Option.Some<string>).value
+        : part.id
+      return Option.some({
         _tag: "ToolResult",
-        id: onToolResult?.(part.id) ?? part.id,
+        id: localId,
         name: part.name,
         isFailure: part.isFailure,
         result: part.encodedResult,
         ...(providerExecuted === undefined ? undefined : { providerExecuted }),
-      }
+      })
     }
     default: {
-      return undefined
+      return Option.none()
     }
   }
 }
@@ -298,36 +301,32 @@ const interceptToolkit = (
           params,
         }
         const wrapped = middleware.tool(() => scheduled)(toolInput)
-        const timed =
-          policy.toolTimeout === undefined
-            ? wrapped
-            : wrapped.pipe(
-                Stream.mergeEffect(
-                  Effect.sleep(policy.toolTimeout).pipe(
-                    Effect.andThen(Effect.fail({ _tag: "ToolTimeoutSignal" as const })),
-                  ),
+        const timed = Option.isNone(policy.toolTimeout)
+          ? wrapped
+          : wrapped.pipe(
+              Stream.mergeEffect(
+                Effect.sleep(policy.toolTimeout.value).pipe(
+                  Effect.andThen(Effect.fail({ _tag: "ToolTimeoutSignal" as const })),
                 ),
-                Stream.catchTag("ToolTimeoutSignal", () =>
-                  Stream.make({
-                    result: toolTimedOut,
-                    encodedResult: toolTimedOut,
-                    isFailure: true,
-                    preliminary: false,
-                  }),
-                ),
-              )
-        const bounded =
-          policy.maxToolOutputBytes === undefined
-            ? timed
-            : Stream.map(timed, (result) => {
-                if (
-                  result.preliminary ||
-                  encodedBytes(result.encodedResult) <= policy.maxToolOutputBytes!
-                )
-                  return result
-                const failure = outputTooLarge(policy.maxToolOutputBytes!)
-                return { ...result, result: failure, encodedResult: failure, isFailure: true }
-              })
+              ),
+              Stream.catchTag("ToolTimeoutSignal", () =>
+                Stream.make({
+                  result: toolTimedOut,
+                  encodedResult: toolTimedOut,
+                  isFailure: true,
+                  preliminary: false,
+                }),
+              ),
+            )
+        const maxBytesOpt = policy.maxToolOutputBytes
+        const bounded = Option.isSome(maxBytesOpt)
+          ? Stream.map(timed, (result) => {
+              if (result.preliminary || encodedBytes(result.encodedResult) <= maxBytesOpt.value)
+                return result
+              const failure = outputTooLarge(maxBytesOpt.value)
+              return { ...result, result: failure, encodedResult: failure, isFailure: true }
+            })
+          : timed
         return bounded
       })) as unknown as ErasedToolkit["handle"],
   }
@@ -450,8 +449,8 @@ export const run = <R = never, E = never>(
           | undefined
         if (options.agent !== undefined) {
           const agentContext: AgentContext = {
-            sessionId: options.sessionId.toString(),
-            runId: options.runId ?? options.sessionId.toString(),
+            sessionId: options.sessionId,
+            runId: options.runId ?? (options.sessionId as unknown as RunId),
             turn: position.turn,
             step: position.step,
             history: preStepHistory,
@@ -473,8 +472,7 @@ export const run = <R = never, E = never>(
           }
         }
         const collectedParts: Array<Response.StreamPart<Record<string, Tool.Any>>> = []
-        let modelAttemptActive = false
-        let modelOutputObserved = false
+        const attemptStateRef = yield* Ref.make({ active: false, outputObserved: false })
         type ModelOutcome =
           | ControlSignal
           | {
@@ -505,55 +503,63 @@ export const run = <R = never, E = never>(
           never
         > =>
           Stream.unwrap(
-            Effect.sync(
-              (): Stream.Stream<
-                Response.StreamPart<Record<string, Tool.Any>>,
-                AiError.AiError | RunError | UnsafeModelRetry,
-                never
-              > => {
-                if (modelAttemptActive || modelOutputObserved) {
-                  return Stream.fail(
-                    new UnsafeModelRetry({
-                      sessionId: context.sessionId.toString(),
-                      turn: context.turn,
-                      step: context.step,
-                      attempt: input.attempt,
-                    }),
-                  )
+            Effect.gen(function* () {
+              const canStart = yield* Ref.modify(attemptStateRef, (state) => {
+                if (state.active || state.outputObserved) {
+                  return [false, state]
                 }
-                modelAttemptActive = true
-                collectedParts.length = 0
-                const interceptedModel = interceptModel(
-                  input.model ?? options.model,
-                  options.append,
-                  planAudit === undefined ? undefined : { ...planAudit, attempt: input.attempt },
-                  true,
-                )
-                const modelStream =
-                  options.agent === undefined
-                    ? options.chat
-                        .streamText({
-                          prompt: [],
-                          toolkit: interceptedToolkit,
-                          concurrency: "unbounded",
-                        })
-                        .pipe(Stream.provideService(LanguageModel.LanguageModel, interceptedModel))
-                    : Stream.unwrap(
-                        modelAttempt(
-                          { ...logicalRequest!, prompt: input.prompt },
-                          input.attempt,
-                        ).pipe(
-                          Effect.map((result) => result.stream),
-                          Effect.provideService(LanguageModel.LanguageModel, interceptedModel),
-                        ),
-                      )
-                const observed = modelStream.pipe(
-                  Stream.provideService(AgentEmit, { emit }),
-                  Stream.tap((part) => {
-                    modelOutputObserved = true
+                return [true, { ...state, active: true }]
+              })
+              if (!canStart) {
+                return Stream.fail(
+                  new UnsafeModelRetry({
+                    sessionId: context.sessionId,
+                    turn: context.turn,
+                    step: context.step,
+                    attempt: input.attempt,
+                  }),
+                ) as Stream.Stream<
+                  Response.StreamPart<Record<string, Tool.Any>>,
+                  AiError.AiError | RunError | UnsafeModelRetry,
+                  never
+                >
+              }
+              collectedParts.length = 0
+              const interceptedModel = interceptModel(
+                input.model ?? options.model,
+                options.append,
+                planAudit === undefined ? undefined : { ...planAudit, attempt: input.attempt },
+                true,
+              )
+              const modelStream =
+                options.agent === undefined
+                  ? options.chat
+                      .streamText({
+                        prompt: [],
+                        toolkit: interceptedToolkit,
+                        concurrency: "unbounded",
+                      })
+                      .pipe(Stream.provideService(LanguageModel.LanguageModel, interceptedModel))
+                  : Stream.unwrap(
+                      modelAttempt(
+                        { ...logicalRequest!, prompt: input.prompt },
+                        input.attempt,
+                      ).pipe(
+                        Effect.map((result) => result.stream),
+                        Effect.provideService(LanguageModel.LanguageModel, interceptedModel),
+                      ),
+                    )
+              const observed = modelStream.pipe(
+                Stream.provideService(AgentEmit, { emit }),
+                Stream.tap((part) =>
+                  Effect.gen(function* () {
+                    yield* Ref.update(attemptStateRef, (state) => ({
+                      ...state,
+                      outputObserved: true,
+                    }))
                     collectedParts.push(part)
 
-                    const event = toEvent(
+                    const eventOpt = toEvent(
                       part,
                       (name, _params, id, providerExecuted) =>
                         correlator.observeProviderCall({
@@ -564,25 +570,29 @@ export const run = <R = never, E = never>(
                         }),
                       correlator.tokenForProviderId,
                     )
-                    return event === undefined ? Effect.void : emit(event)
+                    if (Option.isSome(eventOpt)) {
+                      yield* emit(eventOpt.value)
+                    }
                   }),
-                )
-                const guarded: Stream.Stream<
-                  Response.StreamPart<Record<string, Tool.Any>>,
-                  AiError.AiError | RunError,
-                  never
-                > = options.agent === undefined
-                  ? observed.pipe(
-                      Stream.mapError((cause) =>
-                        runError(cause, { sessionId: options.sessionId }, "model"),
-                      ),
-                    )
-                  : observed
-                return guarded.pipe(
-                  Stream.ensuring(Effect.sync(() => (modelAttemptActive = false))),
-                )
-              },
-            ),
+                ),
+              )
+              const guarded: Stream.Stream<
+                Response.StreamPart<Record<string, Tool.Any>>,
+                AiError.AiError | RunError,
+                never
+              > = options.agent === undefined
+                ? observed.pipe(
+                    Stream.mapError((cause) =>
+                      runError(cause, { sessionId: options.sessionId }, "model"),
+                    ),
+                  )
+                : observed
+              return guarded.pipe(
+                Stream.ensuring(
+                  Ref.update(attemptStateRef, (state) => ({ ...state, active: false })),
+                ),
+              )
+            }),
           )
         const modelInput: ModelCallInput = {
           sessionId: context.sessionId.toString(),
@@ -597,10 +607,9 @@ export const run = <R = never, E = never>(
           Stream.runCollect,
           Effect.map((parts) => [...parts]),
         )
-        const timedModel =
-          policy.modelTimeout === undefined
-            ? collectModel
-            : collectModel.pipe(Effect.timeout(policy.modelTimeout))
+        const timedModel = Option.isNone(policy.modelTimeout)
+          ? collectModel
+          : collectModel.pipe(Effect.timeout(policy.modelTimeout.value))
         const outcome = yield* Effect.raceFirst(
           timedModel.pipe(Effect.map((parts) => ({ _tag: "Done" as const, parts }))),
           options.interrupt.awaitSignal,

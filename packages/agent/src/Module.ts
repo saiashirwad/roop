@@ -31,11 +31,7 @@ interface ModuleInput {
 const buildModule = <M extends ModuleInput>(
   module: M,
   context: AgentContext,
-): Effect.Effect<
-  AgentContribution<Requirements<M>, Errors<M>>,
-  Errors<M>,
-  Requirements<M>
-> =>
+): Effect.Effect<AgentContribution<Requirements<M>, Errors<M>>, Errors<M>, Requirements<M>> =>
   /* SAFETY: ModuleInput hides only the channels that Requirements and Errors
    * recover from the concrete Module type. */
   module.build(context) as Effect.Effect<
@@ -67,11 +63,7 @@ export type ToolHandler<T extends Tool.Any> = (
   context: Toolkit.HandlerContext<T>,
 ) => Effect.Effect<Tool.Success<T>, Tool.Failure<T>, Tool.HandlerServices<T>>
 
-export function tool<
-  const T extends Tool.Any,
-  E,
-  R,
->(
+export function tool<const T extends Tool.Any, E, R>(
   definition: T,
   handler: (
     params: Tool.Parameters<T>,
@@ -102,9 +94,7 @@ export const all = <const Modules extends ReadonlyArray<ModuleInput>>(
     (context) =>
       Effect.all(modules.map((module) => buildModule(module, context))).pipe(
         Effect.map((parts) =>
-          parts.reduce<
-            AgentContribution<Requirements<Modules[number]>, Errors<Modules[number]>>
-          >(
+          parts.reduce<AgentContribution<Requirements<Modules[number]>, Errors<Modules[number]>>>(
             (result, part) =>
               contribution(
                 [...result.instructions, ...part.instructions],
@@ -145,7 +135,9 @@ export const provide = <M extends ModuleInput, I, S>(
   value: S,
 ): Module<Exclude<Requirements<M>, I>, Errors<M>> =>
   /* SAFETY: the supplied service is exactly the Context.Key removed from R. */
-  make((context) => buildModule(module, context).pipe(Effect.provideService(service, value))) as never
+  make((context) =>
+    buildModule(module, context).pipe(Effect.provideService(service, value)),
+  ) as never
 
 export const provideLayer = <M extends ModuleInput, L extends Layer.Any>(
   module: M,

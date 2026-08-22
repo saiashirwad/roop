@@ -6,6 +6,7 @@ import { AiError, LanguageModel, Prompt, Tool } from "effect/unstable/ai"
 import type * as Response from "effect/unstable/ai/Response"
 
 import { Agent } from "../src/Agent.ts"
+import { SessionId } from "../src/DomainIds.ts"
 import { FinalizationError, UnsafeModelRetry } from "../src/Error.ts"
 import { EVENT_VERSION, type JournalEvent } from "../src/Event.ts"
 import { Journal, JournalError } from "../src/Journal.ts"
@@ -265,14 +266,15 @@ it.effect("preserves primary and journal failures during terminal finalization",
     const failingJournal = Layer.succeed(
       Journal,
       Journal.of({
-        load: (sessionId) => Effect.succeed({ sessionId, revision: 0, events: [] }),
+        load: (sessionId) =>
+          Effect.succeed({ sessionId: SessionId.make(sessionId), revision: 0, events: [] }),
         append: (sessionId, revision, events) =>
           events.some((event) => event._tag === "run" && event.state === "aborted")
             ? Effect.fail(
                 new JournalError({
                   operation: "append",
-                  sessionId,
-                  message: "terminal append failed",
+                  sessionId: SessionId.make(sessionId),
+                  detail: "terminal append failed",
                 }),
               )
             : Effect.succeed(revision + events.length),
@@ -310,14 +312,15 @@ it.effect("keeps a model-request journal failure in the typed error channel", ()
     const failingJournal = Layer.succeed(
       Journal,
       Journal.of({
-        load: (sessionId) => Effect.succeed({ sessionId, revision: 0, events: [] }),
+        load: (sessionId) =>
+          Effect.succeed({ sessionId: SessionId.make(sessionId), revision: 0, events: [] }),
         append: (sessionId, revision, events) =>
           events.some((event) => event._tag === "model/request")
             ? Effect.fail(
                 new JournalError({
                   operation: "append",
-                  sessionId,
-                  message: "request append failed",
+                  sessionId: SessionId.make(sessionId),
+                  detail: "request append failed",
                 }),
               )
             : Effect.succeed(revision + events.length),

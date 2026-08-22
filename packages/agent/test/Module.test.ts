@@ -4,12 +4,13 @@ import { Prompt, Tool } from "effect/unstable/ai"
 
 import { Agent } from "../src/Agent.ts"
 import type { AgentContext } from "../src/AgentContext.ts"
+import { RunId, SessionId } from "../src/DomainIds.ts"
 import { Module } from "../src/Module.ts"
 import { ToolConflict } from "../src/ToolRegistry.ts"
 
 const context = (step: number): AgentContext => ({
-  sessionId: "session",
-  runId: "run",
+  sessionId: SessionId.make("session"),
+  runId: RunId.make("run"),
   turn: 1,
   step,
   history: Prompt.empty,

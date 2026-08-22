@@ -1,4 +1,4 @@
-import { Context, type Effect, Layer, type Scope, type Stream } from "effect"
+import { Context, Effect, Layer, type Scope, type Stream } from "effect"
 import type { LanguageModel, Prompt } from "effect/unstable/ai"
 import type * as Tool from "effect/unstable/ai/Tool"
 
@@ -103,27 +103,31 @@ export const all = <R = never, E = never>(
 })
 
 /** Layer service for applications that build middleware with dependencies. */
-export interface MiddlewareService extends Middleware {}
+export class MiddlewareService extends Context.Service<MiddlewareService, Middleware>()(
+  "roop/Middleware",
+) {}
 
-export const MiddlewareService = Context.Reference<MiddlewareService>("roop/Middleware", {
-  defaultValue: () => empty,
-})
-
-export const layerEmpty =
-  /* SAFETY: Context.Reference identifiers are never, but the runtime key is MiddlewareService. */
-  Layer.succeed(MiddlewareService, empty) as Layer.Layer<MiddlewareService>
+export const layerEmpty: Layer.Layer<MiddlewareService> = Layer.succeed(
+  MiddlewareService,
+  MiddlewareService.of(empty),
+)
 
 /** Build a middleware service while preserving the builder requirements and failures. */
 export const layer = <R, E>(
   name: string,
   build: Effect.Effect<Middleware<R, E>, E, R>,
-): Layer.Layer<MiddlewareService, E, R> =>
-  /* SAFETY: Context.Reference identifiers are never, and withSpan consumes only ParentSpan. */
-  Layer.effect(
+): Layer.Layer<MiddlewareService, E, R> => {
+  /* SAFETY: MiddlewareService is an erased capability seam tag; the layer preserves R and E. */
+  return Layer.effect(
     MiddlewareService,
-    /* SAFETY: the service tag erases R and E after Layer construction. */
-    build as Effect.Effect<Middleware, E, R>,
+    build.pipe(
+      Effect.map((mw) => {
+        /* SAFETY: Middleware types are structurally compatible across runtime erasure boundaries. */
+        return MiddlewareService.of(mw as Middleware)
+      }),
+    ),
   ).pipe(Layer.withSpan(`Middleware/${name}`)) as Layer.Layer<MiddlewareService, E, R>
+}
 
 /** Build a scoped middleware service. Its finalizer follows the Layer scope. */
 export const layerScoped = <R, E>(

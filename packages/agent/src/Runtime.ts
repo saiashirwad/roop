@@ -1,10 +1,11 @@
 /* oxlint-disable anti-slop/no-chained-type-assertions, anti-slop/no-escape-hatch-assertions, anti-slop/require-safety-comment-for-type-assertion, anti-slop/no-unknown-parameters -- SAFETY: this module contains the single Journal JSON boundary and the typed Effect AI compatibility boundary. */
 
-import { Cause, Context, Effect, Exit, Layer, Option, Stream } from "effect"
+import { Cause, Context, Effect, Exit, Layer, Option, Ref, Stream } from "effect"
 import { Chat, LanguageModel, Prompt, type AiError } from "effect/unstable/ai"
 
 import type { AgentDefinition } from "./Agent.ts"
 import type { AgentEvent, SessionEvent } from "./AgentEvents.ts"
+import { makeRunId, makeSessionId, type RunId, type SessionId } from "./DomainIds.ts"
 import { FinalizationError, type UnsafeModelRetry } from "./Error.ts"
 import { EVENT_VERSION, type Json, type JournalEvent, type LifecycleState } from "./Event.ts"
 import { fromEvents, recoveryEvents, toPrompt } from "./History.ts"
@@ -29,8 +30,8 @@ import { ToolRegistry, type InvalidToolName, type ToolConflict } from "./ToolReg
 
 /** Input for one direct, scoped kernel run. */
 export interface AgentRuntimeRequest<out R = never, out E = never> {
-  readonly sessionId: string
-  readonly runId?: string | undefined
+  readonly sessionId: SessionId | string
+  readonly runId?: RunId | string | undefined
   readonly prompt: string
   readonly policy?: RunPolicy | undefined
   readonly middleware?: Middleware<R, E> | undefined
@@ -70,8 +71,8 @@ type RuntimeError<E> =
   | Cause.TimeoutError
 
 interface JournalBridge {
-  readonly sessionId: string
-  readonly runId: string
+  readonly sessionId: SessionId
+  readonly runId: RunId
   revision: Revision
   turn: number
   step: number
@@ -301,11 +302,14 @@ const runtimeRun = <R, E, RM = never, EM = never>(
     Effect.gen(function* () {
       const model = yield* LanguageModel.LanguageModel
       const journal = yield* Journal
-      const installedMiddleware = yield* MiddlewareService
-      const session = yield* journal.load(request.sessionId)
-      const runId = request.runId ?? `${request.sessionId}:${session.revision}`
+      const installedMiddleware = yield* Effect.serviceOption(MiddlewareService).pipe(
+        Effect.map(Option.getOrElse(() => emptyMiddleware)),
+      )
+      const sessionId = makeSessionId(request.sessionId)
+      const session = yield* journal.load(sessionId)
+      const runId = makeRunId(request.runId ?? `${sessionId}:${session.revision}`)
       const bridge: JournalBridge = {
-        sessionId: request.sessionId,
+        sessionId,
         runId,
         revision: session.revision,
         turn: 0,
@@ -313,13 +317,16 @@ const runtimeRun = <R, E, RM = never, EM = never>(
         attemptOpen: false,
         attempt: 1,
       }
+      const revisionRef = yield* Ref.make(session.revision)
       const recovery = recoveryEvents(session.events)
       if (recovery.length > 0) {
         const batch = [recovery[0]!, ...recovery.slice(1)] as readonly [
           JournalEvent,
           ...JournalEvent[],
         ]
-        bridge.revision = yield* journal.append(request.sessionId, bridge.revision, batch)
+        const nextRev = yield* journal.append(sessionId, session.revision, batch)
+        yield* Ref.set(revisionRef, nextRev)
+        bridge.revision = nextRev
       }
       const recoveredEvents = [...session.events, ...recovery]
       const history = toPrompt(fromEvents(recoveredEvents))
@@ -332,34 +339,38 @@ const runtimeRun = <R, E, RM = never, EM = never>(
         {
           _tag: "run",
           version: EVENT_VERSION,
-          sessionId: request.sessionId,
+          sessionId,
           runId,
           state: "started",
         },
       ]
-      bridge.revision = yield* journal.append(
-        request.sessionId,
-        bridge.revision,
+      const currentRev = yield* Ref.get(revisionRef)
+      const startedRev = yield* journal.append(
+        sessionId,
+        currentRev,
         startEvents as unknown as readonly [JournalEvent, ...JournalEvent[]],
       )
+      yield* Ref.set(revisionRef, startedRev)
+      bridge.revision = startedRev
+
       const chat = yield* Chat.fromPrompt(Prompt.concat(history, Prompt.make(request.prompt)))
-      const append = (event: SessionEvent): Effect.Effect<void, RunError | JournalAppendError> => {
+      const append = Effect.fn("Runtime.append")(function* (event: SessionEvent) {
         const durable = toDurableEvents(bridge, event)
-        if (durable.length === 0) return Effect.void
+        if (durable.length === 0) return
         const batch = [durable[0]!, ...durable.slice(1)] as unknown as readonly [
           JournalEvent,
           ...JournalEvent[],
         ]
-        return journal.append(request.sessionId, bridge.revision, batch).pipe(
-          Effect.tap((revision) => Effect.sync(() => (bridge.revision = revision))),
-          Effect.asVoid,
-        )
-      }
+        const rev = yield* Ref.get(revisionRef)
+        const nextRev = yield* journal.append(sessionId, rev, batch)
+        yield* Ref.set(revisionRef, nextRev)
+        bridge.revision = nextRev
+      })
       const emptyToolkit = yield* ToolRegistry.empty.finalize
       // SAFETY: runtimeRun has already supplied the model and empty toolkit;
       // the explicit agent remains the only source of R and E at this boundary.
       const stream = run({
-        sessionId: request.sessionId,
+        sessionId,
         runId,
         agent,
         chat,
@@ -379,36 +390,33 @@ const runtimeRun = <R, E, RM = never, EM = never>(
         ),
       }) as Stream.Stream<AgentEvent, RuntimeError<E | EM>, R | RM>
 
-      let terminalAttempted = false
+      const terminalRef = yield* Ref.make(false)
 
-      const appendRunState = (
+      const appendRunState = Effect.fn("Runtime.appendRunState")(function* (
         state: LifecycleState,
         reason?: "completed" | "failed" | "interrupted" | "stopped",
-      ): Effect.Effect<void, JournalAppendError> => {
+      ) {
         const event: JournalEvent = {
           _tag: "run",
           version: EVENT_VERSION,
-          sessionId: request.sessionId,
+          sessionId,
           runId,
           state,
           ...(reason === undefined ? undefined : { reason }),
         }
         const batch = [event] as readonly [JournalEvent, ...JournalEvent[]]
-        return journal.append(request.sessionId, bridge.revision, batch).pipe(
-          Effect.tap((revision) => Effect.sync(() => (bridge.revision = revision))),
-          Effect.asVoid,
-        )
-      }
+        const rev = yield* Ref.get(revisionRef)
+        const nextRev = yield* journal.append(sessionId, rev, batch)
+        yield* Ref.set(revisionRef, nextRev)
+        bridge.revision = nextRev
+      })
 
       return stream.pipe(
         Stream.tap((event) =>
-          event._tag === "Finish"
+          event._tag === "Finish" && event.reason === "completed"
             ? Effect.gen(function* () {
-                terminalAttempted = true
-                yield* appendRunState(
-                  event.reason === "completed" ? "completed" : "aborted",
-                  event.reason,
-                )
+                yield* Ref.set(terminalRef, true)
+                yield* appendRunState("completed", "completed")
               })
             : Effect.void,
         ),
@@ -416,7 +424,7 @@ const runtimeRun = <R, E, RM = never, EM = never>(
           Stream.unwrap(
             Effect.uninterruptible(
               Effect.gen(function* () {
-                terminalAttempted = true
+                yield* Ref.set(terminalRef, true)
                 return yield* Effect.exit(appendRunState("aborted", "failed"))
               }),
             ).pipe(
@@ -425,7 +433,7 @@ const runtimeRun = <R, E, RM = never, EM = never>(
                   ? Effect.failCause(cause)
                   : Effect.fail(
                       new FinalizationError({
-                        sessionId: request.sessionId,
+                        sessionId,
                         primary: Option.getOrElse(Cause.findErrorOption(cause), () => cause),
                         journal: Option.getOrElse(
                           Cause.findErrorOption(terminal.cause),
@@ -439,12 +447,12 @@ const runtimeRun = <R, E, RM = never, EM = never>(
         ),
         Stream.ensuring(
           Effect.uninterruptible(
-            Effect.when(
-              Effect.gen(function* () {
-                terminalAttempted = true
-                yield* appendRunState("aborted", "interrupted")
-              }).pipe(Effect.ignore),
-              Effect.sync(() => !terminalAttempted),
+            Effect.flatMap(
+              Ref.modify(terminalRef, (attempted) => (attempted ? [false, true] : [true, true])),
+              (shouldRun) =>
+                shouldRun
+                  ? appendRunState("aborted", "interrupted").pipe(Effect.ignore)
+                  : Effect.void,
             ),
           ),
         ),

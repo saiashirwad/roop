@@ -2,12 +2,13 @@ import { assert, it } from "@effect/vitest"
 import { Effect, Exit, Option, Schema } from "effect"
 import { Prompt, Tool } from "effect/unstable/ai"
 
+import { RunId, SessionId } from "../src/DomainIds.ts"
 import { Module } from "../src/Module.ts"
 import { InvalidToolName, ToolConflict } from "../src/ToolRegistry.ts"
 
 const context = {
-  sessionId: "session",
-  runId: "run",
+  sessionId: SessionId.make("session"),
+  runId: RunId.make("run"),
   turn: 1,
   step: 1,
   history: Prompt.empty,
