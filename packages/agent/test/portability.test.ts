@@ -8,6 +8,11 @@ const allowed = (specifier: string) =>
   specifier.startsWith("effect/unstable/ai/") ||
   specifier.startsWith(".")
 
+it("portability policy rejects Node and provider imports", () => {
+  assert.strictEqual(allowed("node:fs"), false)
+  assert.strictEqual(allowed("@effect/ai-openai"), false)
+})
+
 it.effect("portability: agent core imports only effect and effect/unstable/ai", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem

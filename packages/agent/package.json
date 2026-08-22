@@ -1,44 +1,36 @@
 {
   "name": "@roop/agent",
   "version": "0.0.0",
-  "private": true,
+  "files": [
+    "dist"
+  ],
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
-    "./Agent.ts": "./src/Agent.ts",
-    "./AgentBus.ts": "./src/AgentBus.ts",
-    "./AgentConfig.ts": "./src/AgentConfig.ts",
-    "./AgentEvents.ts": "./src/AgentEvents.ts",
-    "./AgentHooks.ts": "./src/AgentHooks.ts",
-    "./AgentTools.ts": "./src/AgentTools.ts",
-    "./Capabilities.ts": "./src/Capabilities.ts",
-    "./DomainIds.ts": "./src/DomainIds.ts",
-    "./ModelCatalog.ts": "./src/ModelCatalog.ts",
-    "./Plugin.ts": "./src/Plugin.ts",
-    "./RunError.ts": "./src/RunError.ts",
-    "./RunPolicy.ts": "./src/RunPolicy.ts",
-    "./RunRegistry.ts": "./src/RunRegistry.ts",
-    "./SessionJournal.ts": "./src/SessionJournal.ts",
-    "./Skills.ts": "./src/Skills.ts",
-    "./Testing.ts": "./src/Testing.ts",
-    "./cryptoWeb.ts": "./src/cryptoWeb.ts",
-    "./DoomLoopGuard.ts": "./src/DoomLoopGuard.ts",
-    "./Subagent.ts": "./src/Subagent.ts",
-    "./ToolPruning.ts": "./src/ToolPruning.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "import": "./dist/testing/index.js"
+    }
   },
   "scripts": {
-    "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run && vitest run --config vitest.workerd.config.ts"
-  },
-  "dependencies": {
-    "effect": "4.0.0-beta.97"
+    "clean": "node -e 'require(\"node:fs\").rmSync(\"dist\", { recursive: true, force: true })'",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "pnpm build && tsc --noEmit -p tsconfig.json",
+    "test": "pnpm build && vitest run && vitest run --config vitest.workerd.config.ts"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.21.2",
     "@effect/platform-node": "4.0.0-beta.97",
     "@effect/vitest": "4.0.0-beta.97",
     "@types/node": "^26.1.1",
+    "effect": "4.0.0-beta.97",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
+  },
+  "peerDependencies": {
+    "effect": "4.0.0-beta.97"
   }
 }

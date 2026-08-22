@@ -1,0 +1,108 @@
+{
+  "status": "complete",
+  "verdict": "Ready",
+  "scope": {
+    "base": "83e4cc77c8417dba07e74c722adf0d00c9ca7172",
+    "branch": "flue-cut",
+    "head_sha": "3518346",
+    "pr_url": null,
+    "files_changed": 68
+  },
+  "intent": "Extract a portable Effect-native agent kernel with explicit agents, modules, middleware, journals, and host-owned RPC supervision.",
+  "intent_confidence": "explicit",
+  "reviewers": ["correctness", "effect-api-design", "spec-and-tests"],
+  "findings": [
+    {
+      "#": 1,
+      "severity": "P1",
+      "file": "packages/agent/src/internal/run.ts",
+      "line": 198,
+      "title": "Journal append failure became a defect",
+      "confidence": "high",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "suggested_fix": "Propagate JournalAppendError through the model stream."
+    },
+    {
+      "#": 2,
+      "severity": "P1",
+      "file": "packages/agent/src/internal/run.ts",
+      "line": 296,
+      "title": "Tool timeout aborted the run",
+      "confidence": "high",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "suggested_fix": "Return one model-visible timeout result."
+    },
+    {
+      "#": 3,
+      "severity": "P1",
+      "file": "packages/agent/src/Middleware.ts",
+      "line": 41,
+      "title": "Kernel does not enforce safe retry state",
+      "confidence": "high",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "suggested_fix": "Control retries after visible output or tool dispatch."
+    },
+    {
+      "#": 4,
+      "severity": "P1",
+      "file": "packages/agent/test/Runtime.test.ts",
+      "line": 1,
+      "title": "Required characterization coverage is incomplete",
+      "confidence": "high",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "suggested_fix": "Restore timeout, concurrency, limits, reasoning, and invalid-parameter tests."
+    },
+    {
+      "#": 5,
+      "severity": "P1",
+      "file": "packages/agent/test/extensions.test.ts",
+      "line": 1,
+      "title": "Extension proof coverage is incomplete",
+      "confidence": "high",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "suggested_fix": "Run all six public examples and add child failure and cancellation proofs."
+    },
+    {
+      "#": 6,
+      "severity": "P2",
+      "file": "packages/agent/src/History.ts",
+      "line": 243,
+      "title": "Recovery matches reused tool IDs without step namespace",
+      "confidence": "high",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "suggested_fix": "Use a durable run, turn, step, and call correlation key."
+    },
+    {
+      "#": 7,
+      "severity": "P2",
+      "file": "packages/agent/src/AgentPlan.ts",
+      "line": 21,
+      "title": "Direct plans kept blank instruction fragments",
+      "confidence": "high",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "suggested_fix": "Filter blank fragments."
+    }
+  ],
+  "actionable_findings": [],
+  "triage_groups": [],
+  "pre_existing_findings": [],
+  "requirements_completeness": "complete",
+  "learnings": [],
+  "agent_native_gaps": [],
+  "deployment_notes": [],
+  "residual_risks": ["The package is experimental and uses effect/unstable/ai."],
+  "testing_gaps": [],
+  "coverage": {
+    "applied_findings": [1, 2, 3, 4, 5, 6, 7],
+    "suppressed_findings": ["Unknown-tool behavior is a settled design decision."]
+  },
+  "artifact_path": "docs/code-reviews/2026-08-22-roop-kernel",
+  "run_id": "2026-08-22-roop-kernel"
+}
