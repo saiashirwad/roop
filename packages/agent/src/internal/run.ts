@@ -19,19 +19,17 @@ import { toPrompt as planToPrompt } from "../AgentPlan.ts"
 import type { ErasedToolkit } from "../AgentTools.ts"
 import type { SessionId } from "../DomainIds.ts"
 import type { JournalAppendError } from "../Journal.ts"
+import {
+  empty as emptyMiddleware,
+  type Middleware,
+  type ModelCallInput,
+  type ToolCallInput,
+} from "../Middleware.ts"
 import { runError, type RunError } from "../RunError.ts"
 import { resolveRunPolicy, type ResolvedRunPolicy, type RunPolicy } from "../RunPolicy.ts"
 import type { ControlSignal, InterruptSignal } from "../RunSignal.ts"
 import type { InvalidToolName, ToolConflict } from "../ToolRegistry.ts"
-import {
-  canRetryAttempt,
-  defaultModelAttemptPolicy,
-  modelAttempt,
-  requestFingerprint,
-  type AttemptState,
-  type LogicalModelRequest,
-  type ModelAttemptPolicy,
-} from "./effectAiAdapter.ts"
+import { modelAttempt, requestFingerprint, type LogicalModelRequest } from "./effectAiAdapter.ts"
 import { makeToolCallCorrelator } from "./toolCallCorrelator.ts"
 import { makeToolScheduler, type ToolScheduler } from "./toolScheduler.ts"
 
@@ -45,12 +43,12 @@ export interface RunOptions<R = never, E = never> {
   readonly interrupt: InterruptSignal
   readonly append: (event: SessionEvent) => Effect.Effect<void, RunError | JournalAppendError>
   readonly hooks: AgentHooksInterface
+  /** Typed around middleware. The legacy hooks field remains internal compatibility. */
+  readonly middleware?: Middleware | undefined
   /** Explicit agent used by the staged logical-plan interpreter path. */
   readonly agent?: AgentDefinition<R, E> | undefined
   /** Stable run identity supplied to the agent renderer. */
   readonly runId?: string | undefined
-  /** Internal logical-attempt seam. Public fallback policy belongs to U6. */
-  readonly attemptPolicy?: ModelAttemptPolicy | undefined
 }
 
 /** Outcome of one step, as the turn loop sees it. */
@@ -257,12 +255,12 @@ const outputTooLarge = (maxBytes: number) => ({
 const interceptToolkit = (
   toolkit: ErasedToolkit,
   hooks: AgentHooksInterface,
+  middleware: Middleware,
   context: () => RunContext,
   emit: (event: AgentEvent) => Effect.Effect<void>,
   scheduler: ToolScheduler,
   correlator: ReturnType<typeof makeToolCallCorrelator>,
   policy: Pick<ResolvedRunPolicy, "toolTimeout" | "maxToolOutputBytes">,
-  onDispatchStart?: (() => void) | undefined,
 ): ErasedToolkit => {
   /* SAFETY: The intercept preserves ErasedToolkit.handle while inserting hook seams. */
   return {
@@ -274,7 +272,6 @@ const interceptToolkit = (
         // must represent invocation order, not execution timing.
         const token = correlator.allocateToken(name)
         const admitted = yield* hooks.beforeToolExecute(context(), { name, params })
-        onDispatchStart?.()
         const scheduled = scheduler.scheduleEffect(
           Effect.suspend(() =>
             /* oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- Tool.Any's existential requirements channel is preserved through the generic execution hook. */
@@ -295,12 +292,20 @@ const interceptToolkit = (
             ),
           ),
         )
+        const toolInput: ToolCallInput = {
+          sessionId: context().sessionId.toString(),
+          turn: context().turn,
+          step: context().step,
+          name,
+          params: admitted.params,
+        }
+        const wrapped = middleware.tool(() => scheduled)(toolInput)
         const timed =
           policy.toolTimeout === undefined
-            ? scheduled
+            ? wrapped
             : Stream.unwrap(
                 /* oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- Tool.Any's existential requirements channel leaks through ErasedToolkit.handle; handlers are built closed before eraseToolkit and closure is reasserted at asClosedToolkit. */
-                Effect.timeout(Stream.runCollect(scheduled), policy.toolTimeout).pipe(
+                Effect.timeout(Stream.runCollect(wrapped), policy.toolTimeout).pipe(
                   Effect.map((results) => Stream.fromIterable([...results])),
                 ),
               )
@@ -379,6 +384,7 @@ export const run = <R = never, E = never>(
   options: RunOptions<R, E>,
 ): Stream.Stream<AgentEvent, RunStreamError<E>, R> =>
   Stream.callback<AgentEvent, RunStreamError<E>>((queue) => {
+    const middleware = options.middleware ?? emptyMiddleware
     // Innermost journal span still open; drives cause-time closing in one place.
     let openSpan: "turn" | "step" | "none" = "none"
     const emit = (event: AgentEvent) => Queue.offer(queue, event)
@@ -486,61 +492,52 @@ export const run = <R = never, E = never>(
           }
         }
         const collectedParts: Array<Response.StreamPart<Record<string, Tool.Any>>> = []
-        let attemptState: AttemptState = {
-          emittedModelPart: false,
-          toolDispatchStarted: false,
-        }
         type ModelOutcome =
           | ControlSignal
           | {
               readonly _tag: "Done"
               readonly parts: ReadonlyArray<Response.StreamPart<Record<string, Tool.Any>>>
             }
-        const runAttempt = (
-          attempt: number,
-          recordAudit: boolean,
-        ): Effect.Effect<ModelOutcome, RunStreamError<E>, R> => {
+        const interceptedToolkit = asClosedToolkit(
+          interceptToolkit(
+            toolkit,
+            options.hooks,
+            middleware,
+            () => context,
+            emit,
+            scheduler,
+            correlator,
+            policy,
+          ),
+        )
+        const logicalRequest: LogicalModelRequest | undefined =
+          options.agent === undefined
+            ? undefined
+            : {
+                planId: planAudit!.planId,
+                fingerprint: planAudit!.fingerprint,
+                prompt: modelPrompt ?? preStepHistory,
+                /* SAFETY: the registry validated these definitions before
+                 * the single Effect AI toolkit erasure boundary. */
+                toolkit: interceptedToolkit as unknown as Toolkit.WithHandler<
+                  Record<string, Tool.Any>
+                >,
+              }
+        const baseModelCall = (
+          input: ModelCallInput,
+        ): Stream.Stream<
+          Response.StreamPart<Record<string, Tool.Any>>,
+          AiError.AiError | RunError,
+          never
+        > => {
           collectedParts.length = 0
-          const interceptedToolkit = asClosedToolkit(
-            interceptToolkit(
-              toolkit,
-              options.hooks,
-              () => context,
-              emit,
-              scheduler,
-              correlator,
-              policy,
-              () => {
-                attemptState = { ...attemptState, toolDispatchStarted: true }
-              },
-            ),
-          )
-          const logicalRequest: LogicalModelRequest | undefined =
-            options.agent === undefined
-              ? undefined
-              : {
-                  planId: planAudit!.planId,
-                  fingerprint: planAudit!.fingerprint,
-                  prompt: modelPrompt ?? preStepHistory,
-                  /* SAFETY: the registry erased tool names once; Effect AI
-                   * still validates each call against the same definitions. */
-                  /* oxlint-disable-next-line anti-slop/no-chained-type-assertions, anti-slop/no-escape-hatch-assertions -- SAFETY: this is the single Effect AI toolkit erasure boundary after registry validation. */
-                  /* SAFETY: the registry validated these definitions before
-                   * the single Effect AI toolkit erasure boundary. */
-                  toolkit: interceptedToolkit as unknown as Toolkit.WithHandler<
-                    Record<string, Tool.Any>
-                  >,
-                }
-          if (logicalRequest !== undefined) {
-            options.attemptPolicy?.onAttempt?.(logicalRequest, attempt)
-          }
           const interceptedModel = interceptModel(
-            options.model,
+            input.model ?? options.model,
             options.hooks,
             () => context,
             options.append,
-            planAudit === undefined ? undefined : { ...planAudit, attempt },
-            options.agent !== undefined ? true : recordAudit,
+            planAudit === undefined ? undefined : { ...planAudit, attempt: input.attempt },
+            true,
           )
           const modelStream =
             options.agent === undefined
@@ -552,7 +549,7 @@ export const run = <R = never, E = never>(
                   })
                   .pipe(Stream.provideService(LanguageModel.LanguageModel, interceptedModel))
               : Stream.unwrap(
-                  modelAttempt(logicalRequest!, attempt).pipe(
+                  modelAttempt({ ...logicalRequest!, prompt: input.prompt }, input.attempt).pipe(
                     Effect.map((result) => result.stream),
                     Effect.provideService(LanguageModel.LanguageModel, interceptedModel),
                   ),
@@ -560,7 +557,6 @@ export const run = <R = never, E = never>(
           const observed = modelStream.pipe(
             Stream.provideService(AgentEmit, { emit }),
             Stream.tap((part) => {
-              attemptState = { ...attemptState, emittedModelPart: true }
               collectedParts.push(part)
 
               const event = toEvent(
@@ -577,56 +573,35 @@ export const run = <R = never, E = never>(
               return event === undefined ? Effect.void : emit(event)
             }),
           )
-          const collectStream = observed.pipe(
-            Stream.runCollect,
-            Effect.map((parts) => [...parts]),
-          )
-          const timedStepStream =
-            policy.modelTimeout === undefined
-              ? collectStream
-              : collectStream.pipe(Effect.timeout(policy.modelTimeout))
-          const explicit = options.agent !== undefined
-          /* oxlint-disable-next-line anti-slop/no-chained-type-assertions, anti-slop/no-escape-hatch-assertions -- SAFETY: this is the single model result erasure boundary after the explicit/compatibility branch is selected. */
-          const admitted = (explicit
-            ? timedStepStream
-            : timedStepStream.pipe(
-                Effect.mapError((cause) =>
+          return options.agent === undefined
+            ? observed.pipe(
+                Stream.mapError((cause) =>
                   runError(cause, { sessionId: options.sessionId }, "model"),
                 ),
-                /* oxlint-disable-next-line anti-slop/no-chained-type-assertions, anti-slop/no-escape-hatch-assertions -- SAFETY: the branch above supplies the exact model response stream; this cast only joins compatibility and explicit errors. */
-                /* SAFETY: the branch above supplies the exact model response
-                 * stream; this cast only joins compatibility and explicit errors. */
-              )) as unknown as Effect.Effect<
-            ReadonlyArray<Response.StreamPart<Record<string, Tool.Any>>>,
-            RunStreamError<E>,
-            R
-          >
-          // SAFETY: admitted is narrowed to the model response contract above;
-          // raceFirst only adds the existing interrupt control signal.
-          return Effect.raceFirst(
-            admitted.pipe(Effect.map((parts) => ({ _tag: "Done" as const, parts }))),
-            options.interrupt.awaitSignal,
-          ) as Effect.Effect<ModelOutcome, RunStreamError<E>, R>
+              )
+            : observed
         }
-
-        const attemptPolicy = options.attemptPolicy ?? defaultModelAttemptPolicy
-        let attempt = 1
-        let outcome: ModelOutcome
-        while (true) {
-          attemptState = { emittedModelPart: false, toolDispatchStarted: false }
-          const result = yield* Effect.exit(runAttempt(attempt, attempt === 1))
-          if (Exit.isSuccess(result)) {
-            outcome = result.value
-            break
-          }
-          const retry =
-            options.agent !== undefined &&
-            attempt < Math.max(1, Math.floor(attemptPolicy.maxAttempts)) &&
-            (attemptPolicy.shouldRetry?.(result.cause, attemptState, attempt) ??
-              canRetryAttempt(attemptState))
-          if (!retry) return yield* Effect.failCause(result.cause)
-          attempt += 1
+        const modelInput: ModelCallInput = {
+          sessionId: context.sessionId.toString(),
+          turn: context.turn,
+          step: context.step,
+          prompt: modelPrompt ?? preStepHistory,
+          attempt: 1,
+          ...(planAudit === undefined ? undefined : planAudit),
         }
+        const modelStream = middleware.model(baseModelCall)(modelInput)
+        const collectModel = modelStream.pipe(
+          Stream.runCollect,
+          Effect.map((parts) => [...parts]),
+        )
+        const timedModel =
+          policy.modelTimeout === undefined
+            ? collectModel
+            : collectModel.pipe(Effect.timeout(policy.modelTimeout))
+        const outcome = yield* Effect.raceFirst(
+          timedModel.pipe(Effect.map((parts) => ({ _tag: "Done" as const, parts }))),
+          options.interrupt.awaitSignal,
+        ) as Effect.Effect<ModelOutcome, RunStreamError<E>, R>
 
         if (outcome._tag === "Interrupted") {
           yield* options.append({ _tag: "step/end", reason: "interrupted" })
@@ -692,7 +667,9 @@ export const run = <R = never, E = never>(
         while (true) {
           step += 1
           stepIndex += 1
-          const outcome = yield* executeStep({ turn, step, stepIndex }, { policy, scheduler })
+          const outcome = yield* middleware.step(() =>
+            executeStep({ turn, step, stepIndex }, { policy, scheduler }),
+          )({ sessionId: options.sessionId.toString(), turn, step, stepIndex })
           if (outcome._tag === "Interrupted") {
             yield* options.append({ _tag: "turn/end", reason: "interrupted" })
             openSpan = "none"
@@ -723,10 +700,13 @@ export const run = <R = never, E = never>(
         }
 
         const context = { sessionId: options.sessionId, turn, step }
-        const turnContinuation = yield* Effect.raceFirst(
+        const turnStopping = middleware.turn(() =>
           options.hooks
             .turnStopping(context, { reason: "completed", stepCount: step })
             .pipe(Effect.map((continuation) => ({ _tag: "Continue" as const, continuation }))),
+        )({ sessionId: context.sessionId.toString(), turn, step, stepCount: step })
+        const turnContinuation = yield* Effect.raceFirst(
+          turnStopping,
           options.interrupt.awaitSignal,
         )
 

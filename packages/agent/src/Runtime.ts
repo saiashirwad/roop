@@ -9,7 +9,7 @@ import { hooksNoop, type AgentHooksInterface } from "./AgentHooks.ts"
 import { FinalizationError } from "./Error.ts"
 import { EVENT_VERSION, type Json, type JournalEvent, type LifecycleState } from "./Event.ts"
 import { fromEvents, recoveryEvents, toPrompt } from "./History.ts"
-import { stableJsonValue, type ModelAttemptPolicy } from "./internal/effectAiAdapter.ts"
+import { stableJsonValue } from "./internal/effectAiAdapter.ts"
 import { run } from "./internal/run.ts"
 import {
   Journal,
@@ -17,29 +17,34 @@ import {
   type JournalLoadError,
   type Revision,
 } from "./Journal.ts"
+import {
+  all as allMiddleware,
+  empty as emptyMiddleware,
+  type Middleware,
+  MiddlewareService,
+} from "./Middleware.ts"
 import type { RunError } from "./RunError.ts"
 import type { RunPolicy } from "./RunPolicy.ts"
 import { InterruptSignal } from "./RunSignal.ts"
 import { ToolRegistry, type InvalidToolName, type ToolConflict } from "./ToolRegistry.ts"
 
 /** Input for one direct, scoped kernel run. */
-export interface AgentRuntimeRequest {
+export interface AgentRuntimeRequest<out R = never, out E = never> {
   readonly sessionId: string
   readonly runId?: string | undefined
   readonly prompt: string
   readonly policy?: RunPolicy | undefined
-  readonly hooks?: AgentHooksInterface | undefined
-  /** Internal logical-attempt seam. Public fallback policy belongs to U6. */
-  readonly attemptPolicy?: ModelAttemptPolicy | undefined
+  readonly middleware?: Middleware<R, E> | undefined
 }
 
 export interface AgentRuntimeService {
-  readonly run: <R, E>(
+  readonly run: <R, E, RM = never, EM = never>(
     agent: AgentDefinition<R, E>,
-    request: AgentRuntimeRequest,
+    request: AgentRuntimeRequest<RM, EM>,
   ) => Stream.Stream<
     AgentEvent,
     | E
+    | EM
     | AiError.AiError
     | RunError
     | JournalLoadError
@@ -47,7 +52,7 @@ export interface AgentRuntimeService {
     | FinalizationError
     | InvalidToolName
     | ToolConflict,
-    R | LanguageModel.LanguageModel | Journal
+    R | RM | LanguageModel.LanguageModel | Journal
   >
 }
 
@@ -281,14 +286,22 @@ const toDurableEvents = (
   }
 }
 
-const runtimeRun = <R, E>(
+const runtimeRun = <R, E, RM = never, EM = never>(
   agent: AgentDefinition<R, E>,
-  request: AgentRuntimeRequest,
-): Stream.Stream<AgentEvent, RuntimeError<E>, R | LanguageModel.LanguageModel | Journal> =>
+  request: AgentRuntimeRequest<RM, EM>,
+): Stream.Stream<
+  AgentEvent,
+  RuntimeError<E | EM>,
+  R | RM | LanguageModel.LanguageModel | Journal
+> =>
   Stream.unwrap(
     Effect.gen(function* () {
+      const legacy = request as AgentRuntimeRequest<RM, EM> & {
+        readonly hooks?: AgentHooksInterface | undefined
+      }
       const model = yield* LanguageModel.LanguageModel
       const journal = yield* Journal
+      const installedMiddleware = yield* MiddlewareService
       const session = yield* journal.load(request.sessionId)
       const runId = request.runId ?? `${request.sessionId}:${session.revision}`
       const bridge: JournalBridge = {
@@ -358,9 +371,14 @@ const runtimeRun = <R, E>(
         // request-scoped control signal through the kernel API.
         interrupt: InterruptSignal.noop(),
         append,
-        hooks: request.hooks ?? hooksNoop,
-        attemptPolicy: request.attemptPolicy,
-      }) as Stream.Stream<AgentEvent, RuntimeError<E>, R>
+        hooks: legacy.hooks ?? hooksNoop,
+        /* SAFETY: runtimeRun restores the middleware R and E channels in its
+         * public Stream type after the internal interpreter erasure. */
+        middleware: allMiddleware(
+          installedMiddleware,
+          (request.middleware ?? emptyMiddleware) as Middleware,
+        ),
+      }) as Stream.Stream<AgentEvent, RuntimeError<E | EM>, R | RM>
 
       let terminalAttempted = false
 
@@ -431,7 +449,7 @@ const runtimeRun = <R, E>(
             ),
           ),
         ),
-      ) as unknown as Stream.Stream<AgentEvent, RuntimeError<E>, R | Journal>
+      ) as unknown as Stream.Stream<AgentEvent, RuntimeError<E | EM>, R | RM | Journal>
     }),
   )
 

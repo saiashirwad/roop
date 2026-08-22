@@ -8,6 +8,7 @@
     "./Agent.ts": "./src/Agent.ts",
     "./AgentEvents.ts": "./src/AgentEvents.ts",
     "./AgentHooks.ts": "./src/AgentHooks.ts",
+    "./Middleware.ts": "./src/Middleware.ts",
     "./Capabilities.ts": "./src/Capabilities.ts",
     "./ModelCatalog.ts": "./src/ModelCatalog.ts",
     "./Plugin.ts": "./src/Plugin.ts",

@@ -2,15 +2,15 @@
 
 import { assert, it } from "@effect/vitest"
 import { Deferred, Effect, Exit, Fiber, Layer, Ref, Schema, Stream } from "effect"
-import { AiError, LanguageModel, Tool } from "effect/unstable/ai"
+import { AiError, LanguageModel, Prompt, Tool } from "effect/unstable/ai"
 import type * as Response from "effect/unstable/ai/Response"
 
 import { Agent } from "../src/Agent.ts"
 import { FinalizationError } from "../src/Error.ts"
 import { EVENT_VERSION, type JournalEvent } from "../src/Event.ts"
-import { canRetryAttempt, type LogicalModelRequest } from "../src/internal/effectAiAdapter.ts"
 import { Journal, JournalError } from "../src/Journal.ts"
 import { JournalMemory } from "../src/JournalMemory.ts"
+import * as Middleware from "../src/Middleware.ts"
 import { Module } from "../src/Module.ts"
 import { runAgent } from "../src/Runtime.ts"
 
@@ -381,8 +381,12 @@ it.effect("cancelling direct runtime during a tool closes the handler once", () 
 it.effect("retries before output with the same logical plan", () =>
   Effect.gen(function* () {
     const renders = yield* Ref.make(0)
-    const attempts: Array<Pick<LogicalModelRequest, "planId" | "fingerprint">> = []
-    let calls = 0
+    const attempts: Array<{
+      readonly planId: string | undefined
+      readonly fingerprint: string | undefined
+    }> = []
+    let primaryCalls = 0
+    let fallbackCalls = 0
     const agent = Agent.make("retry", (context) =>
       Effect.gen(function* () {
         yield* Ref.update(renders, (count) => count + 1)
@@ -392,23 +396,44 @@ it.effect("retries before output with the same logical plan", () =>
     const model = yield* LanguageModel.make({
       generateText: () => Effect.succeed([]),
       streamText: () => {
-        calls += 1
-        return calls === 1
-          ? Stream.fail(modelFailure())
-          : Stream.make({ type: "text-delta" as const, id: "done", delta: "ok" })
+        primaryCalls += 1
+        return Stream.fail(modelFailure())
       },
+    })
+    const fallbackModel = yield* LanguageModel.make({
+      generateText: () => Effect.succeed([]),
+      streamText: () => {
+        fallbackCalls += 1
+        return Stream.make({ type: "text-delta" as const, id: "done", delta: "ok" })
+      },
+    })
+    const fallback = Middleware.make({
+      model: (next) => (input) =>
+        Stream.unwrap(
+          Effect.sync(() => {
+            attempts.push({ planId: input.planId, fingerprint: input.fingerprint })
+            let emitted = false
+            return next(input).pipe(
+              Stream.tap(() => Effect.sync(() => (emitted = true))),
+              Stream.catchCause((cause) => {
+                if (emitted) return Stream.failCause(cause)
+                const retry = {
+                  ...input,
+                  attempt: input.attempt + 1,
+                  model: fallbackModel,
+                }
+                attempts.push({ planId: retry.planId, fingerprint: retry.fingerprint })
+                return next(retry)
+              }),
+            )
+          }),
+        ),
     })
     const { events, stored } = yield* Effect.gen(function* () {
       const events = yield* runAgent(agent, {
         sessionId: "retry-session",
         prompt: "retry",
-        attemptPolicy: {
-          maxAttempts: 2,
-          shouldRetry: (_error, state) => canRetryAttempt(state),
-          onAttempt: (logical) => {
-            attempts.push({ planId: logical.planId, fingerprint: logical.fingerprint })
-          },
-        },
+        middleware: fallback,
       }).pipe(Stream.runCollect)
       const journal = yield* Journal
       return { events, stored: yield* journal.load("retry-session") }
@@ -417,7 +442,8 @@ it.effect("retries before output with the same logical plan", () =>
       Effect.provideService(LanguageModel.LanguageModel, model),
     )
 
-    assert.strictEqual(calls, 2)
+    assert.strictEqual(primaryCalls, 1)
+    assert.strictEqual(fallbackCalls, 1)
     assert.strictEqual(yield* Ref.get(renders), 1)
     assert.strictEqual(stored.events.filter((event) => event._tag === "model/request").length, 1)
     assert.deepStrictEqual(
@@ -450,11 +476,25 @@ it.effect("does not retry after model output starts", () =>
         )
       },
     })
+    const noDuplicate = Middleware.make({
+      model: (next) => (input) =>
+        Stream.unwrap(
+          Effect.sync(() => {
+            let emitted = false
+            return next(input).pipe(
+              Stream.tap(() => Effect.sync(() => (emitted = true))),
+              Stream.catchCause((cause) =>
+                emitted ? Stream.failCause(cause) : next({ ...input, attempt: input.attempt + 1 }),
+              ),
+            )
+          }),
+        ),
+    })
     const exit = yield* Effect.exit(
       runAgent(agent, {
         sessionId: "no-duplicate-session",
         prompt: "answer",
-        attemptPolicy: { maxAttempts: 2 },
+        middleware: noDuplicate,
       }).pipe(
         Stream.runCollect,
         Effect.provide(JournalMemory),
@@ -463,6 +503,41 @@ it.effect("does not retry after model output starts", () =>
     )
     assert.ok(Exit.isFailure(exit))
     assert.strictEqual(calls, 1)
+  }),
+)
+
+it.effect("prunes only model-facing history and keeps durable input", () =>
+  Effect.gen(function* () {
+    const seen = yield* Ref.make<Prompt.Prompt | undefined>(undefined)
+    const pruning = Middleware.make({
+      model: (next) => (input) => next({ ...input, prompt: Prompt.make("pruned view") }),
+    })
+    const model = yield* LanguageModel.make({
+      generateText: () => Effect.succeed([]),
+      streamText: (request) =>
+        Stream.fromEffect(Ref.set(seen, request.prompt)).pipe(
+          Stream.flatMap(() =>
+            Stream.make({ type: "text-delta" as const, id: "done", delta: "ok" }),
+          ),
+        ),
+    })
+    const stored = yield* Effect.gen(function* () {
+      yield* runAgent(Agent.make("pruning", Module.empty), {
+        sessionId: "pruning-session",
+        prompt: "durable original",
+        middleware: pruning,
+      }).pipe(Stream.runDrain)
+      return yield* (yield* Journal).load("pruning-session")
+    }).pipe(
+      Effect.provide(JournalMemory),
+      Effect.provideService(LanguageModel.LanguageModel, model),
+    )
+    assert.match(JSON.stringify(yield* Ref.get(seen)), /pruned view/)
+    assert.ok(
+      stored.events.some(
+        (event) => event._tag === "user/message" && event.content === "durable original",
+      ),
+    )
   }),
 )
 
