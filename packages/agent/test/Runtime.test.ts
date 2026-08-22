@@ -1,7 +1,7 @@
 /* oxlint-disable anti-slop/require-safety-comment-for-type-assertion -- SAFETY: this test uses pinned Effect AI encoded fixtures and audit-event fixture narrowing. */
 
 import { assert, it } from "@effect/vitest"
-import { Effect, Exit, Layer, Ref, Schema, Stream } from "effect"
+import { Deferred, Effect, Exit, Fiber, Layer, Ref, Schema, Stream } from "effect"
 import { AiError, LanguageModel, Tool } from "effect/unstable/ai"
 import type * as Response from "effect/unstable/ai/Response"
 
@@ -303,6 +303,7 @@ it.effect("preserves primary and journal failures during terminal finalization",
 
 it.effect("records an aborted run when the consumer interrupts the stream", () =>
   Effect.gen(function* () {
+    const modelFinalizers = yield* Ref.make(0)
     const model = yield* LanguageModel.make({
       generateText: () => Effect.succeed([]),
       streamText: () =>
@@ -311,7 +312,7 @@ it.effect("records an aborted run when the consumer interrupts the stream", () =
           { type: "text-delta" as const, id: "text", delta: "first" },
           { type: "text-delta" as const, id: "text", delta: "second" },
           { type: "text-end" as const, id: "text" },
-        ]),
+        ]).pipe(Stream.ensuring(Ref.update(modelFinalizers, (count) => count + 1))),
     })
     const program = Effect.gen(function* () {
       const journal = yield* Journal
@@ -328,6 +329,52 @@ it.effect("records an aborted run when the consumer interrupts the stream", () =
     const runs = session.events.filter((event) => event._tag === "run")
     assert.strictEqual(runs.length, 2)
     assert.strictEqual(runs[1]?.state, "aborted")
+    assert.strictEqual(yield* Ref.get(modelFinalizers), 1)
+  }),
+)
+
+it.effect("cancelling direct runtime during a tool closes the handler once", () =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>()
+    const handlerFinalizers = yield* Ref.make(0)
+    const SlowTool = Tool.make("slow_runtime_tool", {
+      parameters: Schema.Struct({}),
+      success: Schema.String,
+    })
+    const agent = Agent.make(
+      "runtime-tool-cancel",
+      Module.tool(SlowTool, () =>
+        Deferred.succeed(started, undefined).pipe(
+          Effect.andThen(Effect.never),
+          Effect.ensuring(Ref.update(handlerFinalizers, (count) => count + 1)),
+        ),
+      ),
+    )
+    const model = yield* LanguageModel.make({
+      generateText: () => Effect.succeed([]),
+      streamText: () =>
+        Stream.make({
+          type: "tool-call" as const,
+          id: "slow-call",
+          name: "slow_runtime_tool",
+          params: {},
+        }),
+    })
+    const program = Effect.gen(function* () {
+      const fiber = yield* runAgent(agent, {
+        sessionId: "runtime-tool-cancel-session",
+        prompt: "wait",
+        policy: { toolConcurrency: 1 },
+      }).pipe(Stream.runDrain, Effect.forkChild)
+      yield* Deferred.await(started)
+      yield* Fiber.interrupt(fiber)
+      return yield* Ref.get(handlerFinalizers)
+    })
+    const finalizers = yield* program.pipe(
+      Effect.provide(JournalMemory),
+      Effect.provideService(LanguageModel.LanguageModel, model),
+    )
+    assert.strictEqual(finalizers, 1)
   }),
 )
 

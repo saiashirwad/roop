@@ -19,7 +19,7 @@ import {
 } from "./Journal.ts"
 import type { RunError } from "./RunError.ts"
 import type { RunPolicy } from "./RunPolicy.ts"
-import { InterruptSignal, type InterruptSignal as InterruptSignalValue } from "./RunSignal.ts"
+import { InterruptSignal } from "./RunSignal.ts"
 import { ToolRegistry, type InvalidToolName, type ToolConflict } from "./ToolRegistry.ts"
 
 /** Input for one direct, scoped kernel run. */
@@ -28,7 +28,6 @@ export interface AgentRuntimeRequest {
   readonly runId?: string | undefined
   readonly prompt: string
   readonly policy?: RunPolicy | undefined
-  readonly interrupt?: InterruptSignalValue | undefined
   readonly hooks?: AgentHooksInterface | undefined
   /** Internal logical-attempt seam. Public fallback policy belongs to U6. */
   readonly attemptPolicy?: ModelAttemptPolicy | undefined
@@ -348,13 +347,16 @@ const runtimeRun = <R, E>(
       // the explicit agent remains the only source of R and E at this boundary.
       const stream = run({
         sessionId: request.sessionId,
-        runId: request.runId,
+        runId,
         agent,
         chat,
         model,
         toolkit: Effect.succeed(emptyToolkit.toolkit),
         policy: request.policy,
-        interrupt: request.interrupt ?? InterruptSignal.noop(),
+        // Direct runtime control is structured stream interruption. Host
+        // supervisors interrupt the consumer fiber instead of passing a
+        // request-scoped control signal through the kernel API.
+        interrupt: InterruptSignal.noop(),
         append,
         hooks: request.hooks ?? hooksNoop,
         attemptPolicy: request.attemptPolicy,

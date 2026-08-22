@@ -1,81 +1,80 @@
-import { RunNotFound, SessionBusy } from "@roop/agent/Agent.ts"
-import { AgentEvent } from "@roop/agent/AgentEvents.ts"
-import { Capabilities } from "@roop/agent/Capabilities.ts"
-import { ModelNotFound } from "@roop/agent/ModelCatalog.ts"
-import { RunError } from "@roop/agent/RunError.ts"
-import { RunPolicy } from "@roop/agent/RunPolicy.ts"
 import {
-  Session,
-  SessionAlreadyExists,
-  SessionFormatError,
-  SessionIoError,
-  SessionMeta,
-  SessionNotFound,
-} from "@roop/agent/SessionJournal.ts"
+  AgentEvents,
+  Error as AgentError,
+  Journal,
+  RunError,
+  RunPolicy,
+  ToolRegistry,
+} from "@roop/agent"
 import { Schema } from "effect"
+import { AiError } from "effect/unstable/ai"
 import { Rpc, RpcGroup } from "effect/unstable/rpc"
 
+import { RunNotFound, SessionBusy } from "./RunSupervisor.ts"
+
+const {
+  JournalEmptyAppend,
+  JournalFutureVersion,
+  JournalRevisionConflict,
+  JournalSnapshotSchema,
+  JournalError,
+} = Journal
+const { FinalizationError } = AgentError
+const { InvalidToolName, ToolConflict } = ToolRegistry
+const { AgentEvent } = AgentEvents
+const { RunError: RunErrorSchema } = RunError
+const { RunPolicy: RunPolicySchema } = RunPolicy
+
+/** The small transport contract for the host supervisor. */
 export const AgentRpc = RpcGroup.make(
-  Rpc.make("Capabilities", {
-    success: Capabilities,
-  }),
-  Rpc.make("Prompt", {
+  Rpc.make("StartRun", {
     payload: {
       prompt: Schema.String,
-      sessionId: Schema.optionalKey(Schema.String),
-      modelId: Schema.optionalKey(Schema.String),
-      policy: Schema.optionalKey(RunPolicy),
+      sessionId: Schema.String,
+      policy: Schema.optionalKey(RunPolicySchema),
     },
     success: AgentEvent,
-    error: Schema.Union([ModelNotFound, SessionBusy, SessionFormatError, SessionIoError, RunError]),
+    error: Schema.Union([
+      SessionBusy,
+      RunNotFound,
+      AiError.AiError,
+      RunErrorSchema,
+      JournalError,
+      JournalRevisionConflict,
+      JournalEmptyAppend,
+      JournalFutureVersion,
+      FinalizationError,
+      InvalidToolName,
+      ToolConflict,
+    ]),
     stream: true,
   }),
-  Rpc.make("SubscribeSession", {
-    payload: {
-      sessionId: Schema.String,
-      replayFromStep: Schema.optionalKey(Schema.Finite),
-    },
+  Rpc.make("SubscribeRun", {
+    payload: { sessionId: Schema.String },
     success: AgentEvent,
-    error: Schema.Union([SessionNotFound, SessionFormatError, SessionIoError]),
+    error: Schema.Union([
+      SessionBusy,
+      RunNotFound,
+      AiError.AiError,
+      RunErrorSchema,
+      JournalError,
+      JournalRevisionConflict,
+      JournalEmptyAppend,
+      JournalFutureVersion,
+      FinalizationError,
+      InvalidToolName,
+      ToolConflict,
+    ]),
     stream: true,
   }),
-  Rpc.make("Steer", {
-    payload: {
-      sessionId: Schema.String,
-      message: Schema.String,
-    },
-    success: Schema.Void,
-    error: RunNotFound,
-  }),
-  Rpc.make("Interrupt", {
-    payload: {
-      sessionId: Schema.String,
-    },
+  Rpc.make("InterruptRun", {
+    payload: { sessionId: Schema.String },
     success: Schema.Void,
     error: RunNotFound,
   }),
   Rpc.make("GetHistory", {
-    payload: {
-      sessionId: Schema.String,
-    },
-    success: Session,
-    error: Schema.Union([SessionNotFound, SessionFormatError, SessionIoError]),
-  }),
-  Rpc.make("ListSessions", {
-    success: Schema.Array(SessionMeta),
-    error: SessionIoError,
-  }),
-  Rpc.make("ForkSession", {
-    payload: {
-      fromSessionId: Schema.String,
-      toSessionId: Schema.optionalKey(Schema.String),
-    },
-    success: SessionMeta,
-    error: Schema.Union([
-      SessionNotFound,
-      SessionFormatError,
-      SessionAlreadyExists,
-      SessionIoError,
-    ]),
+    payload: { sessionId: Schema.String },
+    success: JournalSnapshotSchema,
+    error: Schema.Union([JournalError, JournalFutureVersion]),
   }),
 )

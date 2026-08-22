@@ -10,6 +10,14 @@ export interface JournalSnapshot {
   readonly events: ReadonlyArray<JournalEventValue>
 }
 
+/** The wire-safe snapshot returned by host adapters. */
+export const JournalSnapshotSchema = Schema.Struct({
+  sessionId: Schema.String,
+  revision: Schema.Finite,
+  events: Schema.Array(JournalEvent),
+})
+export type JournalSnapshotEncoded = typeof JournalSnapshotSchema.Type
+
 export class JournalError extends Schema.TaggedErrorClass<JournalError>()("JournalError", {
   operation: Schema.Literals(["load", "append", "decode"]),
   sessionId: Schema.String,

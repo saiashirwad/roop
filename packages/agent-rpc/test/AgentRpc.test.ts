@@ -1,12 +1,13 @@
-import { NodeFileSystem } from "@effect/platform-node"
 import { assert, it } from "@effect/vitest"
-import { AgentLiveToolkit } from "@roop/agent/Agent.ts"
-import { deriveMessages } from "@roop/agent/AgentEvents.ts"
-import { cryptoWeb } from "@roop/agent/cryptoWeb.ts"
-import { SessionJournalFs, SessionJournalMemory } from "@roop/agent/SessionJournal.ts"
-import { scripted } from "@roop/agent/Testing.ts"
-import { Effect, Exit, FileSystem, Layer, Option, Schema, Stream } from "effect"
-import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai"
+import {
+  Agent as AgentPackage,
+  JournalMemory,
+  Module,
+  Runtime,
+  type Agent as AgentModule,
+} from "@roop/agent"
+import { Effect, Exit, Fiber, Layer, Option, Ref, Stream } from "effect"
+import { LanguageModel } from "effect/unstable/ai"
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient"
 import * as HttpRouter from "effect/unstable/http/HttpRouter"
 import { RpcClient } from "effect/unstable/rpc"
@@ -15,235 +16,202 @@ import * as RpcTest from "effect/unstable/rpc/RpcTest"
 import { AgentRpc } from "../src/AgentRpc.ts"
 import { AgentRpcClientHttp, AgentRpcServerHttp } from "../src/AgentRpcHttp.ts"
 import { AgentRpcServer } from "../src/AgentRpcServer.ts"
+import { RunSupervisor, RunSupervisorLive } from "../src/RunSupervisor.ts"
 
-const Echo = Tool.make("echo", {
-  description: "echo a note back",
-  parameters: Schema.Struct({ note: Schema.String }),
-  success: Schema.Struct({ reply: Schema.String }),
-})
-
-const EchoToolkit = Toolkit.make(Echo)
-
-const TestLayer = AgentLiveToolkit(EchoToolkit, {
-  models: [
-    {
-      id: "deepseek-chat",
-      provider: "deepseek",
-      layer: Layer.effect(
-        LanguageModel.LanguageModel,
-        scripted([
-          [{ type: "tool-call" as const, id: "c1", name: "echo", params: { note: "hi" } }],
-          [{ type: "text-delta" as const, id: "t1", delta: "done" }],
-        ]),
-      ),
-    },
-  ],
-  skills: [{ id: "summarize", description: "summarize text" }],
-}).pipe(
-  Layer.provide(SessionJournalMemory),
-  Layer.provide(cryptoWeb),
-  Layer.provide(
-    EchoToolkit.toLayer({
-      echo: ({ note }) => Effect.succeed({ reply: note }),
-    }),
-  ),
+const HostedAgent: AgentModule.AgentDefinition<never, never> = AgentPackage.Agent.make(
+  "rpc-test",
+  Module.empty,
 )
 
-it.layer(AgentRpcServer.pipe(Layer.provide(TestLayer)))("AgentRpc", (it) => {
-  it.effect("serves capabilities derived from toolkit, catalog, and skills", () =>
-    Effect.gen(function* () {
-      const client = yield* RpcTest.makeClient(AgentRpc)
-      const caps = yield* client.Capabilities()
-
-      assert.deepStrictEqual(
-        caps.tools.map((tool) => tool.name),
-        ["echo"],
-      )
-      assert.deepStrictEqual(
-        caps.models.map((model) => model.id),
-        ["deepseek-chat"],
-      )
-      assert.strictEqual(caps.defaultModelId, "deepseek-chat")
-      assert.deepStrictEqual(
-        caps.skills.map((skill) => skill.id),
-        ["summarize"],
-      )
-      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
-      const parameters = caps.tools[0]!.parameters as any
-      assert.deepStrictEqual(Object.keys(parameters.properties ?? {}), ["note"])
+const modelLayer = (started: Ref.Ref<boolean>, hold = false) =>
+  Layer.effect(
+    LanguageModel.LanguageModel,
+    LanguageModel.make({
+      generateText: () => Effect.succeed([]),
+      streamText: () => {
+        const output = Stream.fromIterable([
+          { type: "text-delta" as const, id: "text", delta: "hello" },
+        ]).pipe(Stream.tap(() => Ref.set(started, true)))
+        return hold ? Stream.concat(output, Stream.never) : output
+      },
     }),
   )
 
-  it.effect("streams prompt deltas and tool round-trips", () =>
-    Effect.gen(function* () {
-      const client = yield* RpcTest.makeClient(AgentRpc)
-      const events = yield* Stream.runCollect(client.Prompt({ prompt: "say hi", sessionId: "s1" }))
+const live = (started: Ref.Ref<boolean>, hold = false) =>
+  RunSupervisorLive(HostedAgent).pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Runtime.AgentRuntimeLive,
+        JournalMemory.JournalMemory,
+        modelLayer(started, hold),
+      ),
+    ),
+  )
 
+const hostLive = (model: Layer.Layer<LanguageModel.LanguageModel>) =>
+  RunSupervisorLive(HostedAgent).pipe(
+    Layer.provide(Layer.mergeAll(Runtime.AgentRuntimeLive, JournalMemory.JournalMemory, model)),
+  )
+
+const rpcHost = (model: Layer.Layer<LanguageModel.LanguageModel>) =>
+  AgentRpcServer.pipe(Layer.provide(hostLive(model)))
+
+const finiteModel = Layer.effect(
+  LanguageModel.LanguageModel,
+  LanguageModel.make({
+    generateText: () => Effect.succeed([]),
+    streamText: () => Stream.make({ type: "text-delta" as const, id: "text", delta: "hello" }),
+  }),
+)
+
+const holdingModel = (finalized: Ref.Ref<number>) =>
+  Layer.effect(
+    LanguageModel.LanguageModel,
+    LanguageModel.make({
+      generateText: () => Effect.succeed([]),
+      streamText: () =>
+        Stream.concat(
+          Stream.make({ type: "text-delta" as const, id: "text", delta: "hello" }),
+          Stream.never,
+        ).pipe(Stream.ensuring(Ref.update(finalized, (count) => count + 1))),
+    }),
+  )
+
+it.effect("starts a direct hosted run and reads durable history", () =>
+  Effect.gen(function* () {
+    const started = yield* Ref.make(false)
+    yield* Effect.gen(function* () {
+      const supervisor = yield* RunSupervisor
+      const events = yield* Stream.runCollect(
+        supervisor.start({ sessionId: "rpc-history", prompt: "hello" }),
+      )
       assert.deepStrictEqual(
         [...events].map((event) => event._tag),
-        ["ToolCall", "ToolResult", "TextDelta", "Finish"],
+        ["TextDelta", "Finish"],
       )
-      const history = yield* client.GetHistory({ sessionId: "s1" })
-      assert.deepStrictEqual(
-        deriveMessages(history.events).map((message) => message.role),
-        ["user", "assistant", "tool"],
-      )
+      assert.strictEqual(yield* Ref.get(started), true)
+      const history = yield* supervisor.history("rpc-history")
+      assert.ok(history.events.some((event) => event._tag === "run" && event.state === "completed"))
+    }).pipe(Effect.scoped, Effect.provide(live(started)))
+  }),
+)
 
-      const sessions = yield* client.ListSessions()
-      assert.deepStrictEqual(
-        sessions.map((meta) => [meta.id, meta.title]),
-        [["s1", "say hi"]],
-      )
-
-      const forkedMeta = yield* client.ForkSession({ fromSessionId: "s1", toSessionId: "s1-fork" })
-      assert.strictEqual(forkedMeta.id, "s1-fork")
-      assert.strictEqual(forkedMeta.title, "say hi")
-
-      const forkedHistory = yield* client.GetHistory({ sessionId: "s1-fork" })
-      assert.deepStrictEqual(
-        deriveMessages(forkedHistory.events).map((message) => message.role),
-        ["user", "assistant", "tool"],
-      )
-
-      const duplicateFork = yield* Effect.exit(
-        client.ForkSession({ fromSessionId: "s1", toSessionId: "s1-fork" }),
-      )
-      assert.ok(Exit.isFailure(duplicateFork))
-      /* SAFETY: Exit.findErrorOption is present after the preceding failure assertion. */
-      assert.strictEqual(
-        (Option.getOrThrow(Exit.findErrorOption(duplicateFork)) as any)._tag,
-        "SessionAlreadyExists",
-      )
-
-      const notFoundExit = yield* Effect.exit(client.Interrupt({ sessionId: "s2" }))
-      assert.ok(Exit.isFailure(notFoundExit))
-      /* SAFETY: Exit.findErrorOption is present after the preceding failure assertion. */
-      assert.strictEqual(
-        (Option.getOrThrow(Exit.findErrorOption(notFoundExit)) as any)._tag,
-        "RunNotFound",
-      )
-
-      const steerNotFoundExit = yield* Effect.exit(
-        client.Steer({ sessionId: "s2", message: "steer msg" }),
-      )
-      assert.ok(Exit.isFailure(steerNotFoundExit))
-      /* SAFETY: Exit.findErrorOption is present after the preceding failure assertion. */
-      assert.strictEqual(
-        (Option.getOrThrow(Exit.findErrorOption(steerNotFoundExit)) as any)._tag,
-        "RunNotFound",
-      )
-
-      // Verify SubscribeSession replays all events from session s1
-      const subscribed = yield* Stream.runCollect(client.SubscribeSession({ sessionId: "s1" }))
+it.effect("registers an active subscriber with no replay/live gap", () =>
+  Effect.gen(function* () {
+    const started = yield* Ref.make(false)
+    yield* Effect.gen(function* () {
+      const supervisor = yield* RunSupervisor
+      const ownerFiber = yield* Stream.runCollect(
+        supervisor.start({ sessionId: "rpc-live", prompt: "hello" }),
+      ).pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      yield* Effect.yieldNow
+      const subscribed = yield* Stream.runCollect(supervisor.subscribe("rpc-live"))
+      yield* Fiber.join(ownerFiber)
       assert.deepStrictEqual(
         [...subscribed].map((event) => event._tag),
-        ["ToolCall", "ToolResult", "Finish"],
+        ["TextDelta", "Finish"],
       )
-    }),
-  )
-
-  it.effect("propagates protocol errors through the typed error channel", () =>
-    Effect.gen(function* () {
-      const client = yield* RpcTest.makeClient(AgentRpc)
-
-      const modelExit = yield* Effect.exit(
-        Stream.runDrain(
-          client.Prompt({
-            prompt: "hi",
-            sessionId: "s2",
-            modelId: "nope",
-          }),
-        ),
-      )
-      /* SAFETY: The invalid model id deterministically yields ModelNotFound. */
-      assert.strictEqual(
-        (Option.getOrThrow(Exit.findErrorOption(modelExit)) as any)._tag,
-        "ModelNotFound",
-      )
-
-      const interruptExit = yield* Effect.exit(client.Interrupt({ sessionId: "nope" }))
-      /* SAFETY: Interrupting the unknown session deterministically yields RunNotFound. */
-      assert.strictEqual(
-        (Option.getOrThrow(Exit.findErrorOption(interruptExit)) as any)._tag,
-        "RunNotFound",
-      )
-
-      const historyExit = yield* Effect.exit(client.GetHistory({ sessionId: "nope" }))
-      /* SAFETY: Reading the unknown session deterministically yields SessionNotFound. */
-      assert.strictEqual(
-        (Option.getOrThrow(Exit.findErrorOption(historyExit)) as any)._tag,
-        "SessionNotFound",
-      )
-    }),
-  )
-})
-
-const corruptSessionJournal = Effect.gen(function* () {
-  const fs = yield* FileSystem.FileSystem
-  const dir = yield* fs.makeTempDirectory({ prefix: "agentrpc-corrupt-" })
-  yield* fs.writeFileString(`${dir}/corrupt.json`, "{ not json")
-  return SessionJournalFs(dir)
-}).pipe(Effect.orDie)
-
-const FsTestLayer = AgentLiveToolkit(EchoToolkit, {
-  models: [
-    {
-      id: "deepseek-chat",
-      provider: "deepseek",
-      layer: Layer.effect(
-        LanguageModel.LanguageModel,
-        scripted([[{ type: "text-delta" as const, id: "t1", delta: "done" }]]),
-      ),
-    },
-  ],
-}).pipe(
-  Layer.provide(Layer.unwrap(corruptSessionJournal)),
-  Layer.provide(NodeFileSystem.layer),
-  Layer.provide(cryptoWeb),
-  Layer.provide(
-    EchoToolkit.toLayer({
-      echo: ({ note }) => Effect.succeed({ reply: note }),
-    }),
-  ),
+      assert.strictEqual(yield* Ref.get(started), true)
+    }).pipe(Effect.scoped, Effect.provide(live(started)))
+  }),
 )
 
-it.layer(AgentRpcServer.pipe(Layer.provide(FsTestLayer)))("AgentRpc corrupt session", (it) => {
-  it.effect("surfaces SessionFormatError from the prompt stream as an RPC error", () =>
-    Effect.gen(function* () {
-      const client = yield* RpcTest.makeClient(AgentRpc)
+it.effect("interrupts an active run owned by the supervisor", () =>
+  Effect.gen(function* () {
+    const started = yield* Ref.make(false)
+    yield* Effect.gen(function* () {
+      const supervisor = yield* RunSupervisor
+      const ownerFiber = yield* Stream.runDrain(
+        supervisor.start({ sessionId: "rpc-interrupt", prompt: "wait" }),
+      ).pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      yield* Effect.yieldNow
+      yield* supervisor.interrupt("rpc-interrupt")
+      yield* Fiber.join(ownerFiber).pipe(Effect.ignore)
+    }).pipe(Effect.scoped, Effect.provide(live(started, true)))
+  }),
+)
 
-      const exit = yield* Effect.exit(
-        Stream.runDrain(client.Prompt({ prompt: "hi", sessionId: "corrupt" })),
-      )
-      assert.ok(Exit.isFailure(exit))
-      /* SAFETY: This fixture constructs the exact runtime shape required by the test. */
-      const failure = Option.getOrThrow(Exit.findErrorOption(exit)) as any
-      assert.strictEqual(failure._tag, "SessionFormatError")
-      assert.strictEqual(failure.sessionId, "corrupt")
-    }),
-  )
-})
+it.effect("round-trips every RPC operation and encodes typed errors", () =>
+  Effect.gen(function* () {
+    const client = yield* RpcTest.makeClient(AgentRpc)
+    const events = yield* Stream.runCollect(
+      client.StartRun({ sessionId: "rpc-memory", prompt: "hello" }),
+    )
+    assert.deepStrictEqual(
+      [...events].map((event) => event._tag),
+      ["TextDelta", "Finish"],
+    )
 
-it.layer(AgentRpcServer.pipe(Layer.provide(TestLayer)))("AgentRpc over HTTP", (it) => {
-  it.effect("round-trips over the HTTP transport", () =>
-    Effect.gen(function* () {
-      const serverLayer = AgentRpcServerHttp("/rpc").pipe(Layer.provide(TestLayer))
-      const { handler, dispose } = HttpRouter.toWebHandler(serverLayer, { disableLogger: true })
-      yield* Effect.addFinalizer(() => Effect.promise(() => dispose()))
-      const fetchWithHandler: typeof fetch = (input, init) =>
-        handler(input instanceof Request ? input : new Request(input, init))
-      const clientLayer = AgentRpcClientHttp("http://localhost/rpc").pipe(
-        Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetchWithHandler)),
-      )
-      const client = yield* RpcClient.make(AgentRpc).pipe(Effect.provide(clientLayer))
-      const events = yield* Stream.runCollect(
-        client.Prompt({ prompt: "say hi", sessionId: "s-http" }),
-      )
+    const history = yield* client.GetHistory({ sessionId: "rpc-memory" })
+    assert.ok(history.events.some((event) => event._tag === "run"))
 
-      assert.deepStrictEqual(
-        [...events].map((event) => event._tag),
-        ["ToolCall", "ToolResult", "TextDelta", "Finish"],
-      )
-    }),
-  )
-})
+    const missingSubscription = yield* Effect.exit(
+      Stream.runDrain(client.SubscribeRun({ sessionId: "missing" })),
+    )
+    assert.ok(Exit.isFailure(missingSubscription))
+    assert.strictEqual(
+      Option.getOrThrow(Exit.findErrorOption(missingSubscription))._tag,
+      "RunNotFound",
+    )
+
+    const missingInterrupt = yield* Effect.exit(client.InterruptRun({ sessionId: "missing" }))
+    assert.ok(Exit.isFailure(missingInterrupt))
+    assert.strictEqual(
+      Option.getOrThrow(Exit.findErrorOption(missingInterrupt))._tag,
+      "RunNotFound",
+    )
+  }).pipe(Effect.scoped, Effect.provide(rpcHost(finiteModel))),
+)
+
+it.effect("round-trips an RPC stream over HTTP NDJSON", () =>
+  Effect.gen(function* () {
+    const serverLayer = AgentRpcServerHttp("/rpc").pipe(Layer.provide(hostLive(finiteModel)))
+    const { handler, dispose } = HttpRouter.toWebHandler(serverLayer, { disableLogger: true })
+    yield* Effect.addFinalizer(() => Effect.promise(() => dispose()))
+    const fetchWithHandler: typeof fetch = (input, init) =>
+      handler(input instanceof Request ? input : new Request(input, init))
+    const clientLayer = AgentRpcClientHttp("http://localhost/rpc").pipe(
+      Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetchWithHandler)),
+    )
+    const client = yield* RpcClient.make(AgentRpc).pipe(Effect.provide(clientLayer))
+    const events = yield* Stream.runCollect(
+      client.StartRun({ sessionId: "rpc-http", prompt: "hello" }),
+    )
+    assert.deepStrictEqual(
+      [...events].map((event) => event._tag),
+      ["TextDelta", "Finish"],
+    )
+    const history = yield* client.GetHistory({ sessionId: "rpc-http" })
+    assert.ok(history.events.length > 0)
+  }).pipe(Effect.scoped),
+)
+
+it.effect("HTTP stream disconnect interrupts the owned model producer", () =>
+  Effect.gen(function* () {
+    const finalized = yield* Ref.make(0)
+    const serverLayer = AgentRpcServerHttp("/rpc").pipe(
+      Layer.provide(hostLive(holdingModel(finalized))),
+    )
+    const { handler, dispose } = HttpRouter.toWebHandler(serverLayer, { disableLogger: true })
+    yield* Effect.addFinalizer(() => Effect.promise(() => dispose()))
+    const fetchWithHandler: typeof fetch = (input, init) =>
+      handler(input instanceof Request ? input : new Request(input, init))
+    const clientLayer = AgentRpcClientHttp("http://localhost/rpc").pipe(
+      Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetchWithHandler)),
+    )
+    const client = yield* RpcClient.make(AgentRpc).pipe(Effect.provide(clientLayer))
+    yield* Effect.exit(
+      Stream.runDrain(
+        client.StartRun({ sessionId: "rpc-disconnect", prompt: "hold" }).pipe(Stream.take(1)),
+      ),
+    )
+    yield* Effect.yieldNow
+    yield* Effect.yieldNow
+    assert.strictEqual(yield* Ref.get(finalized), 1)
+    const interrupt = yield* Effect.exit(client.InterruptRun({ sessionId: "rpc-disconnect" }))
+    assert.ok(Exit.isFailure(interrupt))
+    assert.strictEqual(Option.getOrThrow(Exit.findErrorOption(interrupt))._tag, "RunNotFound")
+  }).pipe(Effect.scoped),
+)

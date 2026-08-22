@@ -1,22 +1,23 @@
-import { Agent } from "@roop/agent/Agent.ts"
-import { Effect } from "effect"
+import type { Agent as AgentModule } from "@roop/agent"
+import { Effect, Layer } from "effect"
 
 import { AgentRpc } from "./AgentRpc.ts"
+import { RunSupervisor, RunSupervisorLive } from "./RunSupervisor.ts"
 
+/** RPC handlers depend only on the host supervisor capability. */
 export const AgentRpcServer = AgentRpc.toLayer(
   Effect.gen(function* () {
-    const agent = yield* Agent
+    const supervisor = yield* RunSupervisor
 
     return AgentRpc.of({
-      Capabilities: () => agent.capabilities,
-      Prompt: (options) => agent.prompt(options),
-      SubscribeSession: ({ sessionId, replayFromStep }) =>
-        agent.subscribe(sessionId, { replayFromStep }),
-      Steer: ({ sessionId, message }) => agent.steer(sessionId, message),
-      Interrupt: ({ sessionId }) => agent.interrupt(sessionId),
-      GetHistory: ({ sessionId }) => agent.history(sessionId),
-      ListSessions: () => agent.sessions,
-      ForkSession: ({ fromSessionId, toSessionId }) => agent.fork(fromSessionId, toSessionId),
+      StartRun: (request) => supervisor.start(request),
+      SubscribeRun: ({ sessionId }) => supervisor.subscribe(sessionId),
+      InterruptRun: ({ sessionId }) => supervisor.interrupt(sessionId),
+      GetHistory: ({ sessionId }) => supervisor.history(sessionId),
     })
   }),
 )
+
+/** Build a host layer for one explicit Agent value. */
+export const AgentRpcServerLive = (agent: AgentModule.AgentDefinition<never, never>) =>
+  AgentRpcServer.pipe(Layer.provide(RunSupervisorLive(agent)))
