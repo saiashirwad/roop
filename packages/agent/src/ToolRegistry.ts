@@ -1,6 +1,7 @@
 /* oxlint-disable anti-slop/no-chained-type-assertions, anti-slop/no-escape-hatch-assertions, anti-slop/require-safety-comment-for-type-assertion -- registry finalization crosses one intentional existential Effect AI boundary after conflict validation. */
 
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Layer, Schema, type Stream } from "effect"
+import type * as AiError from "effect/unstable/ai/AiError"
 import type * as Tool from "effect/unstable/ai/Tool"
 import * as Toolkit from "effect/unstable/ai/Toolkit"
 
@@ -35,16 +36,37 @@ export interface ToolContribution<out R = never, out E = never> {
   readonly tool: Tool.Any
   readonly contributor: string
   readonly toolkit: Toolkit.Any
-  readonly handlers: Layer.Any
+  readonly handlers: ErasedHandlerLayer
   readonly _R?: (_: never) => R
   readonly _E?: (_: never) => E
 }
 
-export interface FinalizedToolRegistry {
-  readonly toolkit: Toolkit.WithHandler<Record<string, Tool.Any>>
-  readonly tools: ReadonlyArray<Tool.Any>
-  readonly handlers: Layer.Any
+export interface FinalizedToolkit extends
+  Omit<Toolkit.WithHandler<Record<string, Tool.Any>>, "handle">
+{
+  readonly handle: (
+    name: string,
+    params: Tool.Parameters<Tool.Any>,
+  ) => Effect.Effect<
+    Stream.Stream<Tool.HandlerResult<Tool.Any>>,
+    AiError.AiError
+  >
 }
+
+export interface FinalizedToolRegistry {
+  readonly toolkit: FinalizedToolkit
+  readonly tools: ReadonlyArray<Tool.Any>
+  readonly handlers: ErasedHandlerLayer
+}
+
+type ErasedHandlerLayer = Layer.Layer<never>
+
+interface RegistryInput {
+  readonly contributions: ReadonlyArray<unknown>
+}
+
+type RegistryRequirements<T> = T extends ToolRegistry<infer R, infer _E> ? R : never
+type RegistryErrors<T> = T extends ToolRegistry<infer _R, infer E> ? E : never
 
 export interface ToolRegistry<out R = never, out E = never> {
   readonly contributions: ReadonlyArray<ToolContribution<R, E>>
@@ -84,24 +106,27 @@ const makeRegistry = <R, E>(
             ...(tools as [Tool.Any, ...Array<Tool.Any>]),
           )
     const handlerLayers = contributions.map((contribution) => contribution.handlers)
-    const handlers =
+    const handlers: ErasedHandlerLayer =
       handlerLayers.length === 0
         ? Layer.empty
         : Layer.mergeAll(
             /* SAFETY: the length guard proves this is a non-empty layer tuple. */
-            ...(handlerLayers as unknown as [
-              Layer.Layer<never, any, any>,
-              ...Array<Layer.Layer<never, any, any>>,
-            ]),
+            ...(handlerLayers as [ErasedHandlerLayer, ...Array<ErasedHandlerLayer>]),
           )
     // SAFETY: all tool names were validated as unique above. The existential
     // handler relationship is erased once, at this Effect AI boundary.
     const installed = yield* (toolkit as Toolkit.Toolkit<Record<string, Tool.Any>>).pipe(
       Effect.map(eraseToolkit),
       /* SAFETY: handlers are the layers created for these exact tool definitions. */
-      Effect.provide(handlers as Layer.Layer<any, any, any>),
+      Effect.provide(handlers as unknown as Layer.Layer<Tool.Handler<string>>),
     )
-    return { toolkit: installed, tools, handlers }
+    return {
+      /* SAFETY: finalization installs the handler layers and captures their
+       * services. Dynamic calls retain the registry error channel. */
+      toolkit: installed as unknown as FinalizedToolkit,
+      tools,
+      handlers,
+    }
   }).pipe(Effect.withSpan("ToolRegistry.finalize"))
 
   return {
@@ -117,17 +142,20 @@ export const empty: ToolRegistry = makeRegistry([])
 export const fromContribution = <R, E>(contribution: ToolContribution<R, E>): ToolRegistry<R, E> =>
   makeRegistry([contribution])
 
-export const combine = <const Registries extends ReadonlyArray<ToolRegistry<any, any>>>(
+export const combine = <const Registries extends ReadonlyArray<RegistryInput>>(
   ...registries: Registries
 ): ToolRegistry<
-  Registries[number] extends ToolRegistry<infer R, any> ? R : never,
-  Registries[number] extends ToolRegistry<any, infer E> ? E : never
+  RegistryRequirements<Registries[number]>,
+  RegistryErrors<Registries[number]>
 > =>
   makeRegistry(
     registries.flatMap((registry) => registry.contributions) as ReadonlyArray<
-      ToolContribution<any, any>
+      ToolContribution<
+        RegistryRequirements<Registries[number]>,
+        RegistryErrors<Registries[number]>
+      >
     >,
-  ) as never
+  )
 
 export const ToolRegistry = Object.assign(makeRegistry, {
   empty,

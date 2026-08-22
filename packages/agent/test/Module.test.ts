@@ -89,8 +89,8 @@ it.effect("reports all duplicate contributors in declaration order", () =>
     assert.ok(Exit.isFailure(exit))
     if (Exit.isFailure(exit)) {
       const error = Option.getOrThrow(Exit.findErrorOption(exit))
-      assert.ok(error instanceof ToolConflict)
-      if (error instanceof ToolConflict) {
+      assert.ok(Schema.is(ToolConflict)(error))
+      if (Schema.is(ToolConflict)(error)) {
         assert.strictEqual(error.name, "lookup")
         assert.deepStrictEqual(error.contributors, ["orders", "support", "billing"])
       }
@@ -118,11 +118,9 @@ const ordersModule = Module.tool(
 it.effect("provides handler services through the module boundary", () =>
   Effect.gen(function* () {
     const built = yield* ordersModule.build(context(1))
-    const finalized = yield* built.tools.finalize.pipe(
-      Effect.provideService(Orders, { find: (id) => `order:${id}` }),
-    )
+    const finalized = yield* built.tools.finalize
     const result = yield* finalized.toolkit.handle("find_order", { id: "42" })
     const chunks = yield* result.pipe(Stream.runCollect)
     assert.strictEqual(chunks[0]?.result, "order:42")
-  }),
+  }).pipe(Effect.provideService(Orders, { find: (id) => `order:${id}` })),
 )

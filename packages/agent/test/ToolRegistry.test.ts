@@ -23,7 +23,7 @@ it.effect("rejects an empty tool name before compiling the toolkit", () =>
     const exit = yield* Effect.exit(built.tools.finalize)
     assert.ok(Exit.isFailure(exit))
     if (Exit.isFailure(exit)) {
-      assert.ok(Option.getOrThrow(Exit.findErrorOption(exit)) instanceof InvalidToolName)
+      assert.ok(Schema.is(InvalidToolName)(Option.getOrThrow(Exit.findErrorOption(exit))))
     }
   }),
 )
@@ -52,7 +52,7 @@ it.effect("keeps duplicate conflict results stable under regrouping", () =>
     const conflict = (exit: typeof leftExit): ReadonlyArray<string> => {
       if (!Exit.isFailure(exit)) return []
       const error = Option.getOrThrow(Exit.findErrorOption(exit))
-      return error instanceof ToolConflict ? error.contributors : []
+      return Schema.is(ToolConflict)(error) ? error.contributors : []
     }
     assert.deepStrictEqual(conflict(leftExit), ["a", "b"])
     assert.deepStrictEqual(conflict(rightExit), ["a", "b"])

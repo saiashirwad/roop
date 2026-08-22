@@ -27,7 +27,11 @@ import {
 import { runError, type RunError } from "../RunError.ts"
 import { resolveRunPolicy, type ResolvedRunPolicy, type RunPolicy } from "../RunPolicy.ts"
 import type { ControlSignal, InterruptSignal } from "../RunSignal.ts"
-import type { InvalidToolName, ToolConflict } from "../ToolRegistry.ts"
+import type {
+  FinalizedToolkit,
+  InvalidToolName,
+  ToolConflict,
+} from "../ToolRegistry.ts"
 import { modelAttempt, requestFingerprint, type LogicalModelRequest } from "./effectAiAdapter.ts"
 import { makeToolCallCorrelator } from "./toolCallCorrelator.ts"
 import { makeToolScheduler, type ToolScheduler } from "./toolScheduler.ts"
@@ -54,7 +58,7 @@ interface RunContext {
   readonly step: number
 }
 
-type ErasedToolkit = Toolkit.WithHandler<Record<string, Tool.Any>>
+type ErasedToolkit = FinalizedToolkit
 
 /** Outcome of one step, as the turn loop sees it. */
 type StepOutcome =
