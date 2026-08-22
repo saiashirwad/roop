@@ -1,13 +1,26 @@
 /* oxlint-disable anti-slop/require-safety-comment-for-type-assertion -- SAFETY: this test uses pinned Effect AI encoded fixtures and audit-event fixture narrowing. */
 
 import { assert, it } from "@effect/vitest"
-import { Deferred, Effect, Exit, Fiber, Layer, Ref, Schema, Stream } from "effect"
+import {
+  Cause,
+  Deferred,
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Option,
+  Ref,
+  Schema,
+  Stream,
+} from "effect"
+import { TestClock } from "effect/testing"
 import { AiError, LanguageModel, Prompt, Tool } from "effect/unstable/ai"
 import type * as Response from "effect/unstable/ai/Response"
 
 import { Agent } from "../src/Agent.ts"
 import { SessionId } from "../src/DomainIds.ts"
-import { FinalizationError, UnsafeModelRetry } from "../src/Error.ts"
+import { FinalizationError, ModelTimeout, UnsafeModelRetry } from "../src/Error.ts"
 import { EVENT_VERSION, type JournalEvent } from "../src/Event.ts"
 import { Journal, JournalError } from "../src/Journal.ts"
 import { JournalMemory } from "../src/JournalMemory.ts"
@@ -810,11 +823,166 @@ it.effect("keeps one durable pair for local and provider-executed calls", () =>
     const results = stored.events.filter((event) => event._tag === "tool/result")
     assert.strictEqual(calls.length, 2)
     assert.strictEqual(results.length, 2)
-    assert.deepStrictEqual(calls.map((call) => call.id).sort(), ["local-call", "provider-call"])
-    assert.deepStrictEqual(results.map((result) => result.id).sort(), [
-      "local-call",
-      "provider-call",
-    ])
+    assert.deepStrictEqual(
+      calls.map((call) => call.id).sort(),
+      results.map((result) => result.id).sort(),
+    )
+    assert.ok(calls.some((call) => call.name === "local_tool"))
+    assert.ok(calls.some((call) => call.name === "provider_tool" && call.id === "provider-call"))
     assert.ok(events.some((event) => event._tag === "Finish" && event.reason === "completed"))
   }),
+)
+
+it.effect("persists tool call durably to journal before tool handler execution begins", () =>
+  Effect.gen(function* () {
+    const callSeenInHandler = yield* Ref.make(false)
+    const journalRef = yield* Journal
+    const agent = Agent.make(
+      "persistence-order",
+      Module.tool(Inspect, () =>
+        Effect.gen(function* () {
+          const snapshot = yield* journalRef.load("persist-order-session")
+          const hasToolCall = snapshot.events.some(
+            (e) => e._tag === "tool/call" && e.name === "inspect",
+          )
+          yield* Ref.set(callSeenInHandler, hasToolCall)
+          return "inspected"
+        }),
+      ),
+    )
+    const model = yield* LanguageModel.make({
+      generateText: () => Effect.succeed([]),
+      streamText: () =>
+        Stream.make(
+          {
+            type: "tool-call" as const,
+            id: "call-1",
+            name: "inspect",
+            params: { id: "item" },
+          },
+          {
+            type: "text-delta" as const,
+            id: "done",
+            delta: "completed",
+          },
+        ),
+    })
+
+    yield* runAgent(agent, {
+      sessionId: "persist-order-session",
+      prompt: "inspect",
+    }).pipe(Stream.runDrain, Effect.provideService(LanguageModel.LanguageModel, model))
+
+    assert.strictEqual(yield* Ref.get(callSeenInHandler), true)
+  }).pipe(Effect.provide(JournalMemory)),
+)
+
+it.effect("records aborted run with reason stopped when step limit is reached", () =>
+  Effect.gen(function* () {
+    const agent = Agent.make(
+      "stopped-agent",
+      Module.tool(Inspect, () => Effect.succeed("inspected")),
+    )
+    const model = yield* LanguageModel.make({
+      generateText: () => Effect.succeed([]),
+      streamText: () =>
+        Stream.make({
+          type: "tool-call" as const,
+          id: "call-1",
+          name: "inspect",
+          params: { id: "item" },
+        }),
+    })
+
+    const { events, stored } = yield* Effect.gen(function* () {
+      const events = yield* runAgent(agent, {
+        sessionId: "stopped-session",
+        prompt: "inspect",
+        policy: { maxStepsPerTurn: 1 },
+      }).pipe(Stream.runCollect)
+      const journal = yield* Journal
+      return { events, stored: yield* journal.load("stopped-session") }
+    }).pipe(
+      Effect.provide(JournalMemory),
+      Effect.provideService(LanguageModel.LanguageModel, model),
+    )
+
+    assert.ok(events.some((event) => event._tag === "Finish" && event.reason === "stopped"))
+    const terminalRunEvent = stored.events.filter(
+      (e): e is Extract<JournalEvent, { readonly _tag: "run" }> =>
+        e._tag === "run" && (e.state === "aborted" || e.state === "completed"),
+    )
+    assert.strictEqual(terminalRunEvent.length, 1)
+    assert.strictEqual(terminalRunEvent[0]?.state, "aborted")
+    assert.strictEqual(terminalRunEvent[0]?.reason, "stopped")
+  }),
+)
+
+it.effect("fails with typed ModelTimeout when model request exceeds modelTimeout", () =>
+  Effect.gen(function* () {
+    const agent = Agent.make("timeout-agent", Module.empty)
+    const model = yield* LanguageModel.make({
+      generateText: () => Effect.succeed([]),
+      streamText: () => Stream.never,
+    })
+
+    const fiber = yield* runAgent(agent, {
+      sessionId: "model-timeout-session",
+      prompt: "start",
+      policy: { modelTimeout: Duration.millis(10) },
+    }).pipe(
+      Stream.runDrain,
+      Effect.provide(JournalMemory),
+      Effect.provideService(LanguageModel.LanguageModel, model),
+      Effect.forkChild,
+    )
+
+    yield* Effect.yieldNow
+    yield* TestClock.adjust(Duration.millis(20))
+    const exit = yield* Effect.exit(Fiber.join(fiber))
+
+    assert.ok(Exit.isFailure(exit))
+    if (Exit.isFailure(exit)) {
+      const errorOpt = Cause.findErrorOption(exit.cause)
+      assert.ok(Option.isSome(errorOpt))
+      if (Option.isSome(errorOpt)) {
+        assert.ok(Schema.is(ModelTimeout)(errorOpt.value))
+      }
+    }
+  }),
+)
+
+it.effect(
+  "records canonical planFingerprint, promptFingerprint, and toolFingerprint on model/request",
+  () =>
+    Effect.gen(function* () {
+      const agent = Agent.make(
+        "fingerprint-agent",
+        Module.tool(Inspect, () => Effect.succeed("inspected")),
+      )
+      const model = yield* LanguageModel.make({
+        generateText: () => Effect.succeed([]),
+        streamText: () =>
+          Stream.make({ type: "text-delta" as const, id: "done", delta: "finished" }),
+      })
+
+      const stored = yield* Effect.gen(function* () {
+        yield* runAgent(agent, {
+          sessionId: "fingerprint-session",
+          prompt: "audit me",
+        }).pipe(Stream.runDrain)
+        const journal = yield* Journal
+        return yield* journal.load("fingerprint-session")
+      }).pipe(
+        Effect.provide(JournalMemory),
+        Effect.provideService(LanguageModel.LanguageModel, model),
+      )
+
+      const requestEvents = stored.events.filter((e) => e._tag === "model/request")
+      assert.strictEqual(requestEvents.length, 1)
+      const req = requestEvents[0]!
+      assert.ok(typeof req.planFingerprint === "string" && req.planFingerprint.length > 0)
+      assert.ok(typeof req.promptFingerprint === "string" && req.promptFingerprint.length > 0)
+      assert.ok(typeof req.toolFingerprint === "string" && req.toolFingerprint.length > 0)
+    }),
 )

@@ -1,12 +1,17 @@
 /* oxlint-disable anti-slop/no-chained-type-assertions, anti-slop/no-escape-hatch-assertions, anti-slop/require-safety-comment-for-type-assertion, anti-slop/no-unknown-parameters -- SAFETY: this module contains the single Journal JSON boundary and the typed Effect AI compatibility boundary. */
 
-import { Cause, Context, Effect, Exit, Layer, Option, Ref, Stream } from "effect"
+import { Cause, Context, Effect, Exit, Layer, Option, Ref, Semaphore, Stream } from "effect"
 import { Chat, LanguageModel, Prompt, type AiError } from "effect/unstable/ai"
 
 import type { AgentDefinition } from "./Agent.ts"
 import type { AgentEvent, SessionEvent } from "./AgentEvents.ts"
 import { makeRunId, makeSessionId, type RunId, type SessionId } from "./DomainIds.ts"
-import { FinalizationError, type UnsafeModelRetry } from "./Error.ts"
+import {
+  FinalizationError,
+  type ModelTimeout,
+  type RunError,
+  type UnsafeModelRetry,
+} from "./Error.ts"
 import { EVENT_VERSION, type Json, type JournalEvent, type LifecycleState } from "./Event.ts"
 import { fromEvents, recoveryEvents, toPrompt } from "./History.ts"
 import { stableJsonValue } from "./internal/effectAiAdapter.ts"
@@ -23,9 +28,7 @@ import {
   type Middleware,
   MiddlewareService,
 } from "./Middleware.ts"
-import type { RunError } from "./RunError.ts"
 import type { RunPolicy } from "./RunPolicy.ts"
-import { InterruptSignal } from "./RunSignal.ts"
 import { ToolRegistry, type InvalidToolName, type ToolConflict } from "./ToolRegistry.ts"
 
 /** Input for one direct, scoped kernel run. */
@@ -53,7 +56,7 @@ export interface AgentRuntimeService {
     | InvalidToolName
     | ToolConflict
     | UnsafeModelRetry
-    | Cause.TimeoutError,
+    | ModelTimeout,
     R | RM | LanguageModel.LanguageModel | Journal
   >
 }
@@ -68,7 +71,7 @@ type RuntimeError<E> =
   | InvalidToolName
   | ToolConflict
   | UnsafeModelRetry
-  | Cause.TimeoutError
+  | ModelTimeout
 
 interface JournalBridge {
   readonly sessionId: SessionId
@@ -169,26 +172,32 @@ const toDurableEvents = (
       bridge.attemptOpen = true
       const requestId = `${bridge.runId}:${bridge.turn}:${bridge.step}`
       const request = jsonValue(event.request)
-      const fingerprintValue =
-        typeof event.request === "object" &&
-        event.request !== null &&
-        "fingerprint" in event.request
-          ? (event.request as { readonly fingerprint?: unknown }).fingerprint
-          : undefined
+      const reqObj =
+        typeof event.request === "object" && event.request !== null
+          ? /* SAFETY: event.request is validated before mapping into audit records. */
+            (event.request as {
+              readonly fingerprint?: unknown
+              readonly planFingerprint?: unknown
+              readonly promptFingerprint?: unknown
+              readonly toolFingerprint?: unknown
+              readonly toolNames?: unknown
+              readonly attempt?: unknown
+            })
+          : {}
       const fingerprint =
-        typeof fingerprintValue === "string"
-          ? fingerprintValue
-          : fingerprintValue === undefined
-            ? ""
-            : (JSON.stringify(fingerprintValue) ?? "")
-      const toolNames =
-        typeof event.request === "object" && event.request !== null && "toolNames" in event.request
-          ? ((event.request as { readonly toolNames?: unknown }).toolNames ?? [])
-          : []
-      const attempt =
-        typeof event.request === "object" && event.request !== null && "attempt" in event.request
-          ? Number((event.request as { readonly attempt?: unknown }).attempt ?? 1)
-          : 1
+        typeof reqObj.fingerprint === "string"
+          ? reqObj.fingerprint
+          : typeof reqObj.fingerprint === "object"
+            ? (JSON.stringify(reqObj.fingerprint) ?? "")
+            : ""
+      const planFingerprint =
+        typeof reqObj.planFingerprint === "string" ? reqObj.planFingerprint : fingerprint
+      const promptFingerprint =
+        typeof reqObj.promptFingerprint === "string" ? reqObj.promptFingerprint : fingerprint
+      const toolFingerprint =
+        typeof reqObj.toolFingerprint === "string" ? reqObj.toolFingerprint : ""
+      const toolNames = Array.isArray(reqObj.toolNames) ? reqObj.toolNames.map(String) : []
+      const attempt = typeof reqObj.attempt === "number" ? reqObj.attempt : 1
       const events: Array<JournalEvent> = []
       if (previousAttemptOpen) {
         events.push({
@@ -223,10 +232,10 @@ const toDurableEvents = (
           step: bridge.step,
           requestId,
           request,
-          planFingerprint: fingerprint,
-          promptFingerprint: fingerprint,
-          toolFingerprint: JSON.stringify(toolNames),
-          toolNames: Array.isArray(toolNames) ? toolNames.map(String) : [],
+          planFingerprint,
+          promptFingerprint,
+          toolFingerprint: toolFingerprint === "" ? JSON.stringify(toolNames) : toolFingerprint,
+          toolNames,
         },
       )
       if (attempt > 1) events.splice(events.length - 1, 1)
@@ -354,17 +363,22 @@ const runtimeRun = <R, E, RM = never, EM = never>(
       bridge.revision = startedRev
 
       const chat = yield* Chat.fromPrompt(Prompt.concat(history, Prompt.make(request.prompt)))
+      const appendSemaphore = yield* Semaphore.make(1)
       const append = Effect.fn("Runtime.append")(function* (event: SessionEvent) {
-        const durable = toDurableEvents(bridge, event)
-        if (durable.length === 0) return
-        const batch = [durable[0]!, ...durable.slice(1)] as unknown as readonly [
-          JournalEvent,
-          ...JournalEvent[],
-        ]
-        const rev = yield* Ref.get(revisionRef)
-        const nextRev = yield* journal.append(sessionId, rev, batch)
-        yield* Ref.set(revisionRef, nextRev)
-        bridge.revision = nextRev
+        return yield* appendSemaphore.withPermit(
+          Effect.gen(function* () {
+            const durable = toDurableEvents(bridge, event)
+            if (durable.length === 0) return
+            const batch = [durable[0]!, ...durable.slice(1)] as unknown as readonly [
+              JournalEvent,
+              ...JournalEvent[],
+            ]
+            const rev = yield* Ref.get(revisionRef)
+            const nextRev = yield* journal.append(sessionId, rev, batch)
+            yield* Ref.set(revisionRef, nextRev)
+            bridge.revision = nextRev
+          }),
+        )
       })
       const emptyToolkit = yield* ToolRegistry.empty.finalize
       // SAFETY: runtimeRun has already supplied the model and empty toolkit;
@@ -377,10 +391,6 @@ const runtimeRun = <R, E, RM = never, EM = never>(
         model,
         toolkit: Effect.succeed(emptyToolkit.toolkit),
         policy: request.policy,
-        // Direct runtime control is structured stream interruption. Host
-        // supervisors interrupt the consumer fiber instead of passing a
-        // request-scoped control signal through the kernel API.
-        interrupt: InterruptSignal.noop(),
         append,
         /* SAFETY: runtimeRun restores the middleware R and E channels in its
          * public Stream type after the internal interpreter erasure. */
@@ -390,44 +400,51 @@ const runtimeRun = <R, E, RM = never, EM = never>(
         ),
       }) as Stream.Stream<AgentEvent, RuntimeError<E | EM>, R | RM>
 
-      const terminalRef = yield* Ref.make(false)
+      const terminalCommittedRef = yield* Ref.make(false)
 
-      const appendRunState = Effect.fn("Runtime.appendRunState")(function* (
+      const commitTerminalRunState = Effect.fn("Runtime.commitTerminalRunState")(function* (
         state: LifecycleState,
         reason?: "completed" | "failed" | "interrupted" | "stopped",
       ) {
-        const event: JournalEvent = {
-          _tag: "run",
-          version: EVENT_VERSION,
-          sessionId,
-          runId,
-          state,
-          ...(reason === undefined ? undefined : { reason }),
-        }
-        const batch = [event] as readonly [JournalEvent, ...JournalEvent[]]
-        const rev = yield* Ref.get(revisionRef)
-        const nextRev = yield* journal.append(sessionId, rev, batch)
-        yield* Ref.set(revisionRef, nextRev)
-        bridge.revision = nextRev
+        yield* appendSemaphore.withPermit(
+          Effect.gen(function* () {
+            const committed = yield* Ref.get(terminalCommittedRef)
+            if (committed) return
+            const event: JournalEvent = {
+              _tag: "run",
+              version: EVENT_VERSION,
+              sessionId,
+              runId,
+              state,
+              ...(reason === undefined ? undefined : { reason }),
+            }
+            const batch = [event] as readonly [JournalEvent, ...JournalEvent[]]
+            const rev = yield* Ref.get(revisionRef)
+            const nextRev = yield* journal.append(sessionId, rev, batch)
+            yield* Ref.set(revisionRef, nextRev)
+            bridge.revision = nextRev
+            yield* Ref.set(terminalCommittedRef, true)
+          }),
+        )
       })
 
       return stream.pipe(
-        Stream.tap((event) =>
-          event._tag === "Finish" && event.reason === "completed"
-            ? Effect.gen(function* () {
-                yield* Ref.set(terminalRef, true)
-                yield* appendRunState("completed", "completed")
-              })
-            : Effect.void,
-        ),
+        Stream.tap((event) => {
+          if (event._tag !== "Finish") return Effect.void
+          switch (event.reason) {
+            case "completed":
+              return commitTerminalRunState("completed", "completed")
+            case "stopped":
+              return commitTerminalRunState("aborted", "stopped")
+            case "interrupted":
+              return commitTerminalRunState("aborted", "interrupted")
+            case "failed":
+              return commitTerminalRunState("aborted", "failed")
+          }
+        }),
         Stream.catchCause((cause) =>
           Stream.unwrap(
-            Effect.uninterruptible(
-              Effect.gen(function* () {
-                yield* Ref.set(terminalRef, true)
-                return yield* Effect.exit(appendRunState("aborted", "failed"))
-              }),
-            ).pipe(
+            Effect.uninterruptible(Effect.exit(commitTerminalRunState("aborted", "failed"))).pipe(
               Effect.flatMap((terminal) =>
                 Exit.isSuccess(terminal)
                   ? Effect.failCause(cause)
@@ -447,13 +464,7 @@ const runtimeRun = <R, E, RM = never, EM = never>(
         ),
         Stream.ensuring(
           Effect.uninterruptible(
-            Effect.flatMap(
-              Ref.modify(terminalRef, (attempted) => (attempted ? [false, true] : [true, true])),
-              (shouldRun) =>
-                shouldRun
-                  ? appendRunState("aborted", "interrupted").pipe(Effect.ignore)
-                  : Effect.void,
-            ),
+            commitTerminalRunState("aborted", "interrupted").pipe(Effect.ignore),
           ),
         ),
       ) as unknown as Stream.Stream<AgentEvent, RuntimeError<E | EM>, R | RM | Journal>

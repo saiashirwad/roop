@@ -214,3 +214,69 @@ it.effect("releases scoped middleware resources with its Layer", () =>
     assert.strictEqual(yield* Ref.get(finalized), 1)
   }),
 )
+
+it.effect("propagates rewritten tool parameters to the tool handler", () =>
+  Effect.gen(function* () {
+    const observedParams = yield* Ref.make<unknown>(undefined)
+    const mw = Middleware.make({
+      tool: (next) => (input) => {
+        /* SAFETY: test input parameters match the explicit fixture structure. */
+        const params = input.params as { readonly original: string }
+        return next({
+          ...input,
+          params: {
+            ...params,
+            injected: "added-by-middleware",
+          },
+        })
+      },
+    })
+    const handler = (input: Middleware.ToolCallInput) =>
+      Stream.fromEffect(Ref.set(observedParams, input.params).pipe(Effect.as("done")))
+
+    yield* mw
+      .tool(handler)({
+        sessionId: "mw-session",
+        turn: 1,
+        step: 1,
+        name: "test_tool",
+        params: { original: "initial" },
+      })
+      .pipe(Stream.runDrain)
+
+    assert.deepStrictEqual(yield* Ref.get(observedParams), {
+      original: "initial",
+      injected: "added-by-middleware",
+    })
+  }),
+)
+
+it.effect("wraps the entire turn execution with turn middleware", () =>
+  Effect.gen(function* () {
+    const events: string[] = []
+    const mw = Middleware.make({
+      turn: (next) => (input) =>
+        Effect.gen(function* () {
+          events.push("turn:start")
+          const res = yield* next(input)
+          events.push("turn:end")
+          return res
+        }),
+    })
+
+    const runTurn = (_input: Middleware.TurnRunInput) =>
+      Effect.gen(function* () {
+        events.push("turn:executing")
+        return { _tag: "Completed" as const, stepCount: 1 }
+      })
+
+    yield* mw.turn(runTurn)({
+      sessionId: "turn-session",
+      turn: 1,
+      step: 0,
+      stepCount: 0,
+    })
+
+    assert.deepStrictEqual(events, ["turn:start", "turn:executing", "turn:end"])
+  }),
+)

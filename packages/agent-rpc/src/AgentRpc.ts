@@ -1,11 +1,4 @@
-import {
-  AgentEvents,
-  Error as AgentError,
-  Journal,
-  RunError,
-  RunPolicy,
-  ToolRegistry,
-} from "@roop/agent"
+import { AgentEvents, Error as AgentError, Journal, RunPolicy, ToolRegistry } from "@roop/agent"
 import { Schema } from "effect"
 import { AiError } from "effect/unstable/ai"
 import { Rpc, RpcGroup } from "effect/unstable/rpc"
@@ -19,10 +12,9 @@ const {
   JournalSnapshotSchema,
   JournalError,
 } = Journal
-const { FinalizationError } = AgentError
+const { FinalizationError, UnsafeModelRetry, ModelTimeout, RunError: RunErrorSchema } = AgentError
 const { InvalidToolName, ToolConflict } = ToolRegistry
 const { AgentEvent } = AgentEvents
-const { RunError: RunErrorSchema } = RunError
 const { RunPolicy: RunPolicySchema } = RunPolicy
 
 /** The small transport contract for the host supervisor. */
@@ -46,6 +38,8 @@ export const AgentRpc = RpcGroup.make(
       FinalizationError,
       InvalidToolName,
       ToolConflict,
+      UnsafeModelRetry,
+      ModelTimeout,
     ]),
     stream: true,
   }),
@@ -64,6 +58,8 @@ export const AgentRpc = RpcGroup.make(
       FinalizationError,
       InvalidToolName,
       ToolConflict,
+      UnsafeModelRetry,
+      ModelTimeout,
     ]),
     stream: true,
   }),

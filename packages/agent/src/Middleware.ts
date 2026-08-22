@@ -115,25 +115,17 @@ export const layerEmpty: Layer.Layer<MiddlewareService> = Layer.succeed(
 /** Build a middleware service while preserving the builder requirements and failures. */
 export const layer = <R, E>(
   name: string,
-  build: Effect.Effect<Middleware<R, E>, E, R>,
-): Layer.Layer<MiddlewareService, E, R> => {
-  /* SAFETY: MiddlewareService is an erased capability seam tag; the layer preserves R and E. */
-  return Layer.effect(
-    MiddlewareService,
-    build.pipe(
-      Effect.map((mw) => {
-        /* SAFETY: Middleware types are structurally compatible across runtime erasure boundaries. */
-        return MiddlewareService.of(mw as Middleware)
-      }),
-    ),
-  ).pipe(Layer.withSpan(`Middleware/${name}`)) as Layer.Layer<MiddlewareService, E, R>
-}
+  build: Effect.Effect<Middleware<never, never>, E, R>,
+): Layer.Layer<MiddlewareService, E, R> =>
+  Layer.effect(MiddlewareService, build.pipe(Effect.map((mw) => MiddlewareService.of(mw)))).pipe(
+    Layer.withSpan(`Middleware/${name}`),
+  )
 
 /** Build a scoped middleware service. Its finalizer follows the Layer scope. */
 export const layerScoped = <R, E>(
   name: string,
-  build: Effect.Effect<Middleware<R, E>, E, R | Scope.Scope>,
+  build: Effect.Effect<Middleware<never, never>, E, R | Scope.Scope>,
 ): Layer.Layer<MiddlewareService, E, R> =>
-  /* SAFETY: Layer.effect owns Scope and removes it from the resulting Layer requirement. */
-  /* oxlint-disable-next-line anti-slop/require-safety-comment-for-type-assertion -- SAFETY: Layer.effect owns Scope and removes it from the resulting Layer requirement. */
-  layer(name, build as Effect.Effect<Middleware<R, E>, E, R>)
+  Layer.effect(MiddlewareService, build.pipe(Effect.map((mw) => MiddlewareService.of(mw)))).pipe(
+    Layer.withSpan(`Middleware/${name}`),
+  )

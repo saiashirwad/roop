@@ -4,7 +4,6 @@ import {
   type Error as AgentError,
   Journal as JournalModule,
   Runtime,
-  type RunError as RunErrorModule,
   type ToolRegistry,
 } from "@roop/agent"
 import {
@@ -31,7 +30,9 @@ type JournalSnapshot = JournalModule.JournalSnapshot
 type AgentRuntimeRequest = Runtime.AgentRuntimeRequest
 type AgentEvent = AgentEvents.AgentEvent
 type FinalizationError = AgentError.FinalizationError
-type RunError = RunErrorModule.RunError
+type UnsafeModelRetry = AgentError.UnsafeModelRetry
+type ModelTimeout = AgentError.ModelTimeout
+type RunError = AgentError.RunError
 type InvalidToolName = ToolRegistry.InvalidToolName
 type ToolConflict = ToolRegistry.ToolConflict
 
@@ -55,6 +56,8 @@ export type RunSupervisorError =
   | FinalizationError
   | InvalidToolName
   | ToolConflict
+  | UnsafeModelRetry
+  | ModelTimeout
 
 export const RunHistory = JournalSnapshotSchema
 export type RunHistory = typeof RunHistory.Type
@@ -108,12 +111,12 @@ export class RunSupervisor extends Context.Service<RunSupervisor, RunSupervisorS
   "roop/rpc/RunSupervisor",
 ) {}
 
-export const make = (
-  agent: AgentModule.AgentDefinition<never, never>,
+export const make = <R = never>(
+  agent: AgentModule.AgentDefinition<R, never>,
 ): Effect.Effect<
   RunSupervisorService,
   never,
-  Runtime.AgentRuntime | JournalModule.Journal | LanguageModel.LanguageModel
+  R | Runtime.AgentRuntime | JournalModule.Journal | LanguageModel.LanguageModel
 > =>
   Effect.gen(function* () {
     const runtime = yield* AgentRuntimeTag
@@ -295,7 +298,7 @@ export const make = (
         Effect.gen(function* () {
           const queue = yield* Queue.unbounded<AgentEvent, QueueError>()
           const replay = yield* addSubscriber(sessionId, queue)
-          if (Option.isSome(replay)) return consumer(sessionId, queue, replay.value)
+          if (Option.isSome(replay)) return consumer(sessionId, queue, replay.value, false)
           yield* Queue.shutdown(queue)
           return yield* new RunNotFound({ sessionId })
         }),
@@ -317,7 +320,7 @@ export const make = (
     })
   })
 
-export const live = (agent: AgentModule.AgentDefinition<never, never>) =>
+export const live = <R = never>(agent: AgentModule.AgentDefinition<R, never>) =>
   Layer.effect(RunSupervisor, make(agent))
 
 export const RunSupervisorLive = live

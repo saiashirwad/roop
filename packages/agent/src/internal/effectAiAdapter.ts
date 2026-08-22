@@ -66,19 +66,62 @@ export const stableJsonValue = (value: unknown): unknown => {
 }
 
 /**
- * Build the stable audit fingerprint for a model-facing request.
+ * Build the stable canonical fingerprint for tool schemas and descriptions.
+ */
+export const toolFingerprint = (tools: ReadonlyArray<Tool.Any>): string =>
+  JSON.stringify(
+    stableJsonValue(
+      tools
+        .map((t) => ({
+          name: t.name,
+          description: t.description,
+          parameters: t.parametersSchema ? JSON.stringify(t.parametersSchema) : undefined,
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    ),
+  )
+
+/**
+ * Build the stable canonical fingerprint for instructions and plan tools.
+ */
+export const planFingerprint = (input: {
+  readonly instructions: ReadonlyArray<{ readonly text: string; readonly contributor: string }>
+  readonly tools: ReadonlyArray<Tool.Any>
+}): string =>
+  JSON.stringify(
+    stableJsonValue({
+      instructions: input.instructions.map((i) => ({ text: i.text, contributor: i.contributor })),
+      tools: input.tools
+        .map((t) => ({
+          name: t.name,
+          description: t.description,
+          parameters: t.parametersSchema ? JSON.stringify(t.parametersSchema) : undefined,
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    }),
+  )
+
+/**
+ * Build the stable canonical fingerprint for an effective model prompt.
+ */
+export const promptFingerprint = (prompt: Prompt.Prompt): string =>
+  JSON.stringify(stableJsonValue(prompt))
+
+/**
+ * Build the stable audit fingerprint for a logical model-facing request.
  * Handlers and live token deltas are intentionally not part of this value.
  */
 export const requestFingerprint = (input: {
-  readonly planId: string
+  readonly planId?: string | undefined
+  readonly planFingerprint?: string | undefined
   readonly prompt: Prompt.Prompt
   readonly toolNames: ReadonlyArray<string>
 }): string =>
   JSON.stringify(
     stableJsonValue({
-      planId: input.planId,
-      prompt: input.prompt,
-      toolNames: [...input.toolNames],
+      plan: input.planFingerprint ?? input.planId,
+      prompt: promptFingerprint(input.prompt),
+      toolNames: [...input.toolNames].sort(),
     }),
   )
 

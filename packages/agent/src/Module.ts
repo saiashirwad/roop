@@ -136,7 +136,12 @@ export const provide = <M extends ModuleInput, I, S>(
 ): Module<Exclude<Requirements<M>, I>, Errors<M>> =>
   /* SAFETY: the supplied service is exactly the Context.Key removed from R. */
   make((context) =>
-    buildModule(module, context).pipe(Effect.provideService(service, value)),
+    buildModule(module, context).pipe(
+      Effect.map((part) =>
+        contribution(part.instructions, ToolRegistry.provideService(part.tools, service, value)),
+      ),
+      Effect.provideService(service, value),
+    ),
   ) as never
 
 export const provideLayer = <M extends ModuleInput, L extends Layer.Any>(
@@ -149,6 +154,9 @@ export const provideLayer = <M extends ModuleInput, L extends Layer.Any>(
   /* SAFETY: the supplied Layer output is exactly the service set removed from R. */
   make((context) =>
     buildModule(module, context).pipe(
+      Effect.map((part) =>
+        contribution(part.instructions, ToolRegistry.provideLayer(part.tools, layer)),
+      ),
       Effect.provide(
         // SAFETY: L is constrained to Layer.Any and these utility types are its
         // corresponding output, error, and input channels.

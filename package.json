@@ -12,7 +12,7 @@
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
     "test": "turbo run test",
-    "check": "turbo run typecheck test && pnpm lint && pnpm format:check"
+    "check": "turbo run typecheck test && pnpm test:package && pnpm lint && pnpm format:check"
   },
   "devDependencies": {
     "@effect/language-service": "^0.87.2",

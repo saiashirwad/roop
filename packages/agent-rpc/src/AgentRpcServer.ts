@@ -19,5 +19,5 @@ export const AgentRpcServer = AgentRpc.toLayer(
 )
 
 /** Build a host layer for one explicit Agent value. */
-export const AgentRpcServerLive = (agent: AgentModule.AgentDefinition<never, never>) =>
+export const AgentRpcServerLive = <R = never>(agent: AgentModule.AgentDefinition<R, never>) =>
   AgentRpcServer.pipe(Layer.provide(RunSupervisorLive(agent)))

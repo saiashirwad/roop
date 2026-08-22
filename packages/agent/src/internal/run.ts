@@ -1,6 +1,6 @@
 /* oxlint-disable anti-slop/no-chained-type-assertions, anti-slop/no-escape-hatch-assertions, anti-slop/require-safety-comment-for-type-assertion -- SAFETY: these assertions are limited to the compatibility and Effect AI existential boundaries described below. */
 
-import { Cause, Effect, Exit, Option, Queue, Ref, Stream } from "effect"
+import { Cause, Duration, Effect, Exit, Option, Queue, Ref, Stream } from "effect"
 import {
   type AiError,
   type Chat,
@@ -16,19 +16,25 @@ import type { AgentContext } from "../AgentContext.ts"
 import { AgentEmit, type AgentEvent, type SessionEvent } from "../AgentEvents.ts"
 import { toPrompt as planToPrompt } from "../AgentPlan.ts"
 import type { RunId, SessionId } from "../DomainIds.ts"
-import { UnsafeModelRetry } from "../Error.ts"
+import { ModelTimeout, runError, UnsafeModelRetry, type RunError } from "../Error.ts"
 import type { JournalAppendError } from "../Journal.ts"
 import {
   empty as emptyMiddleware,
   type Middleware,
   type ModelCallInput,
   type ToolCallInput,
+  type TurnRunInput,
 } from "../Middleware.ts"
-import { runError, type RunError } from "../RunError.ts"
 import { resolveRunPolicy, type ResolvedRunPolicy, type RunPolicy } from "../RunPolicy.ts"
-import type { ControlSignal, InterruptSignal } from "../RunSignal.ts"
 import type { FinalizedToolkit, InvalidToolName, ToolConflict } from "../ToolRegistry.ts"
-import { modelAttempt, requestFingerprint, type LogicalModelRequest } from "./effectAiAdapter.ts"
+import {
+  modelAttempt,
+  planFingerprint,
+  promptFingerprint,
+  requestFingerprint,
+  toolFingerprint,
+  type LogicalModelRequest,
+} from "./effectAiAdapter.ts"
 import { makeToolCallCorrelator } from "./toolCallCorrelator.ts"
 import { makeToolScheduler, type ToolScheduler } from "./toolScheduler.ts"
 
@@ -39,7 +45,6 @@ export interface RunOptions<R = never, E = never> {
   /** A request-bound capability snapshot. */
   readonly toolkit: Effect.Effect<ErasedToolkit>
   readonly policy?: RunPolicy | undefined
-  readonly interrupt: InterruptSignal
   readonly append: (event: SessionEvent) => Effect.Effect<void, RunError | JournalAppendError>
   readonly middleware?: Middleware | undefined
   /** Explicit agent used by the staged logical-plan interpreter path. */
@@ -60,7 +65,6 @@ type ErasedToolkit = FinalizedToolkit
 type StepOutcome =
   | { readonly _tag: "Stop" }
   | { readonly _tag: "ToolCalls"; readonly toolCallCount: number }
-  | ControlSignal
 
 type ToolCallParameters = Tool.Parameters<Tool.Any>
 
@@ -74,82 +78,12 @@ const asClosedToolkit = (toolkit: ClosedToolkitValue): ClosedToolkit => {
   return toolkit as ClosedToolkit
 }
 
-const toEvent = (
-  part: Response.StreamPart<Record<string, Tool.Any>>,
-  onToolCall?: (
-    name: string,
-    params: ToolCallParameters,
-    id: string,
-    providerExecuted: boolean,
-  ) => Option.Option<string>,
-  onToolResult?: (id: string) => Option.Option<string>,
-): Option.Option<AgentEvent> => {
-  switch (part.type) {
-    case "text-delta": {
-      return Option.some({ _tag: "TextDelta", delta: part.delta })
-    }
-    case "reasoning-delta": {
-      return Option.some({ _tag: "ReasoningDelta", delta: part.delta })
-    }
-    case "tool-call": {
-      /* SAFETY: Every tool-call part is decoded against the toolkit's parameter schema. */
-      const localIdOpt = onToolCall?.(
-        part.name,
-        part.params as ToolCallParameters,
-        part.id,
-        part.providerExecuted,
-      )
-      const localId = Option.isSome(localIdOpt ?? Option.none())
-        ? (localIdOpt as Option.Some<string>).value
-        : part.id
-      return Option.some({
-        _tag: "ToolCall",
-        id: localId,
-        name: part.name,
-        params: part.params,
-        providerExecuted: part.providerExecuted,
-      })
-    }
-    case "tool-result": {
-      if (part.preliminary === true) return Option.none()
-      const providerExecuted =
-        "providerExecuted" in part && typeof part.providerExecuted === "boolean"
-          ? part.providerExecuted
-          : undefined
-      const localIdOpt = onToolResult?.(part.id)
-      const localId = Option.isSome(localIdOpt ?? Option.none())
-        ? (localIdOpt as Option.Some<string>).value
-        : part.id
-      return Option.some({
-        _tag: "ToolResult",
-        id: localId,
-        name: part.name,
-        isFailure: part.isFailure,
-        result: part.encodedResult,
-        ...(providerExecuted === undefined ? undefined : { providerExecuted }),
-      })
-    }
-    default: {
-      return Option.none()
-    }
-  }
-}
-
-/** Journal the exact assistant/tool messages produced by this model response. */
+/** Journal the exact assistant messages produced by this model response. */
 const appendStepEvents = (
   append: (event: SessionEvent) => Effect.Effect<void, RunError | JournalAppendError>,
   outcome: ReadonlyArray<Response.StreamPart<Record<string, Tool.Any>>>,
 ): Effect.Effect<void, RunError | JournalAppendError> => {
   const content = Prompt.fromResponseParts(outcome).content
-  const providerExecutedByResultId = new Map(
-    outcome.flatMap((part) =>
-      part.type === "tool-result" &&
-      "providerExecuted" in part &&
-      typeof part.providerExecuted === "boolean"
-        ? [[part.id, part.providerExecuted] as const]
-        : [],
-    ),
-  )
   const events: Array<SessionEvent> = []
   for (const message of content) {
     if (message.role === "assistant") {
@@ -157,32 +91,6 @@ const appendStepEvents = (
         .filter((part) => part.type === "text" || part.type === "reasoning")
         .map((part) => ({ type: part.type, text: part.text }))
       if (parts.length > 0) events.push({ _tag: "assistant/message", parts })
-      for (const part of message.content) {
-        if (part.type === "tool-call")
-          events.push({
-            _tag: "tool/call",
-            id: part.id,
-            name: part.name,
-            params: part.params,
-            providerExecuted: part.providerExecuted,
-          })
-      }
-    } else if (message.role === "tool") {
-      for (const part of message.content) {
-        if (part.type === "tool-result") {
-          const providerExecuted = providerExecutedByResultId.get(part.id)
-          /* Response's decoded result carries this field; preserve it even
-           * though Prompt's model-facing result part does not in beta.97. */
-          events.push({
-            _tag: "tool/result",
-            id: part.id,
-            name: part.name,
-            isFailure: part.isFailure,
-            result: part.result,
-            ...(providerExecuted === undefined ? undefined : { providerExecuted }),
-          })
-        }
-      }
     }
   }
   return Effect.forEach(events, append, { discard: true })
@@ -194,7 +102,8 @@ const interceptModel = (
   append: (event: SessionEvent) => Effect.Effect<void, RunError | JournalAppendError>,
   audit?: {
     readonly planId: string
-    readonly fingerprint: string
+    readonly planFingerprint: string
+    readonly toolFingerprint: string
     readonly toolNames: ReadonlyArray<string>
     readonly attempt?: number | undefined
   },
@@ -211,6 +120,16 @@ const interceptModel = (
             toolChoice: request.toolChoice,
           }
           if (recordAudit) {
+            const promptObj = Prompt.isPrompt(admitted.prompt)
+              ? admitted.prompt
+              : Prompt.make(admitted.prompt)
+            const promptFp = promptFingerprint(promptObj)
+            const reqFingerprint = requestFingerprint({
+              planId: audit?.planId,
+              planFingerprint: audit?.planFingerprint,
+              prompt: promptObj,
+              toolNames: audit?.toolNames ?? [],
+            })
             yield* append({
               _tag: "model/request",
               request:
@@ -219,7 +138,10 @@ const interceptModel = (
                   : {
                       ...admitted,
                       planId: audit.planId,
-                      fingerprint: audit.fingerprint,
+                      fingerprint: reqFingerprint,
+                      planFingerprint: audit.planFingerprint,
+                      promptFingerprint: promptFp,
+                      toolFingerprint: audit.toolFingerprint,
                       toolNames: audit.toolNames,
                       ...(audit.attempt === undefined ? undefined : { attempt: audit.attempt }),
                     },
@@ -268,6 +190,8 @@ const interceptToolkit = (
   scheduler: ToolScheduler,
   correlator: ReturnType<typeof makeToolCallCorrelator>,
   policy: Pick<ResolvedRunPolicy, "toolTimeout" | "maxToolOutputBytes">,
+  append: (event: SessionEvent) => Effect.Effect<void, RunError | JournalAppendError>,
+  onToolDispatch: () => Effect.Effect<void>,
 ): ErasedToolkit => {
   /* SAFETY: The intercept preserves ErasedToolkit.handle while inserting hook seams. */
   return {
@@ -278,21 +202,37 @@ const interceptToolkit = (
         // handlers in provider-part order, but hook/scheduling timing may vary; the token
         // must represent invocation order, not execution timing.
         const token = correlator.allocateToken(name)
-        const scheduled = scheduler.scheduleEffect(
-          Effect.suspend(() =>
-            toolkit.handle(name, params).pipe(
-              Effect.provideService(AgentEmit, {
-                emit: (event) => {
-                  if (event._tag === "Subagent") {
-                    return emit({ ...event, toolCallId: token })
-                  }
-                  return emit(event)
-                },
-                toolCallId: token,
-              }),
+        yield* onToolDispatch()
+        yield* append({
+          _tag: "tool/call",
+          id: token,
+          name,
+          params,
+          providerExecuted: false,
+        })
+        yield* emit({
+          _tag: "ToolCall",
+          id: token,
+          name,
+          params,
+          providerExecuted: false,
+        })
+        const baseToolCall = (input: ToolCallInput) =>
+          scheduler.scheduleEffect(
+            Effect.suspend(() =>
+              toolkit.handle(input.name, input.params).pipe(
+                Effect.provideService(AgentEmit, {
+                  emit: (event) => {
+                    if (event._tag === "Subagent") {
+                      return emit({ ...event, toolCallId: token })
+                    }
+                    return emit(event)
+                  },
+                  toolCallId: token,
+                }),
+              ),
             ),
-          ),
-        )
+          )
         const toolInput: ToolCallInput = {
           sessionId: context().sessionId.toString(),
           turn: context().turn,
@@ -300,7 +240,7 @@ const interceptToolkit = (
           name,
           params,
         }
-        const wrapped = middleware.tool(() => scheduled)(toolInput)
+        const wrapped = middleware.tool(baseToolCall)(toolInput)
         const timed = Option.isNone(policy.toolTimeout)
           ? wrapped
           : wrapped.pipe(
@@ -327,40 +267,36 @@ const interceptToolkit = (
               return { ...result, result: failure, encodedResult: failure, isFailure: true }
             })
           : timed
-        return bounded
+        return bounded.pipe(
+          Stream.tap((result) => {
+            if (result.preliminary) return Effect.void
+            return Effect.gen(function* () {
+              yield* append({
+                _tag: "tool/result",
+                id: token,
+                name,
+                isFailure: result.isFailure,
+                result: result.encodedResult,
+                providerExecuted: false,
+              })
+              yield* emit({
+                _tag: "ToolResult",
+                id: token,
+                name,
+                isFailure: result.isFailure,
+                result: result.encodedResult,
+                providerExecuted: false,
+              })
+            })
+          }),
+        )
       })) as unknown as ErasedToolkit["handle"],
-  }
-}
-
-/** Synthesizes standard end markers for any unclosed streaming text or reasoning tokens. */
-const closeOpenParts = (parts: Array<Response.StreamPart<Record<string, Tool.Any>>>): void => {
-  const openText = new Set<string>()
-  const openReasoning = new Set<string>()
-  for (const part of parts) {
-    if (part.type === "text-start") {
-      openText.add(part.id)
-    } else if (part.type === "text-end") {
-      openText.delete(part.id)
-    } else if (part.type === "reasoning-start") {
-      openReasoning.add(part.id)
-    } else if (part.type === "reasoning-end") {
-      openReasoning.delete(part.id)
-    }
-  }
-  for (const id of openText) {
-    /* SAFETY: Synthesizing standard text-end marker for unclosed streaming text ID. */
-    parts.push({ type: "text-end", id } as Response.StreamPart<Record<string, Tool.Any>>)
-  }
-  for (const id of openReasoning) {
-    /* SAFETY: Synthesizing standard reasoning-end marker for unclosed streaming reasoning ID. */
-    parts.push({ type: "reasoning-end", id } as Response.StreamPart<Record<string, Tool.Any>>)
   }
 }
 
 /**
  * Executes a run — the turn/step loop over one model, with journal spans,
- * interrupt/steer reaction, tool interception, and the single terminal Finish
- * event — behind one interface.
+ * tool interception, and the single terminal Finish event — behind one interface.
  */
 type RunStreamError<E> =
   | E
@@ -370,7 +306,7 @@ type RunStreamError<E> =
   | InvalidToolName
   | ToolConflict
   | UnsafeModelRetry
-  | Cause.TimeoutError
+  | ModelTimeout
 
 export const run = <R = never, E = never>(
   options: RunOptions<R, E>,
@@ -380,13 +316,6 @@ export const run = <R = never, E = never>(
     // Innermost journal span still open; drives cause-time closing in one place.
     let openSpan: "turn" | "step" | "none" = "none"
     const emit = (event: AgentEvent) => Queue.offer(queue, event)
-
-    const appendUserPrompt = (prompt: string) =>
-      Effect.gen(function* () {
-        yield* options.append({ _tag: "user/message", content: prompt })
-        const promptObj = Prompt.make(prompt)
-        yield* Ref.update(options.chat.history, (history) => Prompt.concat(history, promptObj))
-      })
 
     interface StepPosition {
       readonly turn: number
@@ -400,7 +329,7 @@ export const run = <R = never, E = never>(
       deps: { readonly policy: ResolvedRunPolicy; readonly scheduler: ToolScheduler },
     ): Effect.Effect<
       StepOutcome,
-      AiError.AiError | RunError | JournalAppendError | Cause.TimeoutError
+      AiError.AiError | RunError | JournalAppendError | ModelTimeout
     > => {
       const context: RunContext = {
         sessionId: options.sessionId,
@@ -415,22 +344,6 @@ export const run = <R = never, E = never>(
         yield* options.append({ _tag: "step/start", index: position.stepIndex })
         openSpan = "step"
 
-        const pendingSteer = yield* options.interrupt.pollSteer
-        if (Option.isSome(pendingSteer)) {
-          yield* options.append({ _tag: "step/end", reason: "interrupted" })
-          openSpan = "turn"
-          return {
-            _tag: "Steered" as const,
-            steerPrompt: pendingSteer.value,
-          }
-        }
-
-        if (yield* options.interrupt.isInterrupted) {
-          yield* options.append({ _tag: "step/end", reason: "interrupted" })
-          openSpan = "turn"
-          return { _tag: "Interrupted" as const }
-        }
-
         const correlator = makeToolCallCorrelator({
           sessionId: options.sessionId.toString(),
           turn: position.turn,
@@ -443,7 +356,8 @@ export const run = <R = never, E = never>(
         let planAudit:
           | {
               readonly planId: string
-              readonly fingerprint: string
+              readonly planFingerprint: string
+              readonly toolFingerprint: string
               readonly toolNames: ReadonlyArray<string>
             }
           | undefined
@@ -461,33 +375,49 @@ export const run = <R = never, E = never>(
           toolkit = finalized.toolkit
           modelPrompt = planToPrompt(plan, preStepHistory)
           const planId = `${options.agent.name}:${position.turn}:${position.step}`
+          const pFingerprint = planFingerprint({
+            instructions: plan.instructions,
+            tools: finalized.tools,
+          })
+          const tFingerprint = toolFingerprint(finalized.tools)
+          const toolNames = finalized.tools.map((tool) => tool.name)
           planAudit = {
             planId,
-            toolNames: finalized.tools.map((tool) => tool.name),
-            fingerprint: requestFingerprint({
-              planId,
-              prompt: modelPrompt,
-              toolNames: finalized.tools.map((tool) => tool.name),
-            }),
+            planFingerprint: pFingerprint,
+            toolFingerprint: tFingerprint,
+            toolNames,
           }
         }
         const collectedParts: Array<Response.StreamPart<Record<string, Tool.Any>>> = []
-        const attemptStateRef = yield* Ref.make({ active: false, outputObserved: false })
-        type ModelOutcome =
-          | ControlSignal
-          | {
-              readonly _tag: "Done"
-              readonly parts: ReadonlyArray<Response.StreamPart<Record<string, Tool.Any>>>
-            }
+        const attemptStateRef = yield* Ref.make({
+          active: false,
+          outputObserved: false,
+          toolDispatchStarted: false,
+        })
         const interceptedToolkit = asClosedToolkit(
-          interceptToolkit(toolkit, middleware, () => context, emit, scheduler, correlator, policy),
+          interceptToolkit(
+            toolkit,
+            middleware,
+            () => context,
+            emit,
+            scheduler,
+            correlator,
+            policy,
+            options.append,
+            () => Ref.update(attemptStateRef, (state) => ({ ...state, toolDispatchStarted: true })),
+          ),
         )
         const logicalRequest: LogicalModelRequest | undefined =
           options.agent === undefined
             ? undefined
             : {
                 planId: planAudit!.planId,
-                fingerprint: planAudit!.fingerprint,
+                fingerprint: requestFingerprint({
+                  planId: planAudit!.planId,
+                  planFingerprint: planAudit!.planFingerprint,
+                  prompt: modelPrompt ?? preStepHistory,
+                  toolNames: planAudit!.toolNames,
+                }),
                 prompt: modelPrompt ?? preStepHistory,
                 /* SAFETY: the registry validated these definitions before
                  * the single Effect AI toolkit erasure boundary. */
@@ -499,13 +429,13 @@ export const run = <R = never, E = never>(
           input: ModelCallInput,
         ): Stream.Stream<
           Response.StreamPart<Record<string, Tool.Any>>,
-          AiError.AiError | RunError | UnsafeModelRetry,
+          AiError.AiError | RunError | JournalAppendError | UnsafeModelRetry,
           never
         > =>
           Stream.unwrap(
             Effect.gen(function* () {
               const canStart = yield* Ref.modify(attemptStateRef, (state) => {
-                if (state.active || state.outputObserved) {
+                if (state.active || state.outputObserved || state.toolDispatchStarted) {
                   return [false, state]
                 }
                 return [true, { ...state, active: true }]
@@ -520,7 +450,7 @@ export const run = <R = never, E = never>(
                   }),
                 ) as Stream.Stream<
                   Response.StreamPart<Record<string, Tool.Any>>,
-                  AiError.AiError | RunError | UnsafeModelRetry,
+                  AiError.AiError | RunError | JournalAppendError | UnsafeModelRetry,
                   never
                 >
               }
@@ -528,7 +458,12 @@ export const run = <R = never, E = never>(
               const interceptedModel = interceptModel(
                 input.model ?? options.model,
                 options.append,
-                planAudit === undefined ? undefined : { ...planAudit, attempt: input.attempt },
+                planAudit === undefined
+                  ? undefined
+                  : {
+                      ...planAudit,
+                      attempt: input.attempt,
+                    },
                 true,
               )
               const modelStream =
@@ -559,26 +494,62 @@ export const run = <R = never, E = never>(
                     }))
                     collectedParts.push(part)
 
-                    const eventOpt = toEvent(
-                      part,
-                      (name, _params, id, providerExecuted) =>
-                        correlator.observeProviderCall({
-                          id,
-                          name,
-                          providerExecuted,
-                          isKnownTool: toolkit.tools[name] !== undefined,
-                        }),
-                      correlator.tokenForProviderId,
-                    )
-                    if (Option.isSome(eventOpt)) {
-                      yield* emit(eventOpt.value)
+                    if (part.type === "tool-call" && part.providerExecuted) {
+                      const localIdOpt = correlator.observeProviderCall({
+                        id: part.id,
+                        name: part.name,
+                        providerExecuted: true,
+                        isKnownTool: toolkit.tools[part.name] !== undefined,
+                      })
+                      const localId = Option.isSome(localIdOpt) ? localIdOpt.value : part.id
+                      yield* options.append({
+                        _tag: "tool/call",
+                        id: localId,
+                        name: part.name,
+                        params: part.params as ToolCallParameters,
+                        providerExecuted: true,
+                      })
+                      yield* emit({
+                        _tag: "ToolCall",
+                        id: localId,
+                        name: part.name,
+                        params: part.params,
+                        providerExecuted: true,
+                      })
+                    } else if (
+                      part.type === "tool-result" &&
+                      part.providerExecuted &&
+                      !part.preliminary
+                    ) {
+                      const localIdOpt = correlator.tokenForProviderId(part.id)
+                      const localId = Option.isSome(localIdOpt) ? localIdOpt.value : part.id
+                      yield* options.append({
+                        _tag: "tool/result",
+                        id: localId,
+                        name: part.name,
+                        isFailure: part.isFailure,
+                        result: part.encodedResult,
+                        providerExecuted: true,
+                      })
+                      yield* emit({
+                        _tag: "ToolResult",
+                        id: localId,
+                        name: part.name,
+                        isFailure: part.isFailure,
+                        result: part.encodedResult,
+                        providerExecuted: true,
+                      })
+                    } else if (part.type === "text-delta") {
+                      yield* emit({ _tag: "TextDelta", delta: part.delta })
+                    } else if (part.type === "reasoning-delta") {
+                      yield* emit({ _tag: "ReasoningDelta", delta: part.delta })
                     }
                   }),
                 ),
               )
               const guarded: Stream.Stream<
                 Response.StreamPart<Record<string, Tool.Any>>,
-                AiError.AiError | RunError,
+                AiError.AiError | RunError | JournalAppendError,
                 never
               > = options.agent === undefined
                 ? observed.pipe(
@@ -607,48 +578,37 @@ export const run = <R = never, E = never>(
           Stream.runCollect,
           Effect.map((parts) => [...parts]),
         )
-        const timedModel = Option.isNone(policy.modelTimeout)
+        const modelTimeoutOpt = policy.modelTimeout
+        const timedModel = Option.isNone(modelTimeoutOpt)
           ? collectModel
-          : collectModel.pipe(Effect.timeout(policy.modelTimeout.value))
-        const outcome = yield* Effect.raceFirst(
-          timedModel.pipe(Effect.map((parts) => ({ _tag: "Done" as const, parts }))),
-          options.interrupt.awaitSignal,
-        ) as Effect.Effect<ModelOutcome, RunStreamError<E>, R>
-
-        if (outcome._tag === "Interrupted") {
-          yield* options.append({ _tag: "step/end", reason: "interrupted" })
-          openSpan = "turn"
-          return { _tag: "Interrupted" as const }
-        }
-
-        if (outcome._tag === "Steered") {
-          closeOpenParts(collectedParts)
-          yield* Ref.set(
-            options.chat.history,
-            Prompt.concat(preStepHistory, Prompt.fromResponseParts(collectedParts)),
-          )
-          yield* appendStepEvents(options.append, collectedParts)
-          yield* options.append({ _tag: "step/end", reason: "interrupted" })
-          openSpan = "turn"
-          return {
-            _tag: "Steered" as const,
-            steerPrompt: outcome.steerPrompt,
-          }
-        }
+          : collectModel.pipe(
+              Effect.timeout(modelTimeoutOpt.value),
+              Effect.catchTag("TimeoutError", () =>
+                Effect.fail(
+                  new ModelTimeout({
+                    sessionId: options.sessionId,
+                    turn: position.turn,
+                    step: position.step,
+                    durationMillis: Duration.toMillis(modelTimeoutOpt.value),
+                  }),
+                ),
+              ),
+            )
+        const outcomeParts = yield* timedModel
 
         if (options.agent !== undefined) {
           // Direct LanguageModel calls do not own Chat history. The logical
           // response becomes the immutable input for the next request.
           yield* Ref.set(
             options.chat.history,
-            Prompt.concat(preStepHistory, Prompt.fromResponseParts(outcome.parts)),
+            Prompt.concat(preStepHistory, Prompt.fromResponseParts(outcomeParts)),
           )
         }
-        yield* appendStepEvents(options.append, outcome.parts)
+        yield* appendStepEvents(options.append, outcomeParts)
         yield* options.append({ _tag: "step/end", reason: "completed" })
         openSpan = "turn"
 
-        const toolCalls = outcome.parts.filter((part) => part.type === "tool-call")
+        const toolCalls = outcomeParts.filter((part) => part.type === "tool-call")
         if (toolCalls.length > 0) {
           return { _tag: "ToolCalls" as const, toolCallCount: toolCalls.length }
         }
@@ -656,7 +616,7 @@ export const run = <R = never, E = never>(
         return { _tag: "Stop" as const }
       }) as Effect.Effect<
         StepOutcome,
-        AiError.AiError | RunError | JournalAppendError | Cause.TimeoutError,
+        AiError.AiError | RunError | JournalAppendError | ModelTimeout,
         never
       >
     }
@@ -668,76 +628,57 @@ export const run = <R = never, E = never>(
       let totalSteps = 0
       let stepIndex = 0
 
+      const executeTurn = (currentTurn: number) =>
+        Effect.gen(function* () {
+          let step = 0
+          yield* options.append({ _tag: "turn/start" })
+          openSpan = "turn"
+
+          while (true) {
+            step += 1
+            stepIndex += 1
+            const outcome = yield* middleware.step(() =>
+              executeStep({ turn: currentTurn, step, stepIndex }, { policy, scheduler }),
+            )({ sessionId: options.sessionId.toString(), turn: currentTurn, step, stepIndex })
+
+            totalSteps += 1
+            const reachedLimit =
+              totalSteps >= policy.maxTotalSteps || step >= policy.maxStepsPerTurn
+            if (reachedLimit && outcome._tag === "ToolCalls") {
+              yield* options.append({ _tag: "turn/end", reason: "stopped" })
+              openSpan = "none"
+              return { _tag: "Stopped" as const, stepCount: step }
+            }
+            if (outcome._tag === "Stop" || reachedLimit) {
+              break
+            }
+          }
+
+          yield* options.append({ _tag: "turn/end", reason: "completed" })
+          openSpan = "none"
+          return { _tag: "Completed" as const, stepCount: step }
+        })
+
       while (turn < policy.maxTurns) {
         turn += 1
-        let step = 0
-        yield* options.append({ _tag: "turn/start" })
-        openSpan = "turn"
-
-        let turnEnded = false
-
-        while (true) {
-          step += 1
-          stepIndex += 1
-          const outcome = yield* middleware.step(() =>
-            executeStep({ turn, step, stepIndex }, { policy, scheduler }),
-          )({ sessionId: options.sessionId.toString(), turn, step, stepIndex })
-          if (outcome._tag === "Interrupted") {
-            yield* options.append({ _tag: "turn/end", reason: "interrupted" })
-            openSpan = "none"
-            yield* emit({ _tag: "Finish", reason: "interrupted" })
-            return
-          }
-          if (outcome._tag === "Steered") {
-            yield* options.append({ _tag: "turn/end", reason: "interrupted" })
-            openSpan = "none"
-            yield* appendUserPrompt(outcome.steerPrompt)
-            turnEnded = true
-            break
-          }
-
-          totalSteps += 1
-          const reachedLimit = totalSteps >= policy.maxTotalSteps || step >= policy.maxStepsPerTurn
-          if (reachedLimit && outcome._tag === "ToolCalls") {
-            yield* options.append({ _tag: "turn/end", reason: "stopped" })
-            openSpan = "none"
-            yield* emit({ _tag: "Finish", reason: "stopped" })
-            return
-          }
-          if (outcome._tag === "Stop" || reachedLimit) break
+        const currentTurn = turn
+        const turnInput: TurnRunInput = {
+          sessionId: options.sessionId.toString(),
+          turn: currentTurn,
+          step: 0,
+          stepCount: 0,
         }
 
-        if (turnEnded) {
-          continue
-        }
+        const turnOutcome = yield* middleware.turn((_input) => executeTurn(currentTurn))(turnInput)
 
-        const context = { sessionId: options.sessionId, turn, step }
-        const turnStopping = middleware.turn(() =>
-          Effect.succeed({ _tag: "Continue" as const, continuation: undefined }),
-        )({ sessionId: context.sessionId.toString(), turn, step, stepCount: step })
-        const turnContinuation = yield* Effect.raceFirst(
-          turnStopping,
-          options.interrupt.awaitSignal,
-        )
-
-        if (turnContinuation._tag === "Interrupted") {
-          yield* options.append({ _tag: "turn/end", reason: "interrupted" })
-          openSpan = "none"
-          yield* emit({ _tag: "Finish", reason: "interrupted" })
+        if (turnOutcome._tag === "Stopped") {
+          yield* emit({ _tag: "Finish", reason: "stopped" })
           return
         }
-
-        if (turnContinuation._tag === "Steered") {
-          yield* options.append({ _tag: "turn/end", reason: "interrupted" })
-          openSpan = "none"
-          yield* appendUserPrompt(turnContinuation.steerPrompt)
-          continue
+        if (turnOutcome._tag === "Completed") {
+          yield* emit({ _tag: "Finish", reason: "completed" })
+          return
         }
-
-        yield* options.append({ _tag: "turn/end", reason: "completed" })
-        openSpan = "none"
-        yield* emit({ _tag: "Finish", reason: "completed" })
-        return
       }
       yield* emit({ _tag: "Finish", reason: "stopped" })
     })
