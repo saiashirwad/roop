@@ -12,25 +12,23 @@ export interface RunErrorContext {
   readonly sessionId?: string
 }
 
-export const runError = (cause: unknown, context: RunErrorContext = {}): RunError => {
+/**
+ * Wrap a failure at an explicit interpreter boundary.
+ *
+ * The operation is supplied by the caller. This function deliberately does
+ * not inspect `_tag`: extension errors are not a closed catalogue and string
+ * matching misclassifies them.
+ */
+export const runError = (
+  cause: unknown,
+  context: RunErrorContext = {},
+  operation: RunError["operation"] = "interpreter",
+): RunError => {
   const original = Cause.isCause(cause)
     ? (() => {
         const found = Cause.findError(cause)
         return Result.isSuccess(found) ? found.success : cause
       })()
     : cause
-  const tagged =
-    typeof original === "object" && original !== null && "_tag" in original ? original : undefined
-  const tag = tagged === undefined ? "" : String(tagged._tag)
-  const operation =
-    tag.includes("Session") || tag.includes("Journal")
-      ? "journal"
-      : tag.includes("Tool")
-        ? "tool"
-        : tag.includes("Model") || tag.includes("Ai")
-          ? "model"
-          : tag.includes("Scheduler")
-            ? "scheduler"
-            : "interpreter"
   return new RunError({ operation, originalCause: original, context })
 }
