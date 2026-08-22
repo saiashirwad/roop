@@ -5,7 +5,7 @@ import { Chat, LanguageModel, Prompt, type AiError } from "effect/unstable/ai"
 
 import type { AgentDefinition } from "./Agent.ts"
 import type { AgentEvent, SessionEvent } from "./AgentEvents.ts"
-import { makeRunId, makeSessionId, type RunId, type SessionId } from "./DomainIds.ts"
+import { RunId, SessionId } from "./DomainIds.ts"
 import {
   FinalizationError,
   type ModelTimeout,
@@ -314,9 +314,9 @@ const runtimeRun = <R, E, RM = never, EM = never>(
       const installedMiddleware = yield* Effect.serviceOption(MiddlewareService).pipe(
         Effect.map(Option.getOrElse(() => emptyMiddleware)),
       )
-      const sessionId = makeSessionId(request.sessionId)
+      const sessionId = SessionId.make(request.sessionId)
       const session = yield* journal.load(sessionId)
-      const runId = makeRunId(request.runId ?? `${sessionId}:${session.revision}`)
+      const runId = RunId.make(request.runId ?? `${sessionId}:${session.revision}`)
       const bridge: JournalBridge = {
         sessionId,
         runId,

@@ -1,6 +1,6 @@
 import { Effect, Layer, Ref } from "effect"
 
-import { makeSessionId, type SessionId } from "./DomainIds.ts"
+import { SessionId } from "./DomainIds.ts"
 import type { JournalEvent as JournalEventValue } from "./Event.ts"
 import {
   Journal,
@@ -22,7 +22,7 @@ export const JournalMemory = Layer.effect(
       const map = yield* Ref.get(sessions)
       const found = map.get(id)
       const snapshot: JournalSnapshot = found ?? {
-        sessionId: makeSessionId(id),
+        sessionId: SessionId.make(id),
         revision: 0,
         events: [],
       }
@@ -34,7 +34,7 @@ export const JournalMemory = Layer.effect(
       expectedRevision: Revision,
       events: readonly [JournalEventValue, ...JournalEventValue[]],
     ) {
-      const sid = makeSessionId(sessionId)
+      const sid = SessionId.make(sessionId)
       if (events.length === 0) return yield* new JournalEmptyAppend({ sessionId: sid })
       // Validate every event before changing the map. This keeps a batch atomic.
       yield* Effect.forEach(events, (event) => validateJournalEvent(sid, event), {

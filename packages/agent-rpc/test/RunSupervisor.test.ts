@@ -41,6 +41,7 @@ it.effect("reports a deterministic not-found error for inactive runs", () =>
     const error = Option.getOrThrow(Exit.findErrorOption(exit))
     assert.strictEqual(error._tag, "RunNotFound")
     assert.strictEqual(error.sessionId, "missing")
+    assert.strictEqual(error.message, "Active run for session 'missing' was not found")
     assert.ok(Schema.is(RunNotFound)(error))
   }).pipe(Effect.scoped, Effect.provide(layer)),
 )
@@ -58,6 +59,7 @@ it.effect("rejects a second owner stream with SessionBusy", () =>
     assert.ok(Exit.isFailure(second))
     const error = Option.getOrThrow(Exit.findErrorOption(second))
     assert.strictEqual(error._tag, "SessionBusy")
+    assert.strictEqual(error.message, "Session 'busy' is busy")
     yield* Fiber.interrupt(owner)
   }).pipe(Effect.scoped, Effect.provide(holdingLayer)),
 )
@@ -69,5 +71,6 @@ it.effect("rejects a subscription when no run is active", () =>
     assert.ok(Exit.isFailure(exit))
     const error = Option.getOrThrow(Exit.findErrorOption(exit))
     assert.strictEqual(error._tag, "RunNotFound")
+    assert.strictEqual(error.message, "Active run for session 'missing' was not found")
   }).pipe(Effect.scoped, Effect.provide(layer)),
 )

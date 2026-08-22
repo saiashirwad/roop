@@ -82,7 +82,7 @@ export interface JournalService {
 
 export class Journal extends Context.Service<Journal, JournalService>()("roop/Journal") {}
 
-/** Validate an event at a dynamic boundary, including the version pin. */
+/** Validate an event at a dynamic boundary using Effect Schema. */
 export const validateJournalEvent = Effect.fn("Journal.validateJournalEvent")(function* (
   sessionId: SessionId | string,
   event: JournalEventValue,
@@ -91,12 +91,14 @@ export const validateJournalEvent = Effect.fn("Journal.validateJournalEvent")(fu
   if (event.version > 1) {
     return yield* new JournalFutureVersion({ sessionId: sid, version: event.version })
   }
-  if (!Schema.is(JournalEvent)(event)) {
-    return yield* new JournalError({
-      operation: "decode",
-      sessionId: sid,
-      detail: "event does not match the supported JournalEvent schema",
-    })
-  }
-  return event
+  return yield* Schema.decodeEffect(JournalEvent)(event).pipe(
+    Effect.mapError(
+      (parseError) =>
+        new JournalError({
+          operation: "decode",
+          sessionId: sid,
+          detail: parseError.message,
+        }),
+    ),
+  )
 })

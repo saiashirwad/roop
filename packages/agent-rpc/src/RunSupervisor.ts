@@ -39,12 +39,20 @@ type ToolConflict = ToolRegistry.ToolConflict
 /** A deterministic admission error for one active session. */
 export class SessionBusy extends Schema.TaggedErrorClass<SessionBusy>()("SessionBusy", {
   sessionId: Schema.String,
-}) {}
+}) {
+  override get message(): string {
+    return `Session '${this.sessionId}' is busy`
+  }
+}
 
 /** A deterministic error for a missing active run. */
 export class RunNotFound extends Schema.TaggedErrorClass<RunNotFound>()("RunNotFound", {
   sessionId: Schema.String,
-}) {}
+}) {
+  override get message(): string {
+    return `Active run for session '${this.sessionId}' was not found`
+  }
+}
 
 export type RunSupervisorError =
   | SessionBusy

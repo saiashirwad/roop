@@ -2,7 +2,14 @@ import { assert, it } from "@effect/vitest"
 import { Effect, Exit, Option, Schema } from "effect"
 
 import { EVENT_VERSION, type JournalEvent } from "../src/Event.ts"
-import { Journal, JournalEmptyAppend, JournalRevisionConflict } from "../src/Journal.ts"
+import {
+  Journal,
+  JournalEmptyAppend,
+  JournalError,
+  JournalFutureVersion,
+  JournalRevisionConflict,
+  validateJournalEvent,
+} from "../src/Journal.ts"
 import { JournalMemory } from "../src/JournalMemory.ts"
 
 const user = (content: string): JournalEvent => ({
@@ -62,6 +69,34 @@ it.layer(JournalMemory)("JournalMemory", (it) => {
       const snapshot = yield* journal.load("concurrent")
       assert.strictEqual(snapshot.revision, 1)
       assert.strictEqual(snapshot.events.length, 1)
+    }),
+  )
+
+  it.effect("validateJournalEvent validates event versions and structures", () =>
+    Effect.gen(function* () {
+      const valid = yield* validateJournalEvent("session", user("hello"))
+      assert.strictEqual(valid._tag, "user/message")
+      if (valid._tag === "user/message") {
+        assert.strictEqual(valid.content, "hello")
+      }
+
+      // SAFETY: Tests the future version rejection branch.
+      const futureExit = yield* Effect.exit(
+        validateJournalEvent("session", {
+          _tag: "user/message",
+          version: 2,
+          content: "future",
+        } as never),
+      )
+      assert.ok(Exit.isFailure(futureExit))
+      assert.ok(Schema.is(JournalFutureVersion)(Option.getOrThrow(Exit.findErrorOption(futureExit))))
+
+      // SAFETY: Tests unknown event structure rejection branch.
+      const invalidExit = yield* Effect.exit(
+        validateJournalEvent("session", { _tag: "unknown", version: 1 } as never),
+      )
+      assert.ok(Exit.isFailure(invalidExit))
+      assert.ok(Schema.is(JournalError)(Option.getOrThrow(Exit.findErrorOption(invalidExit))))
     }),
   )
 })
