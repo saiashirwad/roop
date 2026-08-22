@@ -1,10 +1,13 @@
 # roop
 
-An Effect-native coding agent runtime.
+An Effect-native framework for durable AI agents: an Effect-idiomatic take on the agent-harness
+layer. Compose an agent from models, tools, hooks, and subagents; every session is a durable,
+resumable, forkable event journal; the kernel runs anywhere Effect runs (Node, Cloudflare Workers,
+browsers).
 
 The core agent loop (`@roop/agent`) is portable and depends only on `effect` and
-`effect/unstable/ai`. Capabilities like execution environments, model providers, session
-persistence, and client interfaces are provided as Effect layers.
+`effect/unstable/ai`. Models, tools, and persistence are Effect layers — bring your own, or use the
+in-box ones.
 
 ## Quick Start
 
@@ -24,97 +27,77 @@ corepack enable
 pnpm install
 ```
 
-### Running the Harness
-
-```bash
-export DEEPSEEK_API_KEY="your-key"
-
-# Start the RPC server (defaults to http://localhost:8787)
-pnpm --filter @roop/coding-harness serve
-```
-
-In another terminal, connect with the TUI or web client:
-
-```bash
-# Terminal client
-pnpm --filter @roop/coding-tui start
-
-# Web client
-pnpm --filter @roop/coding-web dev
-```
-
 ## Architecture
 
-The system decouples the agent loop from execution environments and I/O:
+The kernel decouples the agent loop from models, storage, and I/O:
 
 ```mermaid
 flowchart LR
-    Client["Clients\n(TUI / Web / Headless)"] -->|Effect RPC| Agent["@roop/agent"]
-    Agent --> Models["Models\n(DeepSeek / Claude / Codex)"]
-    Agent --> Plugins["Plugins & Tools"]
+    Client["Any client\n(RPC / library)"] -->|Effect RPC or direct| Agent["@roop/agent"]
+    Agent --> Models["Models\n(any effect/unstable/ai LanguageModel)"]
+    Agent --> Tools["Toolkit\n(plugins + hooks)"]
     Agent --> Store["SessionJournal\n(fs / memory)"]
-    Plugins --> World["ExecutionWorld\n(local / worktree / memory)"]
 ```
 
 Capabilities follow a three-role service pattern:
 
-1. **Definition**: Service tag (`ExecutionWorld`, `SessionJournal`).
-2. **Consumer**: Tools and plugins declare requirements in their environment.
-3. **Provider**: Application layers provide the implementation (e.g. local directory vs. ephemeral
-   Git worktree vs. in-memory virtual filesystem).
+1. **Definition**: Service tag (`SessionJournal`, `ModelCatalog`).
+2. **Consumer**: Tools and handlers declare requirements in their environment.
+3. **Provider**: Application layers provide the implementation (durable fs journal vs. in-memory,
+   scripted test model vs. live provider).
 
-### Example: Composing an Agent
+### Composing an Agent
+
+A complete agent is one composition. This is the same shape proven inside Cloudflare Workers by
+`packages/agent/test-workerd/`:
 
 ```ts
-import {
-  NodeChildProcessSpawner,
-  NodeCrypto,
-  NodeFileSystem,
-  NodePath,
-} from "@effect/platform-node"
-import { AgentPlugins } from "@roop/agent/Plugin.ts"
-import { SessionJournalFs } from "@roop/agent/SessionJournal.ts"
-import { subagent } from "@roop/agent/Subagent.ts"
-import { CodingTools } from "@roop/coding-tools/CodingTools.ts"
-import { ExecutionWorld } from "@roop/coding-tools/ExecutionWorld.ts"
-import { Claude, Todos } from "@roop/plugins"
-import { Layer } from "effect"
+import { Agent, AgentLiveToolkit } from "@roop/agent/Agent.ts"
+import { cryptoWeb } from "@roop/agent/cryptoWeb.ts"
+import { SessionJournalMemory } from "@roop/agent/SessionJournal.ts"
+import { Effect, Layer, Schema } from "effect"
+import { Tool, Toolkit } from "effect/unstable/ai"
 
-const coding = CodingTools()
-const claude = Claude()
+const Ping = Tool.make("ping", {
+  description: "reply with ok",
+  parameters: Schema.Struct({}),
+  success: Schema.Struct({ ok: Schema.Boolean }),
+})
 
-export const agentLayer = AgentPlugins([
-  coding,
-  Todos(),
-  claude,
-  subagent({
-    name: "delegate",
-    description: "Delegate an isolated task to a subagent.",
-    plugins: [coding, claude],
-    layer: ExecutionWorld.worktreeFromParent(),
-    policy: { maxTotalSteps: 25 },
-  }),
-]).pipe(
-  Layer.provide(SessionJournalFs(".roop/sessions")),
-  Layer.provide(ExecutionWorld.local(process.cwd())),
-  Layer.provide(NodeChildProcessSpawner.layer),
-  Layer.provide(NodeCrypto.layer),
-  Layer.provide(NodeFileSystem.layer),
-  Layer.provide(NodePath.layer),
+const PingToolkit = Toolkit.make(Ping)
+
+export const agentLayer = AgentLiveToolkit(PingToolkit, {
+  systemPrompt: "You ping things.",
+  models: [
+    {
+      id: "my-model",
+      provider: "any",
+      layer: myLanguageModelLayer, // any LanguageModel layer, e.g. @effect/ai-openai
+    },
+  ],
+}).pipe(
+  Layer.provide(SessionJournalMemory),
+  Layer.provide(cryptoWeb),
+  Layer.provide(
+    PingToolkit.toLayer({
+      ping: () => Effect.succeed({ ok: true }),
+    }),
+  ),
 )
+
+// Usage: yield* Agent.prompt({ prompt: "ping it", sessionId: "s1" })
 ```
+
+Swap `SessionJournalMemory` for `SessionJournalFs(".roop/sessions")` for durable journals that
+resume after restarts. Compose `Plugin`s for richer toolkits, `AgentHooks` for lifecycle
+interception, and `subagent()` for delegation — see `packages/agent/test/` for worked examples.
 
 ## Packages
 
-| Package                                             | Description                                                                     |
-| --------------------------------------------------- | ------------------------------------------------------------------------------- |
-| [`@roop/agent`](./packages/agent)                   | Portable agent loop, sessions, hooks, and subagent orchestration                |
-| [`@roop/agent-rpc`](./packages/agent-rpc)           | RPC schema and HTTP/NDJSON transport                                            |
-| [`@roop/coding-tools`](./packages/coding-tools)     | Workspace-scoped filesystem and shell tools                                     |
-| [`@roop/coding-harness`](./packages/coding-harness) | Example agent composition and RPC server                                        |
-| [`@roop/coding-tui`](./packages/coding-tui)         | Terminal client built with `pi-tui`                                             |
-| [`@roop/coding-web`](./packages/coding-web)         | Web client (React, Vite)                                                        |
-| [`@roop/plugins`](./packages/plugins)               | Model adapters (OpenAI, Claude, Codex) and utilities (skills, todos, web fetch) |
+| Package                                   | Description                                                      |
+| ----------------------------------------- | ---------------------------------------------------------------- |
+| [`@roop/agent`](./packages/agent)         | Portable agent loop, sessions, hooks, and subagent orchestration |
+| [`@roop/agent-rpc`](./packages/agent-rpc) | RPC schema and HTTP/NDJSON transport for any composed agent      |
 
 ## Development
 

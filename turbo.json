@@ -5,8 +5,7 @@
       "dependsOn": ["^typecheck"]
     },
     "test": {
-      "dependsOn": ["^typecheck"],
-      "env": ["DEEPSEEK_API_KEY", "CLAUDE_SMOKE", "CODEX_SMOKE"]
+      "dependsOn": ["^typecheck"]
     }
   }
 }
