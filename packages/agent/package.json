@@ -16,7 +16,8 @@
     }
   },
   "scripts": {
-    "build": "node -e 'require(\"node:fs\").rmSync(\"dist\", { recursive: true, force: true })' && tsc -p tsconfig.build.json",
+    "clean": "node -e 'require(\"node:fs\").rmSync(\"dist\", { recursive: true, force: true })'",
+    "build": "tsc -p tsconfig.build.json",
     "typecheck": "pnpm build && tsc --noEmit -p tsconfig.json",
     "test": "pnpm build && vitest run && vitest run --config vitest.workerd.config.ts"
   },
