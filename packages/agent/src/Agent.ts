@@ -4,6 +4,8 @@ import type * as Tool from "effect/unstable/ai/Tool"
 
 import { AgentBus, AgentBusMemory, sessionEventsToAgentEvents } from "./AgentBus.ts"
 import { AgentConfig, layer as agentConfigLayer } from "./AgentConfig.ts"
+import type { AgentContext } from "./AgentContext.ts"
+import { AgentPlan, type AgentPlan as AgentPlanValue } from "./AgentPlan.ts"
 import type { AgentEvent, SessionEvent } from "./AgentEvents.ts"
 import { AgentHooks } from "./AgentHooks.ts"
 import { AgentTools, eraseToolkit } from "./AgentTools.ts"
@@ -29,6 +31,31 @@ import {
   type SessionMeta,
 } from "./SessionJournal.ts"
 import type { Skill } from "./Skills.ts"
+import type { Module } from "./Module.ts"
+
+/** An explicit agent value. The runtime will render this value at a boundary. */
+export interface AgentDefinition<out R = never, out E = never> {
+  readonly name: string
+  readonly render: (context: AgentContext) => Effect.Effect<AgentPlanValue<R, E>, E, R>
+}
+
+export type AgentSource<R, E> =
+  | Module<R, E>
+  | ((context: AgentContext) => Effect.Effect<AgentPlanValue<R, E>, E, R>)
+
+const makeAgent = <R, E>(
+  name: string,
+  source: AgentSource<R, E>,
+): AgentDefinition<R, E> => ({
+  name,
+  render:
+    typeof source === "function"
+      ? source
+      : (context) =>
+          source.build(context).pipe(
+            Effect.map(({ instructions, tools }) => AgentPlan.make<R, E>({ instructions, tools })),
+          ),
+})
 
 export { RunNotFound, SessionBusy } from "./RunRegistry.ts"
 
@@ -78,7 +105,9 @@ export class Agent extends Context.Service<
       SessionNotFound | SessionFormatError | SessionAlreadyExists | SessionIoError
     >
   }
->()("roop/Agent") {}
+>()("roop/Agent") {
+  static readonly make = makeAgent
+}
 
 export const AgentLive: Layer.Layer<
   Agent,
