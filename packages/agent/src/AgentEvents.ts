@@ -1,6 +1,16 @@
 import { Context, Schema, type Effect } from "effect"
 import { Prompt } from "effect/unstable/ai"
 
+// U4 event contracts live in Event.ts. These re-exports keep the old event
+// module usable while the runtime migration removes SessionEvent callbacks.
+export {
+  EVENT_VERSION,
+  JournalEvent,
+  LiveEvent,
+  type JournalEvent as JournalEventValue,
+  type LiveEvent as LiveEventValue,
+} from "./Event.ts"
+
 const TextDelta = Schema.TaggedStruct("TextDelta", { delta: Schema.String })
 const ReasoningDelta = Schema.TaggedStruct("ReasoningDelta", { delta: Schema.String })
 const ToolCall = Schema.TaggedStruct("ToolCall", {

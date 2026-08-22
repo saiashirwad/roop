@@ -13,6 +13,13 @@ import {
   Semaphore,
 } from "effect"
 import type { Prompt } from "effect/unstable/ai"
+/**
+ * @deprecated Internal compatibility facade for the pre-U4 session API.
+ * New kernel code must use Journal and JournalMemory. Filesystem storage,
+ * listing, forking, and title projection are not part of the Journal contract.
+ * The experimental release does not migrate or load old filesystem sessions;
+ * commit 83e4cc7 is the recovery/export reference.
+ */
 
 import {
   deriveMessages,

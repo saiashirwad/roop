@@ -18,6 +18,7 @@ import type { StepRejected, AgentHooksInterface, RunContext } from "../AgentHook
 import { toPrompt as planToPrompt } from "../AgentPlan.ts"
 import type { ErasedToolkit } from "../AgentTools.ts"
 import type { SessionId } from "../DomainIds.ts"
+import type { JournalAppendError } from "../Journal.ts"
 import { runError, type RunError } from "../RunError.ts"
 import { resolveRunPolicy, type ResolvedRunPolicy, type RunPolicy } from "../RunPolicy.ts"
 import type { ControlSignal, InterruptSignal } from "../RunSignal.ts"
@@ -42,7 +43,7 @@ export interface RunOptions<R = never, E = never> {
   readonly toolkit: Effect.Effect<ErasedToolkit>
   readonly policy?: RunPolicy | undefined
   readonly interrupt: InterruptSignal
-  readonly append: (event: SessionEvent) => Effect.Effect<void, RunError>
+  readonly append: (event: SessionEvent) => Effect.Effect<void, RunError | JournalAppendError>
   readonly hooks: AgentHooksInterface
   /** Explicit agent used by the staged logical-plan interpreter path. */
   readonly agent?: AgentDefinition<R, E> | undefined
@@ -126,9 +127,9 @@ const toEvent = (
 
 /** Journal the exact assistant/tool messages produced by this model response. */
 const appendStepEvents = (
-  append: (event: SessionEvent) => Effect.Effect<void, RunError>,
+  append: (event: SessionEvent) => Effect.Effect<void, RunError | JournalAppendError>,
   outcome: ReadonlyArray<Response.StreamPart<Record<string, Tool.Any>>>,
-): Effect.Effect<void, RunError> => {
+): Effect.Effect<void, RunError | JournalAppendError> => {
   const content = Prompt.fromResponseParts(outcome).content
   const providerExecutedByResultId = new Map(
     outcome.flatMap((part) =>
@@ -182,11 +183,12 @@ const interceptModel = (
   model: LanguageModel.Service,
   hooks: AgentHooksInterface,
   context: () => RunContext,
-  append: (event: SessionEvent) => Effect.Effect<void, RunError>,
+  append: (event: SessionEvent) => Effect.Effect<void, RunError | JournalAppendError>,
   audit?: {
     readonly planId: string
     readonly fingerprint: string
     readonly toolNames: ReadonlyArray<string>
+    readonly attempt?: number | undefined
   },
   recordAudit = true,
 ): LanguageModel.Service => {
@@ -212,6 +214,7 @@ const interceptModel = (
                         planId: audit.planId,
                         fingerprint: audit.fingerprint,
                         toolNames: audit.toolNames,
+                        ...(audit.attempt === undefined ? undefined : { attempt: audit.attempt }),
                       },
               }),
             )
@@ -364,7 +367,13 @@ const closeOpenParts = (parts: Array<Response.StreamPart<Record<string, Tool.Any
  * interrupt/steer reaction, tool interception, and the single terminal Finish
  * event — behind one interface.
  */
-type RunStreamError<E> = E | AiError.AiError | RunError | InvalidToolName | ToolConflict
+type RunStreamError<E> =
+  | E
+  | AiError.AiError
+  | RunError
+  | JournalAppendError
+  | InvalidToolName
+  | ToolConflict
 
 export const run = <R = never, E = never>(
   options: RunOptions<R, E>,
@@ -391,7 +400,10 @@ export const run = <R = never, E = never>(
     const executeStep = (
       position: StepPosition,
       deps: { readonly policy: ResolvedRunPolicy; readonly scheduler: ToolScheduler },
-    ): Effect.Effect<StepOutcome, AiError.AiError | StepRejected | RunError> => {
+    ): Effect.Effect<
+      StepOutcome,
+      AiError.AiError | StepRejected | RunError | JournalAppendError
+    > => {
       const context: RunContext = {
         sessionId: options.sessionId,
         turn: position.turn,
@@ -527,8 +539,8 @@ export const run = <R = never, E = never>(
             options.hooks,
             () => context,
             options.append,
-            planAudit,
-            recordAudit,
+            planAudit === undefined ? undefined : { ...planAudit, attempt },
+            options.agent !== undefined ? true : recordAudit,
           )
           const modelStream =
             options.agent === undefined
@@ -655,7 +667,11 @@ export const run = <R = never, E = never>(
         }
 
         return { _tag: "Stop" as const }
-      }) as Effect.Effect<StepOutcome, AiError.AiError | StepRejected | RunError, never>
+      }) as Effect.Effect<
+        StepOutcome,
+        AiError.AiError | StepRejected | RunError | JournalAppendError,
+        never
+      >
     }
 
     const body = Effect.gen(function* () {
@@ -747,7 +763,7 @@ export const run = <R = never, E = never>(
     const closeOpenSpans = (
       reason: "interrupted" | "failed",
       message?: string,
-    ): Effect.Effect<void, RunError> =>
+    ): Effect.Effect<void, RunError | JournalAppendError> =>
       Effect.uninterruptible(
         Effect.gen(function* () {
           if (openSpan === "step") {
