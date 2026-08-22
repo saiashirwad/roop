@@ -14,9 +14,7 @@ import type * as Tool from "effect/unstable/ai/Tool"
 import type { AgentDefinition } from "../Agent.ts"
 import type { AgentContext } from "../AgentContext.ts"
 import { AgentEmit, type AgentEvent, type SessionEvent } from "../AgentEvents.ts"
-import type { StepRejected, AgentHooksInterface, RunContext } from "../AgentHooks.ts"
 import { toPrompt as planToPrompt } from "../AgentPlan.ts"
-import type { ErasedToolkit } from "../AgentTools.ts"
 import type { SessionId } from "../DomainIds.ts"
 import type { JournalAppendError } from "../Journal.ts"
 import {
@@ -42,14 +40,20 @@ export interface RunOptions<R = never, E = never> {
   readonly policy?: RunPolicy | undefined
   readonly interrupt: InterruptSignal
   readonly append: (event: SessionEvent) => Effect.Effect<void, RunError | JournalAppendError>
-  readonly hooks: AgentHooksInterface
-  /** Typed around middleware. The legacy hooks field remains internal compatibility. */
   readonly middleware?: Middleware | undefined
   /** Explicit agent used by the staged logical-plan interpreter path. */
   readonly agent?: AgentDefinition<R, E> | undefined
   /** Stable run identity supplied to the agent renderer. */
   readonly runId?: string | undefined
 }
+
+interface RunContext {
+  readonly sessionId: SessionId | string
+  readonly turn: number
+  readonly step: number
+}
+
+type ErasedToolkit = Toolkit.WithHandler<Record<string, Tool.Any>>
 
 /** Outcome of one step, as the turn loop sees it. */
 type StepOutcome =
@@ -179,8 +183,6 @@ const appendStepEvents = (
 /** `beforeRequest` rewrites only model-facing prompt options. */
 const interceptModel = (
   model: LanguageModel.Service,
-  hooks: AgentHooksInterface,
-  context: () => RunContext,
   append: (event: SessionEvent) => Effect.Effect<void, RunError | JournalAppendError>,
   audit?: {
     readonly planId: string
@@ -196,10 +198,10 @@ const interceptModel = (
     streamText: ((request: LanguageModel.GenerateTextOptions<Record<string, Tool.Any>>) =>
       Stream.unwrap(
         Effect.gen(function* () {
-          const admitted = yield* hooks.beforeRequest(context(), {
+          const admitted = {
             prompt: request.prompt,
             toolChoice: request.toolChoice,
-          })
+          }
           if (recordAudit) {
             yield* Effect.orDie(
               append({
@@ -235,11 +237,6 @@ const interceptModel = (
  * The denial envelope effect/unstable/ai itself uses for refused tool calls;
  * the model sees a failed result and the run continues.
  */
-const executionDenied = (reason: string) => {
-  const denied = { type: "execution-denied" as const, reason }
-  return { result: denied, encodedResult: denied, isFailure: true, preliminary: false }
-}
-
 /* oxlint-disable-next-line anti-slop/no-unknown-parameters -- encoded tool results are schema-erased at this boundary. */
 const encodedBytes = (value: unknown): number => {
   const json = JSON.stringify(value)
@@ -254,7 +251,6 @@ const outputTooLarge = (maxBytes: number) => ({
 /** `beforeToolExecute`/`afterToolExecute` seams: `WithHandler.handle` is the single choke point. */
 const interceptToolkit = (
   toolkit: ErasedToolkit,
-  hooks: AgentHooksInterface,
   middleware: Middleware,
   context: () => RunContext,
   emit: (event: AgentEvent) => Effect.Effect<void>,
@@ -267,28 +263,22 @@ const interceptToolkit = (
     tools: toolkit.tools,
     handle: ((name: string, params: ToolCallParameters) =>
       Effect.gen(function* () {
-        // Allocate the token before hooks or scheduler wait. LanguageModel starts concurrent
+        // Allocate the token before scheduler wait. LanguageModel starts concurrent
         // handlers in provider-part order, but hook/scheduling timing may vary; the token
         // must represent invocation order, not execution timing.
         const token = correlator.allocateToken(name)
-        const admitted = yield* hooks.beforeToolExecute(context(), { name, params })
         const scheduled = scheduler.scheduleEffect(
           Effect.suspend(() =>
-            /* oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- Tool.Any's existential requirements channel is preserved through the generic execution hook. */
-            hooks.withToolExecution(
-              context(),
-              { name, params: admitted.params },
-              toolkit.handle(name, admitted.params).pipe(
-                Effect.provideService(AgentEmit, {
-                  emit: (event) => {
-                    if (event._tag === "Subagent") {
-                      return emit({ ...event, toolCallId: token })
-                    }
-                    return emit(event)
-                  },
-                  toolCallId: token,
-                }),
-              ),
+            toolkit.handle(name, params).pipe(
+              Effect.provideService(AgentEmit, {
+                emit: (event) => {
+                  if (event._tag === "Subagent") {
+                    return emit({ ...event, toolCallId: token })
+                  }
+                  return emit(event)
+                },
+                toolCallId: token,
+              }),
             ),
           ),
         )
@@ -297,7 +287,7 @@ const interceptToolkit = (
           turn: context().turn,
           step: context().step,
           name,
-          params: admitted.params,
+          params,
         }
         const wrapped = middleware.tool(() => scheduled)(toolInput)
         const timed =
@@ -321,24 +311,8 @@ const interceptToolkit = (
                 const failure = outputTooLarge(policy.maxToolOutputBytes!)
                 return { ...result, result: failure, encodedResult: failure, isFailure: true }
               })
-        return Stream.tap(bounded, (result) =>
-          result.preliminary === true
-            ? Effect.void
-            : hooks.afterToolExecute(
-                context(),
-                { name, params: admitted.params },
-                result.isFailure === true,
-              ),
-        )
-      }).pipe(
-        Effect.catchTag("ToolRejected", (rejection) =>
-          Effect.succeed(
-            Stream.make(executionDenied(rejection.reason)).pipe(
-              Stream.tap(() => hooks.afterToolExecute(context(), { name, params }, true)),
-            ),
-          ),
-        ),
-      )) as ErasedToolkit["handle"],
+        return bounded
+      })) as unknown as ErasedToolkit["handle"],
   }
 }
 
@@ -406,10 +380,7 @@ export const run = <R = never, E = never>(
     const executeStep = (
       position: StepPosition,
       deps: { readonly policy: ResolvedRunPolicy; readonly scheduler: ToolScheduler },
-    ): Effect.Effect<
-      StepOutcome,
-      AiError.AiError | StepRejected | RunError | JournalAppendError
-    > => {
+    ): Effect.Effect<StepOutcome, AiError.AiError | RunError | JournalAppendError> => {
       const context: RunContext = {
         sessionId: options.sessionId,
         turn: position.turn,
@@ -433,22 +404,10 @@ export const run = <R = never, E = never>(
           }
         }
 
-        const preStep = yield* Effect.raceFirst(
-          options.hooks.preStep(context).pipe(Effect.as({ _tag: "Ok" as const })),
-          options.interrupt.awaitSignal,
-        )
-        if (preStep._tag === "Interrupted") {
+        if (yield* options.interrupt.isInterrupted) {
           yield* options.append({ _tag: "step/end", reason: "interrupted" })
           openSpan = "turn"
           return { _tag: "Interrupted" as const }
-        }
-        if (preStep._tag === "Steered") {
-          yield* options.append({ _tag: "step/end", reason: "interrupted" })
-          openSpan = "turn"
-          return {
-            _tag: "Steered" as const,
-            steerPrompt: preStep.steerPrompt,
-          }
         }
 
         const correlator = makeToolCallCorrelator({
@@ -499,16 +458,7 @@ export const run = <R = never, E = never>(
               readonly parts: ReadonlyArray<Response.StreamPart<Record<string, Tool.Any>>>
             }
         const interceptedToolkit = asClosedToolkit(
-          interceptToolkit(
-            toolkit,
-            options.hooks,
-            middleware,
-            () => context,
-            emit,
-            scheduler,
-            correlator,
-            policy,
-          ),
+          interceptToolkit(toolkit, middleware, () => context, emit, scheduler, correlator, policy),
         )
         const logicalRequest: LogicalModelRequest | undefined =
           options.agent === undefined
@@ -533,8 +483,6 @@ export const run = <R = never, E = never>(
           collectedParts.length = 0
           const interceptedModel = interceptModel(
             input.model ?? options.model,
-            options.hooks,
-            () => context,
             options.append,
             planAudit === undefined ? undefined : { ...planAudit, attempt: input.attempt },
             true,
@@ -642,11 +590,7 @@ export const run = <R = never, E = never>(
         }
 
         return { _tag: "Stop" as const }
-      }) as Effect.Effect<
-        StepOutcome,
-        AiError.AiError | StepRejected | RunError | JournalAppendError,
-        never
-      >
+      }) as Effect.Effect<StepOutcome, AiError.AiError | RunError | JournalAppendError, never>
     }
 
     const body = Effect.gen(function* () {
@@ -701,9 +645,7 @@ export const run = <R = never, E = never>(
 
         const context = { sessionId: options.sessionId, turn, step }
         const turnStopping = middleware.turn(() =>
-          options.hooks
-            .turnStopping(context, { reason: "completed", stepCount: step })
-            .pipe(Effect.map((continuation) => ({ _tag: "Continue" as const, continuation }))),
+          Effect.succeed({ _tag: "Continue" as const, continuation: undefined }),
         )({ sessionId: context.sessionId.toString(), turn, step, stepCount: step })
         const turnContinuation = yield* Effect.raceFirst(
           turnStopping,
@@ -726,15 +668,8 @@ export const run = <R = never, E = never>(
 
         yield* options.append({ _tag: "turn/end", reason: "completed" })
         openSpan = "none"
-        if (turnContinuation.continuation === undefined) {
-          yield* emit({ _tag: "Finish", reason: "completed" })
-          return
-        }
-        if (turn >= policy.maxTurns || totalSteps >= policy.maxTotalSteps) {
-          yield* emit({ _tag: "Finish", reason: "stopped" })
-          return
-        }
-        yield* appendUserPrompt(turnContinuation.continuation.prompt)
+        yield* emit({ _tag: "Finish", reason: "completed" })
+        return
       }
       yield* emit({ _tag: "Finish", reason: "stopped" })
     })

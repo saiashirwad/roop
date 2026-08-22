@@ -5,7 +5,6 @@ import { Chat, LanguageModel, Prompt, type AiError } from "effect/unstable/ai"
 
 import type { AgentDefinition } from "./Agent.ts"
 import type { AgentEvent, SessionEvent } from "./AgentEvents.ts"
-import { hooksNoop, type AgentHooksInterface } from "./AgentHooks.ts"
 import { FinalizationError } from "./Error.ts"
 import { EVENT_VERSION, type Json, type JournalEvent, type LifecycleState } from "./Event.ts"
 import { fromEvents, recoveryEvents, toPrompt } from "./History.ts"
@@ -296,9 +295,6 @@ const runtimeRun = <R, E, RM = never, EM = never>(
 > =>
   Stream.unwrap(
     Effect.gen(function* () {
-      const legacy = request as AgentRuntimeRequest<RM, EM> & {
-        readonly hooks?: AgentHooksInterface | undefined
-      }
       const model = yield* LanguageModel.LanguageModel
       const journal = yield* Journal
       const installedMiddleware = yield* MiddlewareService
@@ -371,7 +367,6 @@ const runtimeRun = <R, E, RM = never, EM = never>(
         // request-scoped control signal through the kernel API.
         interrupt: InterruptSignal.noop(),
         append,
-        hooks: legacy.hooks ?? hooksNoop,
         /* SAFETY: runtimeRun restores the middleware R and E channels in its
          * public Stream type after the internal interpreter erasure. */
         middleware: allMiddleware(

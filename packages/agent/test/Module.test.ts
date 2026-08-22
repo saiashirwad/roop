@@ -1,16 +1,11 @@
 import { assert, it } from "@effect/vitest"
-import { Context, Effect, Exit, Layer, Option, Schema, Stream } from "effect"
+import { Context, Effect, Exit, Option, Schema, Stream } from "effect"
 import { Prompt, Tool } from "effect/unstable/ai"
 
 import { Agent } from "../src/Agent.ts"
 import type { AgentContext } from "../src/AgentContext.ts"
 import { Module } from "../src/Module.ts"
-import { AgentPlugins } from "../src/Plugin.ts"
-import { cryptoWeb } from "../src/cryptoWeb.ts"
-import { SessionJournalMemory } from "../src/SessionJournal.ts"
-import { scriptedPlugin } from "../src/Testing.ts"
 import { ToolConflict } from "../src/ToolRegistry.ts"
-import { moduleToPlugin } from "../src/internal/moduleToPlugin.ts"
 
 const context = (step: number): AgentContext => ({
   sessionId: "session",
@@ -69,7 +64,10 @@ it.effect("renders the same conditional module against explicit contexts", () =>
 
     const agent = Agent.make("support", conditional)
     const plan = yield* agent.render(context(2))
-    assert.deepStrictEqual(plan.tools.contributions.map((item) => item.tool.name), ["commit"])
+    assert.deepStrictEqual(
+      plan.tools.contributions.map((item) => item.tool.name),
+      ["commit"],
+    )
   }),
 )
 
@@ -128,27 +126,3 @@ it.effect("provides handler services through the module boundary", () =>
     assert.strictEqual(chunks[0]?.result, "order:42")
   }),
 )
-
-const bridgedPlugin = Effect.runSync(
-  moduleToPlugin(Agent.make("bridged", inspectModule), context(1)),
-)
-const BridgedAgent = AgentPlugins([
-  bridgedPlugin,
-  scriptedPlugin("bridge-model", [
-    [{ type: "tool-call", id: "bridge-call", name: "inspect", params: { id: "42" } }],
-    [{ type: "text-delta", id: "bridge-text", delta: "done" }],
-  ]),
-]).pipe(Layer.provide(SessionJournalMemory), Layer.provide(cryptoWeb))
-
-it.layer(BridgedAgent)("temporary module bridge", (it) => {
-  it.effect("runs an explicit Agent value through the old interpreter", () =>
-    Effect.gen(function* () {
-      const agent = yield* Agent
-      const events = yield* Stream.runCollect(agent.prompt({ prompt: "inspect", sessionId: "bridge" }))
-      assert.deepStrictEqual(
-        [...events].map((event) => event._tag),
-        ["ToolCall", "ToolResult", "TextDelta", "Finish"],
-      )
-    }),
-  )
-})

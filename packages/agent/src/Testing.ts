@@ -1,7 +1,5 @@
-import { Effect, Layer, Ref, Stream } from "effect"
+import { Effect, Ref, Stream } from "effect"
 import { LanguageModel, type Response } from "effect/unstable/ai"
-
-import { Plugin } from "./Plugin.ts"
 
 /**
  * A fake `LanguageModel` that replays scripted turns: each `streamText` call
@@ -30,26 +28,4 @@ export const scripted = (
           }),
         ),
     })
-  })
-
-/** A plugin contributing one scripted model, for composing test agents. */
-export const scriptedPlugin = (
-  id: string,
-  turns: ReadonlyArray<ReadonlyArray<Response.StreamPartEncoded>>,
-  options?: {
-    readonly provider?: string | undefined
-    readonly description?: string | undefined
-    readonly prompts?: Ref.Ref<Array<ReadonlyArray<unknown>>> | undefined
-  },
-): Plugin =>
-  Plugin({
-    name: `model-${id}`,
-    models: [
-      {
-        id,
-        provider: options?.provider ?? "test",
-        ...(options?.description === undefined ? undefined : { description: options.description }),
-        layer: Layer.effect(LanguageModel.LanguageModel, scripted(turns, options?.prompts)),
-      },
-    ],
   })

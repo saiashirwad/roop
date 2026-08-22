@@ -15,9 +15,8 @@ const Lookup = Tool.make("lookup", {
   success: Schema.String,
 })
 
-const lookup = Module.tool(
-  Lookup,
-  (_params: { readonly id: string }) => Effect.fail(new LookupError()),
+const lookup = Module.tool(Lookup, (_params: { readonly id: string }) =>
+  Effect.fail(new LookupError()),
 )
 
 const needsOrders = Module.tool(
@@ -34,10 +33,7 @@ const needsOrders = Module.tool(
 )
 
 const provided = Module.provide(needsOrders, Orders, { find: (id) => id })
-const providedLayer = Module.provideLayer(
-  needsOrders,
-  Layer.succeed(Orders, { find: (id) => id }),
-)
+const providedLayer = Module.provideLayer(needsOrders, Layer.succeed(Orders, { find: (id) => id }))
 const failedLayer = Module.provideLayer(
   needsOrders,
   Layer.effectDiscard(Effect.fail(new LayerError())),
@@ -47,12 +43,10 @@ export type ModuleTypeRequirements = Requirements<typeof needsOrders>
 export type ModuleProvidedRequirements = Requirements<typeof provided>
 export type ModuleProvidedLayerRequirements = Requirements<typeof providedLayer>
 export type ModuleFailedLayerErrors = Errors<typeof failedLayer>
-export type ModuleError = Effect.Error<ReturnType<typeof lookup["build"]>>
+export type ModuleError = Effect.Error<ReturnType<(typeof lookup)["build"]>>
 
-type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() =>
-  T extends B ? 1 : 2
-  ? true
-  : false
+type Equal<A, B> =
+  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false
 type Assert<T extends true> = T
 
 export type RequirementsPreserved = Assert<Equal<ModuleTypeRequirements, Orders>>

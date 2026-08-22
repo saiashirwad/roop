@@ -7,20 +7,11 @@
     ".": "./src/index.ts",
     "./Agent.ts": "./src/Agent.ts",
     "./AgentEvents.ts": "./src/AgentEvents.ts",
-    "./AgentHooks.ts": "./src/AgentHooks.ts",
     "./Middleware.ts": "./src/Middleware.ts",
-    "./Capabilities.ts": "./src/Capabilities.ts",
-    "./ModelCatalog.ts": "./src/ModelCatalog.ts",
-    "./Plugin.ts": "./src/Plugin.ts",
     "./RunError.ts": "./src/RunError.ts",
     "./RunPolicy.ts": "./src/RunPolicy.ts",
-    "./SessionJournal.ts": "./src/SessionJournal.ts",
-    "./Skills.ts": "./src/Skills.ts",
     "./Testing.ts": "./src/Testing.ts",
-    "./cryptoWeb.ts": "./src/cryptoWeb.ts",
-    "./DoomLoopGuard.ts": "./src/DoomLoopGuard.ts",
-    "./Subagent.ts": "./src/Subagent.ts",
-    "./ToolPruning.ts": "./src/ToolPruning.ts"
+    "./cryptoWeb.ts": "./src/cryptoWeb.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",

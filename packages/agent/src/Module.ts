@@ -33,31 +33,19 @@ const make = <R, E>(
   build: (context: AgentContext) => Effect.Effect<AgentContribution<R, E>, E, R>,
 ): Module<R, E> => ({ build })
 
-export const empty: Module = make(() =>
-  Effect.succeed(contribution([], ToolRegistry.empty)),
-)
+export const empty: Module = make(() => Effect.succeed(contribution([], ToolRegistry.empty)))
 
-export const instructions = (
-  text: string,
-  contributor = text,
-): Module =>
+export const instructions = (text: string, contributor = text): Module =>
   make(() =>
     Effect.succeed(
-      contribution(
-        text.trim() === "" ? [] : [{ text, contributor }],
-        ToolRegistry.empty,
-      ),
+      contribution(text.trim() === "" ? [] : [{ text, contributor }], ToolRegistry.empty),
     ),
   )
 
 export type ToolHandler<T extends Tool.Any> = (
   params: Tool.Parameters<T>,
   context: Toolkit.HandlerContext<T>,
-) => Effect.Effect<
-  Tool.Success<T>,
-  Tool.Failure<T>,
-  Tool.HandlerServices<T>
->
+) => Effect.Effect<Tool.Success<T>, Tool.Failure<T>, Tool.HandlerServices<T>>
 
 export function tool<
   const T extends Tool.Any,
@@ -103,45 +91,35 @@ export function tool<
     toolkit,
     handlers,
   }
-  return make(() =>
-    Effect.succeed(
-      contribution(
-        [],
-        ToolRegistry.fromContribution(entry),
-      ),
-    ),
-  )
+  return make(() => Effect.succeed(contribution([], ToolRegistry.fromContribution(entry))))
 }
 
 export const all = <const Modules extends ReadonlyArray<Module<any, any>>>(
   ...modules: Modules
 ): Module<Requirements<Modules[number]>, Errors<Modules[number]>> =>
-  make((context) =>
-    Effect.all(modules.map((module) => module.build(context))).pipe(
-      Effect.map((parts) =>
-        parts.reduce(
-          (result, part) =>
-            contribution(
-              [...result.instructions, ...part.instructions],
-              ToolRegistry.combine(result.tools, part.tools),
-            ),
-          contribution([], ToolRegistry.empty),
+  make(
+    (context) =>
+      Effect.all(modules.map((module) => module.build(context))).pipe(
+        Effect.map((parts) =>
+          parts.reduce(
+            (result, part) =>
+              contribution(
+                [...result.instructions, ...part.instructions],
+                ToolRegistry.combine(result.tools, part.tools),
+              ),
+            contribution([], ToolRegistry.empty),
+          ),
         ),
       ),
-    ),
-  /* SAFETY: all module effects are collected in declaration order; only their
-   * existential contribution records are hidden at this public boundary. */
+    /* SAFETY: all module effects are collected in declaration order; only their
+     * existential contribution records are hidden at this public boundary. */
   ) as Module<Requirements<Modules[number]>, Errors<Modules[number]>>
 
 export function when<M extends Module<any, any>>(
   condition: boolean | ((context: AgentContext) => boolean),
   module: M,
 ): Module<Requirements<M>, Errors<M>>
-export function when<
-  M extends Module<any, any>,
-  R,
-  E,
->(
+export function when<M extends Module<any, any>, R, E>(
   condition: (context: AgentContext) => Effect.Effect<boolean, E, R>,
   module: M,
 ): Module<Requirements<M> | R, Errors<M> | E>
@@ -150,8 +128,7 @@ export function when<M extends Module<any, any>>(
   module: M,
 ): Module<any, any> {
   return make((context) => {
-    const selected =
-      typeof condition === "function" ? condition(context) : condition
+    const selected = typeof condition === "function" ? condition(context) : condition
     const decision = Effect.isEffect(selected) ? selected : Effect.succeed(selected)
     return decision.pipe(
       Effect.flatMap((enabled) => (enabled ? module.build(context) : empty.build(context))),
@@ -170,7 +147,10 @@ export const provide = <M extends Module<any, any>, I, S>(
 export const provideLayer = <M extends Module<any, any>, L extends Layer.Any>(
   module: M,
   layer: L,
-): Module<Layer.Services<L> | Exclude<Requirements<M>, Layer.Success<L>>, Errors<M> | Layer.Error<L>> =>
+): Module<
+  Layer.Services<L> | Exclude<Requirements<M>, Layer.Success<L>>,
+  Errors<M> | Layer.Error<L>
+> =>
   /* SAFETY: the supplied Layer output is exactly the service set removed from R. */
   make((context) =>
     module.build(context).pipe(

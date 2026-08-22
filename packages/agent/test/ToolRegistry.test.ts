@@ -41,7 +41,9 @@ it.effect("keeps duplicate conflict results stable under regrouping", () =>
     )
 
     const leftExit = yield* Effect.exit(
-      Module.all(left).build(context).pipe(Effect.flatMap((part) => part.tools.finalize)),
+      Module.all(left)
+        .build(context)
+        .pipe(Effect.flatMap((part) => part.tools.finalize)),
     )
     const rightExit = yield* Effect.exit(
       right.build(context).pipe(Effect.flatMap((part) => part.tools.finalize)),

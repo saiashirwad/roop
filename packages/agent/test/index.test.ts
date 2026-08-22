@@ -5,9 +5,9 @@ import * as RoopAgent from "../src/index.ts"
 
 it.effect("index: re-exports all root namespaces", () =>
   Effect.gen(function* () {
-    assert.strictEqual(typeof RoopAgent.Agent.Agent, "function")
-    assert.strictEqual(typeof RoopAgent.Plugin.Plugin, "function")
-    assert.strictEqual(typeof RoopAgent.SessionJournal.SessionJournal, "function")
+    assert.strictEqual(typeof RoopAgent.Agent.Agent.make, "function")
+    assert.strictEqual(typeof RoopAgent.Runtime.AgentRuntime.run, "function")
+    assert.strictEqual(typeof RoopAgent.Journal.Journal, "function")
     assert.strictEqual(typeof RoopAgent.RunPolicy.RunPolicy, "object")
   }),
 )

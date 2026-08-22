@@ -1,18 +1,17 @@
 import { assert, it } from "@effect/vitest"
-import { Effect, Layer, Ref, Schema, Stream } from "effect"
-import { LanguageModel, type Response, Tool, Toolkit } from "effect/unstable/ai"
+import { Effect, Ref, Schema, Stream } from "effect"
+import { LanguageModel, type Response, Tool } from "effect/unstable/ai"
 
-import { Agent, AgentLiveToolkit } from "../src/Agent.ts"
-import { cryptoWeb } from "../src/cryptoWeb.ts"
-import { SessionJournalMemory } from "../src/SessionJournal.ts"
+import { Agent } from "../src/Agent.ts"
+import { JournalMemory } from "../src/JournalMemory.ts"
+import { Module } from "../src/Module.ts"
+import { runAgent } from "../src/Runtime.ts"
 
 const Ping = Tool.make("ping", {
   description: "reply with ok",
   parameters: Schema.Struct({}),
   success: Schema.Struct({ ok: Schema.Boolean }),
 })
-
-const PingToolkit = Toolkit.make(Ping)
 
 const scripted = (turns: ReadonlyArray<ReadonlyArray<Response.StreamPartEncoded>>) =>
   Effect.gen(function* () {
@@ -22,47 +21,32 @@ const scripted = (turns: ReadonlyArray<ReadonlyArray<Response.StreamPartEncoded>
       streamText: () =>
         Stream.unwrap(
           Effect.gen(function* () {
-            const i = yield* Ref.getAndUpdate(index, (n) => n + 1)
-            return Stream.fromIterable(turns[i] ?? [])
+            const current = yield* Ref.getAndUpdate(index, (value) => value + 1)
+            return Stream.fromIterable(turns[current] ?? [])
           }),
         ),
     })
   })
 
-const Live = AgentLiveToolkit(PingToolkit, {
-  models: [
-    {
-      id: "tool",
-      provider: "test",
-      layer: Layer.effect(
-        LanguageModel.LanguageModel,
-        scripted([
-          [{ type: "tool-call" as const, id: "c", name: "ping", params: {} }],
-          [{ type: "text-delta" as const, id: "t", delta: "done" }],
-        ]),
-      ),
-    },
-  ],
-}).pipe(
-  Layer.provide(SessionJournalMemory),
-  Layer.provide(cryptoWeb),
-  Layer.provide(
-    PingToolkit.toLayer({
-      ping: () => Effect.succeed({ ok: true }),
-    }),
-  ),
-)
-
 it.effect("core runs inside workerd", () =>
   Effect.gen(function* () {
     yield* Schema.decodeUnknownEffect(Schema.Struct({ caches: Schema.Unknown }))(globalThis)
-
-    const agent = yield* Agent
-    const events = yield* Stream.runCollect(agent.prompt({ prompt: "ping it", sessionId: "w" }))
-
+    const model = yield* scripted([
+      [{ type: "tool-call", id: "c", name: "ping", params: {} }],
+      [{ type: "text-delta", id: "t", delta: "done" }],
+    ])
+    const agent = Agent.make(
+      "workerd",
+      Module.tool(Ping, () => Effect.succeed({ ok: true })),
+    )
+    const events = yield* runAgent(agent, { prompt: "ping it", sessionId: "w" }).pipe(
+      Stream.runCollect,
+      Effect.provide(JournalMemory),
+      Effect.provideService(LanguageModel.LanguageModel, model),
+    )
     assert.deepStrictEqual(
       [...events].map((event) => event._tag),
       ["ToolCall", "ToolResult", "TextDelta", "Finish"],
     )
-  }).pipe(Effect.provide(Live)),
+  }),
 )

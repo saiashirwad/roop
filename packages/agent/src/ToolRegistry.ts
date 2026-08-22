@@ -4,7 +4,11 @@ import { Effect, Layer, Schema } from "effect"
 import type * as Tool from "effect/unstable/ai/Tool"
 import * as Toolkit from "effect/unstable/ai/Toolkit"
 
-import { eraseToolkit } from "./AgentTools.ts"
+const eraseToolkit = <Tools extends Record<string, Tool.Any>>(
+  toolkit: Toolkit.WithHandler<Tools>,
+): Toolkit.WithHandler<Record<string, Tool.Any>> =>
+  /* SAFETY: Effect AI validates each named call against the matching tool schema. */
+  toolkit as unknown as Toolkit.WithHandler<Record<string, Tool.Any>>
 
 /** A tool name was empty and cannot be sent to a model. */
 export class InvalidToolName extends Schema.TaggedErrorClass<InvalidToolName>()("InvalidToolName", {
@@ -44,11 +48,7 @@ export interface FinalizedToolRegistry {
 
 export interface ToolRegistry<out R = never, out E = never> {
   readonly contributions: ReadonlyArray<ToolContribution<R, E>>
-  readonly finalize: Effect.Effect<
-    FinalizedToolRegistry,
-    ToolConflict | InvalidToolName | E,
-    R
-  >
+  readonly finalize: Effect.Effect<FinalizedToolRegistry, ToolConflict | InvalidToolName | E, R>
 }
 
 const makeRegistry = <R, E>(
@@ -96,9 +96,7 @@ const makeRegistry = <R, E>(
           )
     // SAFETY: all tool names were validated as unique above. The existential
     // handler relationship is erased once, at this Effect AI boundary.
-    const installed = yield* (
-      toolkit as Toolkit.Toolkit<Record<string, Tool.Any>>
-    ).pipe(
+    const installed = yield* (toolkit as Toolkit.Toolkit<Record<string, Tool.Any>>).pipe(
       Effect.map(eraseToolkit),
       /* SAFETY: handlers are the layers created for these exact tool definitions. */
       Effect.provide(handlers as Layer.Layer<any, any, any>),
@@ -116,14 +114,20 @@ const makeRegistry = <R, E>(
 
 export const empty: ToolRegistry = makeRegistry([])
 
-export const fromContribution = <R, E>(
-  contribution: ToolContribution<R, E>,
-): ToolRegistry<R, E> => makeRegistry([contribution])
+export const fromContribution = <R, E>(contribution: ToolContribution<R, E>): ToolRegistry<R, E> =>
+  makeRegistry([contribution])
 
 export const combine = <const Registries extends ReadonlyArray<ToolRegistry<any, any>>>(
   ...registries: Registries
-): ToolRegistry<Registries[number] extends ToolRegistry<infer R, any> ? R : never, Registries[number] extends ToolRegistry<any, infer E> ? E : never> =>
-  makeRegistry(registries.flatMap((registry) => registry.contributions) as ReadonlyArray<ToolContribution<any, any>>) as never
+): ToolRegistry<
+  Registries[number] extends ToolRegistry<infer R, any> ? R : never,
+  Registries[number] extends ToolRegistry<any, infer E> ? E : never
+> =>
+  makeRegistry(
+    registries.flatMap((registry) => registry.contributions) as ReadonlyArray<
+      ToolContribution<any, any>
+    >,
+  ) as never
 
 export const ToolRegistry = Object.assign(makeRegistry, {
   empty,
