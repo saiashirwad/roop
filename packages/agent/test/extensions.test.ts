@@ -7,11 +7,13 @@ import {
   Module,
   Runtime,
 } from "@roop/agent"
-import { Effect, Layer, Ref, Stream } from "effect"
-import { LanguageModel, Prompt } from "effect/unstable/ai"
+import { Deferred, Effect, Fiber, Layer, Ref, Stream } from "effect"
+import { AiError, LanguageModel, Prompt } from "effect/unstable/ai"
 
 import { ApprovalService, approval } from "../../../examples/extensions/approval.ts"
+import { contextPruning } from "../../../examples/extensions/contextPruning.ts"
 import { doomLoop } from "../../../examples/extensions/doomLoop.ts"
+import { modelFallback } from "../../../examples/extensions/modelFallback.ts"
 import { subagent } from "../../../examples/extensions/subagent.ts"
 import { toolPruning } from "../../../examples/extensions/toolPruning.ts"
 const { Agent } = AgentPackage
@@ -80,6 +82,37 @@ it.effect("loop guard and pruning compose in declaration order", () =>
   }),
 )
 
+it.effect("public fallback and context pruning wrap a model request", () =>
+  Effect.gen(function* () {
+    const fallback = yield* LanguageModel.make({
+      generateText: () => Effect.succeed([]),
+      streamText: () =>
+        Stream.make({ type: "text-delta" as const, id: "fallback", delta: "fallback" }),
+    })
+    const stack = Middleware.all(
+      contextPruning(() => Prompt.make("pruned")),
+      modelFallback(fallback),
+    )
+    const seen: string[] = []
+    const output = yield* stack
+      .model((input) => {
+        seen.push(JSON.stringify(input.prompt))
+        return input.model === fallback ? Stream.make("fallback") : Stream.fail("primary")
+      })({
+        sessionId: "public-extensions",
+        turn: 1,
+        step: 1,
+        prompt: Prompt.make("original"),
+        attempt: 1,
+      })
+      .pipe(Stream.runCollect)
+
+    assert.deepStrictEqual([...output], ["fallback"])
+    assert.strictEqual(seen.length, 2)
+    assert.ok(seen.every((prompt) => prompt.includes("pruned")))
+  }),
+)
+
 it.effect("subagent uses a stable independent journal session", () =>
   Effect.gen(function* () {
     const model = yield* LanguageModel.make({
@@ -108,5 +141,98 @@ it.effect("subagent uses a stable independent journal session", () =>
       ),
     )
     assert.ok(snapshot.events.some((event) => event._tag === "run"))
+  }),
+)
+
+it.effect("subagent returns child failures as a declared tool failure", () =>
+  Effect.gen(function* () {
+    const model = yield* LanguageModel.make({
+      generateText: () => Effect.succeed([]),
+      streamText: () =>
+        Stream.fail(
+          AiError.make({
+            module: "extensions-test",
+            method: "streamText",
+            reason: new AiError.UnknownError({ description: "child failed" }),
+          }),
+        ),
+    })
+    const result = yield* Effect.gen(function* () {
+      const built = yield* subagent(
+        Agent.make("child-failure", Module.empty),
+        "child-failure",
+      ).build({
+        sessionId: "parent",
+        runId: "parent-run",
+        turn: 1,
+        step: 1,
+        history: Prompt.empty,
+      })
+      const finalized = yield* built.tools.finalize
+      const stream = yield* finalized.toolkit.handle("delegate", { task: "fail" })
+      return yield* Stream.runCollect(stream)
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          JournalMemory,
+          AgentRuntimeLive,
+          Layer.succeed(LanguageModel.LanguageModel, model),
+        ),
+      ),
+    )
+    assert.ok([...result].some((part) => part.isFailure))
+  }),
+)
+
+it.effect("interrupting a subagent tool interrupts the child model", () =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>()
+    let calls = 0
+    const model = yield* LanguageModel.make({
+      generateText: () => Effect.succeed([]),
+      streamText: () => {
+        calls += 1
+        return calls === 1
+          ? Stream.make({
+              type: "tool-call" as const,
+              id: "delegate-cancel",
+              name: "delegate",
+              params: { task: "wait" },
+            })
+          : Stream.fromEffect(Deferred.succeed(started, undefined)).pipe(
+              Stream.drain,
+              Stream.concat(Stream.never),
+            )
+      },
+    })
+    const parent = Agent.make(
+      "parent-cancel",
+      subagent(Agent.make("child-cancel", Module.empty), "child-cancel"),
+    )
+    const snapshot = yield* Effect.gen(function* () {
+      const fiber = yield* runAgent(parent, {
+        sessionId: "parent-cancel",
+        prompt: "delegate",
+      }).pipe(Stream.runDrain, Effect.forkChild)
+      yield* Deferred.await(started)
+      yield* Fiber.interrupt(fiber)
+      return yield* (yield* Journal).load("child-cancel")
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          JournalMemory,
+          AgentRuntimeLive,
+          Layer.succeed(LanguageModel.LanguageModel, model),
+        ),
+      ),
+    )
+    assert.ok(
+      snapshot.events.some(
+        (event) =>
+          event._tag === "run" &&
+          event.runId.startsWith("child-cancel") &&
+          event.state === "aborted",
+      ),
+    )
   }),
 )

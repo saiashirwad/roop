@@ -48,7 +48,7 @@ packages:
     os: [win32]
 
   '@roop/agent@file:../roop-agent.tgz':
-    resolution: {integrity: sha512-ita3pYIdZPO80vxmdLs4jQUbUm00T7M+1hFAnQsunZw+5r0GVtfH8dlqTPVh8+tMFSTJjzU+Tp1wzUsaWmQ93w==, tarball: file:../roop-agent.tgz}
+    resolution: {integrity: sha512-hH2S1/uMW7UIU5mp9nbwYbk7wLbI/p71b5O0MsweFYG1Kphh/lxKk55Xh98EGCtRR4IHhmkDtp9I4elg8edR0w==, tarball: file:../roop-agent.tgz}
     version: 0.0.0
     peerDependencies:
       effect: 4.0.0-beta.97

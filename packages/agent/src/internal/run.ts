@@ -16,6 +16,7 @@ import type { AgentContext } from "../AgentContext.ts"
 import { AgentEmit, type AgentEvent, type SessionEvent } from "../AgentEvents.ts"
 import { toPrompt as planToPrompt } from "../AgentPlan.ts"
 import type { SessionId } from "../DomainIds.ts"
+import { UnsafeModelRetry } from "../Error.ts"
 import type { JournalAppendError } from "../Journal.ts"
 import {
   empty as emptyMiddleware,
@@ -203,21 +204,19 @@ const interceptModel = (
             toolChoice: request.toolChoice,
           }
           if (recordAudit) {
-            yield* Effect.orDie(
-              append({
-                _tag: "model/request",
-                request:
-                  audit === undefined
-                    ? admitted
-                    : {
-                        ...admitted,
-                        planId: audit.planId,
-                        fingerprint: audit.fingerprint,
-                        toolNames: audit.toolNames,
-                        ...(audit.attempt === undefined ? undefined : { attempt: audit.attempt }),
-                      },
-              }),
-            )
+            yield* append({
+              _tag: "model/request",
+              request:
+                audit === undefined
+                  ? admitted
+                  : {
+                      ...admitted,
+                      planId: audit.planId,
+                      fingerprint: audit.fingerprint,
+                      toolNames: audit.toolNames,
+                      ...(audit.attempt === undefined ? undefined : { attempt: audit.attempt }),
+                    },
+            })
           }
           /* SAFETY: The typed integration boundary establishes the asserted runtime contract. */
           return model.streamText({
@@ -229,7 +228,7 @@ const interceptModel = (
             concurrency: request.concurrency,
           } as never)
         }),
-      )) as LanguageModel.Service["streamText"],
+      )) as unknown as LanguageModel.Service["streamText"],
   }
 }
 
@@ -247,6 +246,11 @@ const outputTooLarge = (maxBytes: number) => ({
   type: "tool-output-too-large" as const,
   message: `tool output exceeded ${maxBytes} bytes`,
 })
+
+const toolTimedOut = {
+  type: "tool-timeout" as const,
+  message: "tool execution timed out",
+}
 
 /** `beforeToolExecute`/`afterToolExecute` seams: `WithHandler.handle` is the single choke point. */
 const interceptToolkit = (
@@ -293,10 +297,19 @@ const interceptToolkit = (
         const timed =
           policy.toolTimeout === undefined
             ? wrapped
-            : Stream.unwrap(
-                /* oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- Tool.Any's existential requirements channel leaks through ErasedToolkit.handle; handlers are built closed before eraseToolkit and closure is reasserted at asClosedToolkit. */
-                Effect.timeout(Stream.runCollect(wrapped), policy.toolTimeout).pipe(
-                  Effect.map((results) => Stream.fromIterable([...results])),
+            : wrapped.pipe(
+                Stream.mergeEffect(
+                  Effect.sleep(policy.toolTimeout).pipe(
+                    Effect.andThen(Effect.fail({ _tag: "ToolTimeoutSignal" as const })),
+                  ),
+                ),
+                Stream.catchTag("ToolTimeoutSignal", () =>
+                  Stream.make({
+                    result: toolTimedOut,
+                    encodedResult: toolTimedOut,
+                    isFailure: true,
+                    preliminary: false,
+                  }),
                 ),
               )
         const bounded =
@@ -353,6 +366,8 @@ type RunStreamError<E> =
   | JournalAppendError
   | InvalidToolName
   | ToolConflict
+  | UnsafeModelRetry
+  | Cause.TimeoutError
 
 export const run = <R = never, E = never>(
   options: RunOptions<R, E>,
@@ -380,7 +395,10 @@ export const run = <R = never, E = never>(
     const executeStep = (
       position: StepPosition,
       deps: { readonly policy: ResolvedRunPolicy; readonly scheduler: ToolScheduler },
-    ): Effect.Effect<StepOutcome, AiError.AiError | RunError | JournalAppendError> => {
+    ): Effect.Effect<
+      StepOutcome,
+      AiError.AiError | RunError | JournalAppendError | Cause.TimeoutError
+    > => {
       const context: RunContext = {
         sessionId: options.sessionId,
         turn: position.turn,
@@ -451,6 +469,8 @@ export const run = <R = never, E = never>(
           }
         }
         const collectedParts: Array<Response.StreamPart<Record<string, Tool.Any>>> = []
+        let modelAttemptActive = false
+        let modelOutputObserved = false
         type ModelOutcome =
           | ControlSignal
           | {
@@ -477,58 +497,89 @@ export const run = <R = never, E = never>(
           input: ModelCallInput,
         ): Stream.Stream<
           Response.StreamPart<Record<string, Tool.Any>>,
-          AiError.AiError | RunError,
+          AiError.AiError | RunError | UnsafeModelRetry,
           never
-        > => {
-          collectedParts.length = 0
-          const interceptedModel = interceptModel(
-            input.model ?? options.model,
-            options.append,
-            planAudit === undefined ? undefined : { ...planAudit, attempt: input.attempt },
-            true,
-          )
-          const modelStream =
-            options.agent === undefined
-              ? options.chat
-                  .streamText({
-                    prompt: [],
-                    toolkit: interceptedToolkit,
-                    concurrency: "unbounded",
-                  })
-                  .pipe(Stream.provideService(LanguageModel.LanguageModel, interceptedModel))
-              : Stream.unwrap(
-                  modelAttempt({ ...logicalRequest!, prompt: input.prompt }, input.attempt).pipe(
-                    Effect.map((result) => result.stream),
-                    Effect.provideService(LanguageModel.LanguageModel, interceptedModel),
-                  ),
+        > =>
+          Stream.unwrap(
+            Effect.sync(
+              (): Stream.Stream<
+                Response.StreamPart<Record<string, Tool.Any>>,
+                AiError.AiError | RunError | UnsafeModelRetry,
+                never
+              > => {
+                if (modelAttemptActive || modelOutputObserved) {
+                  return Stream.fail(
+                    new UnsafeModelRetry({
+                      sessionId: context.sessionId.toString(),
+                      turn: context.turn,
+                      step: context.step,
+                      attempt: input.attempt,
+                    }),
+                  )
+                }
+                modelAttemptActive = true
+                collectedParts.length = 0
+                const interceptedModel = interceptModel(
+                  input.model ?? options.model,
+                  options.append,
+                  planAudit === undefined ? undefined : { ...planAudit, attempt: input.attempt },
+                  true,
                 )
-          const observed = modelStream.pipe(
-            Stream.provideService(AgentEmit, { emit }),
-            Stream.tap((part) => {
-              collectedParts.push(part)
+                const modelStream =
+                  options.agent === undefined
+                    ? options.chat
+                        .streamText({
+                          prompt: [],
+                          toolkit: interceptedToolkit,
+                          concurrency: "unbounded",
+                        })
+                        .pipe(Stream.provideService(LanguageModel.LanguageModel, interceptedModel))
+                    : Stream.unwrap(
+                        modelAttempt(
+                          { ...logicalRequest!, prompt: input.prompt },
+                          input.attempt,
+                        ).pipe(
+                          Effect.map((result) => result.stream),
+                          Effect.provideService(LanguageModel.LanguageModel, interceptedModel),
+                        ),
+                      )
+                const observed = modelStream.pipe(
+                  Stream.provideService(AgentEmit, { emit }),
+                  Stream.tap((part) => {
+                    modelOutputObserved = true
+                    collectedParts.push(part)
 
-              const event = toEvent(
-                part,
-                (name, _params, id, providerExecuted) =>
-                  correlator.observeProviderCall({
-                    id,
-                    name,
-                    providerExecuted,
-                    isKnownTool: toolkit.tools[name] !== undefined,
+                    const event = toEvent(
+                      part,
+                      (name, _params, id, providerExecuted) =>
+                        correlator.observeProviderCall({
+                          id,
+                          name,
+                          providerExecuted,
+                          isKnownTool: toolkit.tools[name] !== undefined,
+                        }),
+                      correlator.tokenForProviderId,
+                    )
+                    return event === undefined ? Effect.void : emit(event)
                   }),
-                correlator.tokenForProviderId,
-              )
-              return event === undefined ? Effect.void : emit(event)
-            }),
+                )
+                const guarded: Stream.Stream<
+                  Response.StreamPart<Record<string, Tool.Any>>,
+                  AiError.AiError | RunError,
+                  never
+                > = options.agent === undefined
+                  ? observed.pipe(
+                      Stream.mapError((cause) =>
+                        runError(cause, { sessionId: options.sessionId }, "model"),
+                      ),
+                    )
+                  : observed
+                return guarded.pipe(
+                  Stream.ensuring(Effect.sync(() => (modelAttemptActive = false))),
+                )
+              },
+            ),
           )
-          return options.agent === undefined
-            ? observed.pipe(
-                Stream.mapError((cause) =>
-                  runError(cause, { sessionId: options.sessionId }, "model"),
-                ),
-              )
-            : observed
-        }
         const modelInput: ModelCallInput = {
           sessionId: context.sessionId.toString(),
           turn: context.turn,
@@ -590,7 +641,11 @@ export const run = <R = never, E = never>(
         }
 
         return { _tag: "Stop" as const }
-      }) as Effect.Effect<StepOutcome, AiError.AiError | RunError | JournalAppendError, never>
+      }) as Effect.Effect<
+        StepOutcome,
+        AiError.AiError | RunError | JournalAppendError | Cause.TimeoutError,
+        never
+      >
     }
 
     const body = Effect.gen(function* () {

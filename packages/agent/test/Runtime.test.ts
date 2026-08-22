@@ -6,7 +6,7 @@ import { AiError, LanguageModel, Prompt, Tool } from "effect/unstable/ai"
 import type * as Response from "effect/unstable/ai/Response"
 
 import { Agent } from "../src/Agent.ts"
-import { FinalizationError } from "../src/Error.ts"
+import { FinalizationError, UnsafeModelRetry } from "../src/Error.ts"
 import { EVENT_VERSION, type JournalEvent } from "../src/Event.ts"
 import { Journal, JournalError } from "../src/Journal.ts"
 import { JournalMemory } from "../src/JournalMemory.ts"
@@ -301,6 +301,45 @@ it.effect("preserves primary and journal failures during terminal finalization",
   }),
 )
 
+it.effect("keeps a model-request journal failure in the typed error channel", () =>
+  Effect.gen(function* () {
+    const model = yield* LanguageModel.make({
+      generateText: () => Effect.succeed([]),
+      streamText: () => Stream.make({ type: "text-delta" as const, id: "done", delta: "done" }),
+    })
+    const failingJournal = Layer.succeed(
+      Journal,
+      Journal.of({
+        load: (sessionId) => Effect.succeed({ sessionId, revision: 0, events: [] }),
+        append: (sessionId, revision, events) =>
+          events.some((event) => event._tag === "model/request")
+            ? Effect.fail(
+                new JournalError({
+                  operation: "append",
+                  sessionId,
+                  message: "request append failed",
+                }),
+              )
+            : Effect.succeed(revision + events.length),
+      }),
+    )
+    const exit = yield* Effect.exit(
+      runAgent(Agent.make("request-journal-failure", Module.empty), {
+        sessionId: "request-journal-failure",
+        prompt: "run",
+      }).pipe(
+        Stream.runDrain,
+        Effect.provide(failingJournal),
+        Effect.provideService(LanguageModel.LanguageModel, model),
+      ),
+    )
+    assert.ok(Exit.isFailure(exit))
+    const error = Exit.findErrorOption(exit)
+    assert.ok(error._tag === "Some")
+    if (error._tag === "Some") assert.ok(Schema.is(JournalError)(error.value))
+  }),
+)
+
 it.effect("records an aborted run when the consumer interrupts the stream", () =>
   Effect.gen(function* () {
     const modelFinalizers = yield* Ref.make(0)
@@ -503,6 +542,42 @@ it.effect("does not retry after model output starts", () =>
     )
     assert.ok(Exit.isFailure(exit))
     assert.strictEqual(calls, 1)
+  }),
+)
+
+it.effect("rejects middleware that retries after visible model output", () =>
+  Effect.gen(function* () {
+    let calls = 0
+    const model = yield* LanguageModel.make({
+      generateText: () => Effect.succeed([]),
+      streamText: () => {
+        calls += 1
+        return Stream.make({ type: "text-delta" as const, id: "partial", delta: "part" }).pipe(
+          Stream.concat(Stream.fail(modelFailure())),
+        )
+      },
+    })
+    const unsafeRetry = Middleware.make({
+      model: (next) => (input) =>
+        next(input).pipe(Stream.catchCause(() => next({ ...input, attempt: input.attempt + 1 }))),
+    })
+    const exit = yield* Effect.exit(
+      runAgent(Agent.make("unsafe-retry", Module.empty), {
+        sessionId: "unsafe-retry-session",
+        prompt: "answer",
+        middleware: unsafeRetry,
+      }).pipe(
+        Stream.runCollect,
+        Effect.provide(JournalMemory),
+        Effect.provideService(LanguageModel.LanguageModel, model),
+      ),
+    )
+
+    assert.strictEqual(calls, 1)
+    assert.ok(Exit.isFailure(exit))
+    const error = Exit.findErrorOption(exit)
+    assert.ok(error._tag === "Some")
+    if (error._tag === "Some") assert.ok(Schema.is(UnsafeModelRetry)(error.value))
   }),
 )
 

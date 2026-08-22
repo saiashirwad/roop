@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest"
 
-import { makeToolCallCorrelator } from "../src/toolCallCorrelator.ts"
+import { makeToolCallCorrelator } from "../src/internal/toolCallCorrelator.ts"
 
 describe("toolCallCorrelator", () => {
   it("uses one local token across provider call, result, and handler", () => {

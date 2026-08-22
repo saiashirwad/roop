@@ -18,11 +18,13 @@ export interface AgentPlanOptions<R = never, E = never> {
 export const make = <R = never, E = never>(
   options: AgentPlanOptions<R, E> = {},
 ): AgentPlan<R, E> => ({
-  instructions: (options.instructions ?? []).map((instruction, index) =>
-    typeof instruction === "string"
-      ? { text: instruction, contributor: `agent:${index + 1}` }
-      : instruction,
-  ),
+  instructions: (options.instructions ?? [])
+    .map((instruction, index) =>
+      typeof instruction === "string"
+        ? { text: instruction, contributor: `agent:${index + 1}` }
+        : instruction,
+    )
+    .filter((instruction) => instruction.text.trim() !== ""),
   tools: options.tools ?? ToolRegistry.empty,
 })
 

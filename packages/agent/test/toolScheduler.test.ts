@@ -1,7 +1,7 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Deferred, Effect, Exit, Fiber, Ref, Stream } from "effect"
 
-import { makeToolScheduler } from "../src/toolScheduler.ts"
+import { makeToolScheduler } from "../src/internal/toolScheduler.ts"
 
 describe("ToolScheduler", () => {
   it.effect("unbounded scheduler runs tasks immediately without restriction", () =>

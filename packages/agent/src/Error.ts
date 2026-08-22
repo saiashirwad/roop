@@ -12,3 +12,14 @@ export class FinalizationError extends Schema.TaggedErrorClass<FinalizationError
     journal: Schema.Unknown,
   },
 ) {}
+
+/** Middleware tried to start a new physical attempt after model output became visible. */
+export class UnsafeModelRetry extends Schema.TaggedErrorClass<UnsafeModelRetry>()(
+  "UnsafeModelRetry",
+  {
+    sessionId: Schema.String,
+    turn: Schema.Finite,
+    step: Schema.Finite,
+    attempt: Schema.Finite,
+  },
+) {}

@@ -18,6 +18,11 @@ export type HistoryEvent = JournalEvent | SessionEvent
 type AssistantPart = Prompt.AssistantMessagePart
 type ToolPart = Prompt.ToolMessagePart
 
+type ToolRecord = Extract<JournalEvent, { readonly _tag: "tool/call" | "tool/result" }>
+
+const toolRecordKey = (event: ToolRecord): string =>
+  `${event.runId ?? "legacy"}:${event.turn ?? 0}:${event.step ?? 0}:${event.id}`
+
 const isJournalEvent = (event: HistoryEvent): event is JournalEvent => "version" in event
 
 const isTerminal = (state: LifecycleState): boolean =>
@@ -96,7 +101,7 @@ const appendMessages = (events: ReadonlyArray<JournalEvent>): ReadonlyArray<Prom
         }
         break
       case "tool/call":
-        pendingCalls.add(event.id)
+        pendingCalls.add(toolRecordKey(event))
         assistantParts.push(
           Prompt.makePart("tool-call", {
             id: event.id,
@@ -107,8 +112,8 @@ const appendMessages = (events: ReadonlyArray<JournalEvent>): ReadonlyArray<Prom
         )
         break
       case "tool/result":
-        if (!pendingCalls.has(event.id)) break
-        pendingCalls.delete(event.id)
+        if (!pendingCalls.has(toolRecordKey(event))) break
+        pendingCalls.delete(toolRecordKey(event))
         flushAssistant()
         toolParts.push(
           Prompt.makePart("tool-result", {
@@ -249,16 +254,19 @@ export const recoveryEvents = (
       if (event.state === "started") open.set(key, event)
       else if (isTerminal(event.state)) open.delete(key)
     }
-    if (event._tag === "tool/call") calls.set(event.id, event)
-    if (event._tag === "tool/result") results.add(event.id)
+    if (event._tag === "tool/call") calls.set(toolRecordKey(event), event)
+    if (event._tag === "tool/result") results.add(toolRecordKey(event))
   }
 
   const recovered: Array<JournalEvent> = []
-  for (const call of calls.values()) {
-    if (results.has(call.id)) continue
+  for (const [key, call] of calls) {
+    if (results.has(key)) continue
     recovered.push({
       _tag: "tool/result",
       version: EVENT_VERSION,
+      ...(call.runId === undefined ? undefined : { runId: call.runId }),
+      ...(call.turn === undefined ? undefined : { turn: call.turn }),
+      ...(call.step === undefined ? undefined : { step: call.step }),
       id: call.id,
       name: call.name,
       isFailure: true,

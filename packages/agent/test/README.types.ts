@@ -1,12 +1,7 @@
-# Roop
-
-Roop is an Effect-native agent runtime where agents and extensions compose as explicit effects,
-modules, middleware, services, and layers.
-
-```ts
-import { Agent, JournalMemory, Module, Runtime } from "@roop/agent"
 import { Context, Effect, Layer, Schema, Stream } from "effect"
 import { type LanguageModel, Tool } from "effect/unstable/ai"
+
+import { Agent, JournalMemory, Module, Runtime } from "../src/index.ts"
 
 class Orders extends Context.Service<
   Orders,
@@ -37,13 +32,7 @@ const agent = Agent.make(
   ),
 )
 
-const events = Runtime.runAgent(agent, {
+export const readmeExample = Runtime.runAgent(agent, {
   sessionId: "support-42",
   prompt: "Where is order 42?",
 }).pipe(Stream.provide(Layer.mergeAll(JournalMemory.JournalMemory, OrdersLive, ModelLive)))
-```
-
-`ModelLive` supplies an `effect/unstable/ai` `LanguageModel`. Roop does not select a provider.
-
-Read [composition](docs/composition.md), [middleware](docs/middleware.md),
-[persistence](docs/persistence.md), and [extension authoring](docs/extensions.md).

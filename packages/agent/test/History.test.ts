@@ -107,3 +107,47 @@ it("closes open run, turn, step, attempt, and tool spans in deterministic order"
     ["tool", "model/attempt", "step", "turn", "run"],
   )
 })
+
+it("recovers a reused provider call id by run, turn, and step", () => {
+  const events = [
+    {
+      _tag: "tool/call" as const,
+      version: EVENT_VERSION,
+      runId: "run",
+      turn: 1,
+      step: 1,
+      id: "reused",
+      name: "lookup",
+      params: { id: "first" },
+    },
+    {
+      _tag: "tool/result" as const,
+      version: EVENT_VERSION,
+      runId: "run",
+      turn: 1,
+      step: 1,
+      id: "reused",
+      name: "lookup",
+      isFailure: false,
+      result: "first",
+    },
+    {
+      _tag: "tool/call" as const,
+      version: EVENT_VERSION,
+      runId: "run",
+      turn: 1,
+      step: 2,
+      id: "reused",
+      name: "lookup",
+      params: { id: "second" },
+    },
+  ]
+
+  const recovery = recoveryEvents(events)
+  assert.strictEqual(recovery.length, 1)
+  assert.strictEqual(recovery[0]?._tag, "tool/result")
+  if (recovery[0]?._tag === "tool/result") {
+    assert.strictEqual(recovery[0].step, 2)
+    assert.deepStrictEqual(recovery[0].result, { type: "execution-unknown" })
+  }
+})

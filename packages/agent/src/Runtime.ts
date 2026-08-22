@@ -5,7 +5,7 @@ import { Chat, LanguageModel, Prompt, type AiError } from "effect/unstable/ai"
 
 import type { AgentDefinition } from "./Agent.ts"
 import type { AgentEvent, SessionEvent } from "./AgentEvents.ts"
-import { FinalizationError } from "./Error.ts"
+import { FinalizationError, type UnsafeModelRetry } from "./Error.ts"
 import { EVENT_VERSION, type Json, type JournalEvent, type LifecycleState } from "./Event.ts"
 import { fromEvents, recoveryEvents, toPrompt } from "./History.ts"
 import { stableJsonValue } from "./internal/effectAiAdapter.ts"
@@ -50,7 +50,9 @@ export interface AgentRuntimeService {
     | JournalAppendError
     | FinalizationError
     | InvalidToolName
-    | ToolConflict,
+    | ToolConflict
+    | UnsafeModelRetry
+    | Cause.TimeoutError,
     R | RM | LanguageModel.LanguageModel | Journal
   >
 }
@@ -64,6 +66,8 @@ type RuntimeError<E> =
   | FinalizationError
   | InvalidToolName
   | ToolConflict
+  | UnsafeModelRetry
+  | Cause.TimeoutError
 
 interface JournalBridge {
   readonly sessionId: string
