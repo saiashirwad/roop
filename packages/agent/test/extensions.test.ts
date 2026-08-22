@@ -1,4 +1,12 @@
 import { assert, it } from "@effect/vitest"
+import {
+  Agent as AgentPackage,
+  Journal as JournalPackage,
+  JournalMemory as JournalMemoryPackage,
+  Middleware,
+  Module,
+  Runtime,
+} from "@roop/agent"
 import { Effect, Layer, Ref, Stream } from "effect"
 import { LanguageModel, Prompt } from "effect/unstable/ai"
 
@@ -6,12 +14,10 @@ import { ApprovalService, approval } from "../../../examples/extensions/approval
 import { doomLoop } from "../../../examples/extensions/doomLoop.ts"
 import { subagent } from "../../../examples/extensions/subagent.ts"
 import { toolPruning } from "../../../examples/extensions/toolPruning.ts"
-import { Agent } from "../src/Agent.ts"
-import { Journal } from "../src/Journal.ts"
-import { JournalMemory } from "../src/JournalMemory.ts"
-import * as Middleware from "../src/Middleware.ts"
-import { Module } from "../src/Module.ts"
-import { AgentRuntimeLive, runAgent } from "../src/Runtime.ts"
+const { Agent } = AgentPackage
+const { Journal } = JournalPackage
+const { JournalMemory } = JournalMemoryPackage
+const { AgentRuntimeLive, runAgent } = Runtime
 
 it.effect("approval denial is model-visible and does not call the handler", () =>
   Effect.gen(function* () {

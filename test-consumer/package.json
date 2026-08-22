@@ -1,0 +1,9 @@
+{
+  "name": "roop-packed-consumer",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@roop/agent": "file:../roop-agent.tgz",
+    "effect": "4.0.0-beta.97"
+  }
+}

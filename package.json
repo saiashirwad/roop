@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "prepare": "./scripts/prepare-effect.sh",
+    "build": "turbo run build",
+    "test:package": "./scripts/test-packed-agent.sh",
     "typecheck": "turbo run typecheck",
     "lint": "oxlint .",
     "format": "oxfmt --write .",

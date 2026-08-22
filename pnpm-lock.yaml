@@ -43,10 +43,6 @@ importers:
         version: 4.1.10(@types/node@26.1.1)(vite@8.2.1(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
   packages/agent:
-    dependencies:
-      effect:
-        specifier: 4.0.0-beta.97
-        version: 4.0.0-beta.97
     devDependencies:
       '@cloudflare/vitest-pool-workers':
         specifier: ^0.21.2
@@ -60,6 +56,9 @@ importers:
       '@types/node':
         specifier: ^26.1.1
         version: 26.1.1
+      effect:
+        specifier: 4.0.0-beta.97
+        version: 4.0.0-beta.97
       typescript:
         specifier: ^7.0.2
         version: 7.0.2
