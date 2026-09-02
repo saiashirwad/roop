@@ -8,15 +8,17 @@ import { AgentEmit, type AgentEvent } from "./AgentEvents.ts"
 import type { AgentPlan } from "./AgentPlan.ts"
 import { session as makeSession, type SessionRunOptions } from "./AgentSession.ts"
 import {
+  type Capability,
   type ElementErrors,
   type ElementRequirements,
   type Elements,
   capability as makeCapability,
 } from "./Capability.ts"
 import { all as middlewareAll, type Middleware } from "./Middleware.ts"
-import { type Module, tool as moduleTool, when as moduleWhen } from "./Module.ts"
+import { all as moduleAll, type Module, tool as moduleTool, when as moduleWhen } from "./Module.ts"
 import { mergePolicy, type RunPolicy } from "./RunPolicy.ts"
 import { AgentRuntime, type AgentRuntimeRequest } from "./Runtime.ts"
+import { Tasks } from "./Tasks.ts"
 import { ToolExecutionContext } from "./ToolExecutionContext.ts"
 
 /** An explicit value that the runtime renders before each model request. */
@@ -108,16 +110,19 @@ export function tool<const T extends Tool.Any, E = never, R = never>(
     context: Toolkit.HandlerContext<T>,
   ) => Effect.Effect<Tool.Success<T>, E, R>,
   contributor?: string,
-): AgentTool<Exclude<R, ToolExecutionContext | AgentEmit> | Tool.HandlerServices<T>, E> {
+): AgentTool<Exclude<R, RuntimeProvided> | Tool.HandlerServices<T>, E> {
   const mod = moduleTool(definition, handler, contributor)
   return {
     ...mod,
     module: mod,
     metadata: { name: definition.name, description: definition.description },
     tool: definition,
-    /* SAFETY: the runtime provides ToolExecutionContext and AgentEmit to every handler. */
-  } as AgentTool<Exclude<R, ToolExecutionContext | AgentEmit> | Tool.HandlerServices<T>, E>
+    /* SAFETY: the runtime provides ToolExecutionContext, AgentEmit, and Tasks to every handler. */
+  } as AgentTool<Exclude<R, RuntimeProvided> | Tool.HandlerServices<T>, E>
 }
+
+/** Services the runtime provides to every tool handler. */
+type RuntimeProvided = ToolExecutionContext | AgentEmit | Tasks
 
 export interface DelegateOptions<P> {
   readonly name: string
@@ -128,16 +133,8 @@ export interface DelegateOptions<P> {
   readonly preliminary?: ((params: P) => string) | undefined
 }
 
-/**
- * Turn a child agent into a tool. The child's session id is derived from the
- * parent session and tool call, its text becomes the tool result, and its
- * events are forwarded to the parent wrapped in `Subagent`.
- */
-export function delegate<P, ChildR = never, ChildE = never>(
-  child: AgentDefinition<ChildR, ChildE>,
-  options: DelegateOptions<P>,
-): AgentTool<ChildR | AgentRuntime, ChildE> {
-  const definition = Tool.make(options.name, {
+const childTool = <P>(child: AgentDefinition<any, any>, options: DelegateOptions<P>) =>
+  Tool.make(options.name, {
     description: options.description ?? `Delegate task to ${child.name}`,
     parameters:
       options.parameters ??
@@ -147,6 +144,59 @@ export function delegate<P, ChildR = never, ChildE = never>(
     failureMode: options.failureMode ?? "return",
   })
 
+/**
+ * Run a child agent from inside a tool call. The child's session id is derived
+ * from the parent session and tool call, its events are forwarded to the parent
+ * wrapped in `Subagent`, and its text is the result.
+ */
+const runChild = <ChildR, ChildE>(child: AgentDefinition<ChildR, ChildE>, prompt: string) =>
+  Effect.gen(function* () {
+    const runtime = yield* AgentRuntime
+    const parent = yield* Effect.serviceOption(ToolExecutionContext)
+    const emitter = yield* Effect.serviceOption(AgentEmit)
+
+    const sessionId = Option.match(parent, {
+      onNone: () => `child/${child.name}`,
+      onSome: (context) => `${context.sessionId}/agents/${child.name}/${context.callId}`,
+    })
+    const wrap = (event: AgentEvent): AgentEvent =>
+      Option.match(parent, {
+        onNone: () => ({ _tag: "Subagent", name: child.name, event }),
+        onSome: (context) => ({
+          _tag: "Subagent",
+          name: child.name,
+          toolCallId: context.callId,
+          event,
+        }),
+      })
+    const forward = (event: AgentEvent) =>
+      Option.match(emitter, {
+        onNone: () => Effect.void,
+        onSome: ({ emit }) => emit(wrap(event)),
+      })
+
+    return yield* runtime.run(child, { sessionId, prompt }).pipe(
+      Stream.tap(forward),
+      Stream.filter(
+        (event): event is Extract<AgentEvent, { readonly _tag: "TextDelta" }> =>
+          event._tag === "TextDelta",
+      ),
+      Stream.runFold(
+        () => "",
+        (text, event) => text + event.delta,
+      ),
+    )
+  }).pipe(Effect.mapError((error) => (error instanceof Error ? error.message : String(error))))
+
+/**
+ * Turn a child agent into a tool. The call blocks until the child finishes and
+ * returns the child's text.
+ */
+export function delegate<P, ChildR = never, ChildE = never>(
+  child: AgentDefinition<ChildR, ChildE>,
+  options: DelegateOptions<P>,
+): AgentTool<ChildR | AgentRuntime, ChildE> {
+  const definition = childTool(child, options)
   return tool(
     definition,
     (params: P, toolContext: Toolkit.HandlerContext<typeof definition>) =>
@@ -154,46 +204,81 @@ export function delegate<P, ChildR = never, ChildE = never>(
         if (options.preliminary !== undefined) {
           yield* toolContext.preliminary(options.preliminary(params))
         }
-        const runtime = yield* AgentRuntime
-        const parent = yield* Effect.serviceOption(ToolExecutionContext)
-        const emitter = yield* Effect.serviceOption(AgentEmit)
-        const sessionId = Option.match(parent, {
-          onNone: () => `child/${child.name}`,
-          onSome: (context) => `${context.sessionId}/agents/${child.name}/${context.callId}`,
-        })
-        const wrap = (event: AgentEvent): AgentEvent =>
-          Option.match(parent, {
-            onNone: () => ({ _tag: "Subagent", name: child.name, event }),
-            onSome: (context) => ({
-              _tag: "Subagent",
-              name: child.name,
-              toolCallId: context.callId,
-              event,
-            }),
-          })
-        const forward = (event: AgentEvent) =>
-          Option.match(emitter, {
-            onNone: () => Effect.void,
-            onSome: ({ emit }) => emit(wrap(event)),
-          })
-
-        return yield* runtime.run(child, { sessionId, prompt: options.prompt(params) }).pipe(
-          Stream.tap(forward),
-          Stream.filter(
-            (event): event is Extract<AgentEvent, { readonly _tag: "TextDelta" }> =>
-              event._tag === "TextDelta",
-          ),
-          Stream.runFold(
-            () => "",
-            (text, event) => text + event.delta,
-          ),
-        )
-      }).pipe(Effect.mapError((error) => (error instanceof Error ? error.message : String(error)))),
+        return yield* runChild(child, options.prompt(params))
+      }),
     child.name,
+    /* SAFETY: the model and journal the child needs are the run's own; only the
+     * child's declared services and the runtime remain in R. */
   ) as unknown as AgentTool<ChildR | AgentRuntime, ChildE>
 }
 
 export const asTool = delegate
+
+export interface SpawnOptions<P> extends DelegateOptions<P> {
+  /** Name of the collecting tool. Defaults to `await_<name>`. */
+  readonly awaitName?: string | undefined
+}
+
+/**
+ * Turn a child agent into a pair of tools: one that starts the child in the
+ * background and returns a task id at once, and one that waits for a task (or
+ * every task started so far) and returns its text. The model can start several
+ * children in one step and collect them later. Tasks live in the run's scope,
+ * so a run that ends interrupts the children it never collected.
+ */
+export function spawn<P, ChildR = never, ChildE = never>(
+  child: AgentDefinition<ChildR, ChildE>,
+  options: SpawnOptions<P>,
+): Capability<ChildR | AgentRuntime, ChildE> {
+  const awaitName = options.awaitName ?? `await_${options.name}`
+  const start = childTool(child, {
+    ...options,
+    description:
+      options.description ??
+      `Start ${child.name} on a task in the background. Returns a task id; call ${awaitName} to collect the result.`,
+  })
+  const collect = Tool.make(awaitName, {
+    description: `Wait for a task started by ${options.name}. Omit taskId to wait for every task started so far.`,
+    parameters: Schema.Struct({ taskId: Schema.optionalKey(Schema.String) }),
+    success: Schema.String,
+    failure: Schema.String,
+    failureMode: "return",
+  })
+
+  const startTool = tool(
+    start,
+    (params: P) =>
+      Effect.gen(function* () {
+        const tasks = yield* Tasks
+        const id = yield* tasks.spawn(child.name, runChild(child, options.prompt(params)))
+        return `Started task ${id}. Call ${awaitName} to collect its result.`
+      }),
+    child.name,
+  )
+  const awaitTool = tool(
+    collect,
+    ({ taskId }) =>
+      Effect.gen(function* () {
+        const tasks = yield* Tasks
+        if (taskId !== undefined) {
+          return yield* tasks.await(taskId)
+        }
+        const started = yield* tasks.list
+        const results = yield* Effect.forEach(
+          started.filter((task) => task.name === child.name),
+          (task) => tasks.await(task.id).pipe(Effect.map((text) => `## ${task.id}\n${text}`)),
+        )
+        return results.join("\n\n")
+      }).pipe(Effect.mapError((error) => error.message)),
+    child.name,
+  )
+
+  /* SAFETY: as in delegate, the child's model and journal are the run's own. */
+  return makeCapability(options.name, moduleAll(startTool, awaitTool)) as unknown as Capability<
+    ChildR | AgentRuntime,
+    ChildE
+  >
+}
 
 export const capability = makeCapability
 
@@ -281,6 +366,7 @@ export const Agent = {
   tool,
   delegate,
   asTool,
+  spawn,
   capability,
   when,
   withMiddleware,

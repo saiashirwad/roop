@@ -19,6 +19,7 @@ import {
 import type { JournalAppendError } from "../Journal.ts"
 import type { Middleware, ModelCallInput, ToolCallInput } from "../Middleware.ts"
 import type { ResolvedRunPolicy } from "../RunPolicy.ts"
+import { make as makeTasks, Tasks, type TasksService } from "../Tasks.ts"
 import { ToolExecutionContext, type ToolExecutionContextService } from "../ToolExecutionContext.ts"
 import type { FinalizedToolkit, InvalidToolName, ToolConflict } from "../ToolRegistry.ts"
 import {
@@ -216,6 +217,7 @@ export const run = <R, E>(
     const executeStep = Effect.fn("run.executeStep")(function* (
       at: StepAt,
       scheduler: ToolScheduler,
+      tasks: TasksService,
     ) {
       const attempts = yield* Ref.make<AttemptState>({
         active: false,
@@ -224,7 +226,7 @@ export const run = <R, E>(
         open: Option.none(),
       })
       yield* append([stepEvent(at, "started")])
-      return yield* stepBody(at, attempts, scheduler).pipe(
+      return yield* stepBody(at, attempts, scheduler, tasks).pipe(
         Effect.scoped,
         Effect.onExit((exit) =>
           Effect.gen(function* () {
@@ -247,6 +249,7 @@ export const run = <R, E>(
       at: StepAt,
       attempts: Ref.Ref<AttemptState>,
       scheduler: ToolScheduler,
+      tasks: TasksService,
     ) {
       const { turn, step } = at
       const operation = { sessionId: sessionId.toString(), turn, step }
@@ -312,10 +315,12 @@ export const run = <R, E>(
                   stream.pipe(
                     Stream.provideService(ToolExecutionContext, executionContext),
                     Stream.provideService(AgentEmit, emitService),
+                    Stream.provideService(Tasks, tasks),
                   ),
                 ),
                 Effect.provideService(ToolExecutionContext, executionContext),
                 Effect.provideService(AgentEmit, emitService),
+                Effect.provideService(Tasks, tasks),
               ),
             )
           const wrapped = middleware.tool(scheduled)({ ...operation, name, params })
@@ -505,10 +510,11 @@ export const run = <R, E>(
     const executeTurn = Effect.fn("run.executeTurn")(function* (
       turn: number,
       scheduler: ToolScheduler,
+      tasks: TasksService,
     ) {
       const at = { runId, turn }
       yield* append([{ _tag: "turn", ...V, ...at, state: "started" }])
-      return yield* turnBody(turn, scheduler).pipe(
+      return yield* turnBody(turn, scheduler, tasks).pipe(
         Effect.onExit((exit) => {
           const outcome = exitOutcome(exit, (value: TurnOutcome) =>
             value._tag === "Stopped" ? "stopped" : "completed",
@@ -527,12 +533,18 @@ export const run = <R, E>(
       )
     })
 
-    const turnBody = Effect.fn("run.turnBody")(function* (turn: number, scheduler: ToolScheduler) {
+    const turnBody = Effect.fn("run.turnBody")(function* (
+      turn: number,
+      scheduler: ToolScheduler,
+      tasks: TasksService,
+    ) {
       let step = 0
       while (true) {
         step += 1
         const at: StepAt = { runId, turn, step }
-        const outcome: StepOutcome = yield* middleware.step(() => executeStep(at, scheduler))({
+        const outcome: StepOutcome = yield* middleware.step(() =>
+          executeStep(at, scheduler, tasks),
+        )({
           sessionId: sessionId.toString(),
           turn,
           step,
@@ -550,9 +562,12 @@ export const run = <R, E>(
 
     const body = Effect.gen(function* () {
       const scheduler = yield* makeToolScheduler(policy.toolConcurrency)
+      // Background tasks live in the run's scope: unfinished ones are
+      // interrupted when the run ends.
+      const tasks = yield* makeTasks(yield* Effect.scope)
       // A run is one user prompt, so it is one turn; `maxTurns` only gates it.
       if (policy.maxTurns < 1) return yield* emit({ _tag: "Finish", reason: "stopped" })
-      const outcome = yield* middleware.turn(() => executeTurn(1, scheduler))({
+      const outcome = yield* middleware.turn(() => executeTurn(1, scheduler, tasks))({
         sessionId: sessionId.toString(),
         turn: 1,
         step: 0,

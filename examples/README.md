@@ -79,6 +79,15 @@ A lead coordinator agent delegates specialized research tasks to a child agent u
 DEEPSEEK_API_KEY="your-api-key" node examples/subagent-delegation.ts
 ```
 
+### [Parallel Subagents](./parallel-subagents.ts)
+
+The lead starts one researcher per topic in the same step with `Agent.spawn`, then collects them all
+with one `await_research` call. Subagent events stream to the parent while it waits.
+
+```bash
+DEEPSEEK_API_KEY="your-api-key" node examples/parallel-subagents.ts
+```
+
 ### [Resilience & Doom Loop Protection](./resilient-agent.ts)
 
 Protects against infinite repeating tool calls with a `doomLoop` middleware and
