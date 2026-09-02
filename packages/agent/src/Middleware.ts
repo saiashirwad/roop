@@ -1,6 +1,6 @@
-/* oxlint-disable anti-slop/no-unknown-parameters -- middleware helpers accept arbitrary denial payloads across boundaries. */
+/* oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-unknown-returns -- middleware helpers accept arbitrary denial payloads, and composition folds hooks whose A is fixed by the caller. */
 
-import { Context, Effect, Layer, type Scope, Stream } from "effect"
+import { Context, type Effect, Function, Layer, type Scope, Stream } from "effect"
 import type { LanguageModel, Prompt } from "effect/unstable/ai"
 import type * as Tool from "effect/unstable/ai/Tool"
 
@@ -16,9 +16,10 @@ export interface ModelCallInput extends OperationContext {
   readonly prompt: Prompt.Prompt
   readonly attempt: number
   readonly model?: LanguageModel.Service | undefined
-  readonly planId?: string | undefined
-  readonly fingerprint?: string | undefined
-  readonly toolNames?: ReadonlyArray<string> | undefined
+  /** Identifies the logical request; every attempt of one request shares it. */
+  readonly planId: string
+  readonly planFingerprint: string
+  readonly toolNames: ReadonlyArray<string>
 }
 
 export interface ToolCallInput extends OperationContext {
@@ -39,7 +40,7 @@ export type ToolCall<A, E, R> = (input: ToolCallInput) => Stream.Stream<A, E, R>
 export type StepRun<A, E, R> = (input: StepRunInput) => Effect.Effect<A, E, R>
 export type TurnRun<A, E, R> = (input: TurnRunInput) => Effect.Effect<A, E, R>
 
-/** Around-style wrappers for each important interpreter boundary. */
+/** Around-style wrappers for each interpreter boundary. */
 export interface Middleware<out R = never, out E = never> {
   readonly model: <A, E1, R1>(next: ModelCall<A, E1, R1>) => ModelCall<A, E | E1, R | R1>
   readonly tool: <A, E1, R1>(next: ToolCall<A, E1, R1>) => ToolCall<A, E | E1, R | R1>
@@ -49,18 +50,16 @@ export interface Middleware<out R = never, out E = never> {
 
 /** Identity middleware. */
 export const empty: Middleware = {
-  model: (next) => next,
-  tool: (next) => next,
-  step: (next) => next,
-  turn: (next) => next,
+  model: Function.identity,
+  tool: Function.identity,
+  step: Function.identity,
+  turn: Function.identity,
 }
 
 /** Make one middleware value. Omitted boundaries use the identity wrapper. */
 export const make = <R = never, E = never>(value: Partial<Middleware<R, E>>): Middleware<R, E> => ({
-  model: value.model ?? empty.model,
-  tool: value.tool ?? empty.tool,
-  step: value.step ?? empty.step,
-  turn: value.turn ?? empty.turn,
+  ...empty,
+  ...value,
 })
 
 /**
@@ -69,14 +68,24 @@ export const make = <R = never, E = never>(value: Partial<Middleware<R, E>>): Mi
 // oxlint-disable-next-line anti-slop/no-unknown-parameters -- callers may pass custom domain-specific rejection structures.
 export const denyTool = (reason: string, result?: unknown): Stream.Stream<any, never, never> => {
   const payload = result ?? { type: "execution-denied", reason }
-  const part = {
-    result: payload,
-    encodedResult: payload,
-    isFailure: true,
-    preliminary: false,
-  }
+  const part = { result: payload, encodedResult: payload, isFailure: true, preliminary: false }
   /* SAFETY: tool middleware produces handler result parts for Effect AI stream consumers. */
   return Stream.make(part as never)
+}
+
+const compose = <K extends keyof Middleware>(
+  values: ReadonlyArray<Middleware<any, any>>,
+  key: K,
+): Middleware[K] => {
+  const hooks: ReadonlyArray<(next: unknown) => unknown> = values.map(
+    (middleware) =>
+      /* SAFETY: every hook is `(next) => next'`; K selects which boundary. */
+      middleware[key] as (next: unknown) => unknown,
+  )
+  const composed = (next: unknown) => hooks.reduceRight((inner, hook) => hook(inner), next)
+  /* SAFETY: each wrapper keeps A and only widens E and R; `all` declares the
+   * composed channels. */
+  return composed as Middleware[K]
 }
 
 /**
@@ -86,38 +95,10 @@ export const denyTool = (reason: string, result?: unknown): Stream.Stream<any, n
 export const all = <R = never, E = never>(
   ...values: ReadonlyArray<Middleware<R, E>>
 ): Middleware<R, E> => ({
-  model: (next) => {
-    let result = next
-    for (let index = values.length - 1; index >= 0; index--) {
-      /* SAFETY: each wrapper keeps A and only widens the declared E and R channels. */
-      result = values[index]!.model(result) as typeof next
-    }
-    return result
-  },
-  tool: (next) => {
-    let result = next
-    for (let index = values.length - 1; index >= 0; index--) {
-      /* SAFETY: each wrapper keeps A and only widens the declared E and R channels. */
-      result = values[index]!.tool(result) as typeof next
-    }
-    return result
-  },
-  step: (next) => {
-    let result = next
-    for (let index = values.length - 1; index >= 0; index--) {
-      /* SAFETY: each wrapper keeps A and only widens the declared E and R channels. */
-      result = values[index]!.step(result) as typeof next
-    }
-    return result
-  },
-  turn: (next) => {
-    let result = next
-    for (let index = values.length - 1; index >= 0; index--) {
-      /* SAFETY: each wrapper keeps A and only widens the declared E and R channels. */
-      result = values[index]!.turn(result) as typeof next
-    }
-    return result
-  },
+  model: compose(values, "model"),
+  tool: compose(values, "tool"),
+  step: compose(values, "step"),
+  turn: compose(values, "turn"),
 })
 
 /** Layer service for applications that build middleware with dependencies. */
@@ -125,25 +106,14 @@ export class MiddlewareService extends Context.Service<MiddlewareService, Middle
   "roop/Middleware",
 ) {}
 
-export const layerEmpty: Layer.Layer<MiddlewareService> = Layer.succeed(
-  MiddlewareService,
-  MiddlewareService.of(empty),
-)
+export const layerEmpty: Layer.Layer<MiddlewareService> = Layer.succeed(MiddlewareService, empty)
 
 /** Build a middleware service while preserving the builder requirements and failures. */
-export const layer = <R, E>(
-  name: string,
-  build: Effect.Effect<Middleware<never, never>, E, R>,
-): Layer.Layer<MiddlewareService, E, R> =>
-  Layer.effect(MiddlewareService, build.pipe(Effect.map((mw) => MiddlewareService.of(mw)))).pipe(
-    Layer.withSpan(`Middleware/${name}`),
-  )
+export const layer = <R, E>(name: string, build: Effect.Effect<Middleware, E, R>) =>
+  Layer.effect(MiddlewareService, build).pipe(Layer.withSpan(`Middleware/${name}`))
 
 /** Build a scoped middleware service. Its finalizer follows the Layer scope. */
 export const layerScoped = <R, E>(
   name: string,
-  build: Effect.Effect<Middleware<never, never>, E, R | Scope.Scope>,
-): Layer.Layer<MiddlewareService, E, R> =>
-  Layer.effect(MiddlewareService, build.pipe(Effect.map((mw) => MiddlewareService.of(mw)))).pipe(
-    Layer.withSpan(`Middleware/${name}`),
-  )
+  build: Effect.Effect<Middleware, E, R | Scope.Scope>,
+) => layer(name, build)

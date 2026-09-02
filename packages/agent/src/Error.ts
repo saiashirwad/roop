@@ -1,43 +1,11 @@
-import { Cause, Result, Schema } from "effect"
+import { Cause, Option, Schema } from "effect"
 
 import { SessionId } from "./DomainIds.ts"
 
-/** A typed operational failure emitted by the run stream. */
-export class RunError extends Schema.TaggedErrorClass<RunError>()("RunError", {
-  operation: Schema.Literals(["model", "tool", "scheduler", "journal", "interpreter", "unknown"]),
-  originalCause: Schema.Unknown,
-  context: Schema.Unknown,
-}) {
-  override get message(): string {
-    return `Run error during ${this.operation}`
-  }
-}
-
-/** Preserve an arbitrary Effect failure while giving callers a stable error tag. */
-export interface RunErrorContext {
-  readonly sessionId?: SessionId | string | undefined
-}
-
-/**
- * Wrap a failure at an explicit interpreter boundary.
- *
- * The operation is supplied by the caller. This function deliberately does
- * not inspect `_tag`: extension errors are not a closed catalogue and string
- * matching misclassifies them.
- */
-export const runError = (
-  cause: unknown,
-  context: RunErrorContext = {},
-  operation: RunError["operation"] = "interpreter",
-): RunError => {
-  const original = Cause.isCause(cause)
-    ? (() => {
-        const found = Cause.findError(cause)
-        return Result.isSuccess(found) ? found.success : cause
-      })()
-    : cause
-  return new RunError({ operation, originalCause: original, context })
-}
+/** The typed error inside a cause, or the cause itself when it holds none. */
+// oxlint-disable-next-line anti-slop/no-unknown-returns -- the failure is stored in a Schema.Unknown field for later inspection.
+export const originalError = (cause: Cause.Cause<unknown>): unknown =>
+  Option.getOrElse(Cause.findErrorOption(cause), () => cause)
 
 /** A terminal Journal failure that preserves the original typed failure. */
 export class FinalizationError extends Schema.TaggedErrorClass<FinalizationError>()(

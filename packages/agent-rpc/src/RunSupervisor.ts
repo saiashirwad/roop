@@ -32,7 +32,6 @@ type AgentEvent = AgentEvents.AgentEvent
 type FinalizationError = AgentError.FinalizationError
 type UnsafeModelRetry = AgentError.UnsafeModelRetry
 type ModelTimeout = AgentError.ModelTimeout
-type RunError = AgentError.RunError
 type InvalidToolName = ToolRegistry.InvalidToolName
 type ToolConflict = ToolRegistry.ToolConflict
 
@@ -58,7 +57,6 @@ export type RunSupervisorError =
   | SessionBusy
   | RunNotFound
   | AiError.AiError
-  | RunError
   | JournalLoadError
   | JournalAppendError
   | FinalizationError

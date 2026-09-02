@@ -100,6 +100,9 @@ it.effect("uses the same outermost-first order at every boundary", () =>
             step: 1,
             prompt: Prompt.empty,
             attempt: 1,
+            planId: "plan",
+            planFingerprint: "plan",
+            toolNames: [],
           })
           .pipe(Stream.runDrain)
       } else if (boundary === "tool") {
@@ -193,6 +196,9 @@ it.effect("interrupts model fallback waiting without starting another attempt", 
       step: 1,
       prompt: Prompt.empty,
       attempt: 1,
+      planId: "plan",
+      planFingerprint: "plan",
+      toolNames: [],
     })
     const fiber = yield* Stream.runDrain(stream).pipe(Effect.forkChild)
     yield* Deferred.await(waiting)

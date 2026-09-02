@@ -1,10 +1,7 @@
-/* oxlint-disable anti-slop/require-safety-comment-for-type-assertion -- SAFETY: legacy SessionEvent values cross the temporary compatibility JSON boundary; the new JournalEvent path is schema-validated. */
-
-import { Option } from "effect"
+import { Array as Arr, Option } from "effect"
 import { Prompt } from "effect/unstable/ai"
 
-import type { SessionEvent } from "./AgentEvents.ts"
-import { EVENT_VERSION, type JournalEvent, type LiveEvent, type LifecycleState } from "./Event.ts"
+import { EVENT_VERSION, type JournalEvent, type LifecycleState } from "./Event.ts"
 
 /** The pure result of projecting a committed Journal prefix. */
 export interface History {
@@ -13,18 +10,10 @@ export interface History {
   readonly openSpans: ReadonlyArray<string>
 }
 
-/** Input accepted while the old SessionEvent bridge is being removed. */
-export type HistoryEvent = JournalEvent | SessionEvent
-
-type AssistantPart = Prompt.AssistantMessagePart
-type ToolPart = Prompt.ToolMessagePart
-
 type ToolRecord = Extract<JournalEvent, { readonly _tag: "tool/call" | "tool/result" }>
 
 const toolRecordKey = (event: ToolRecord): string =>
   `${event.runId ?? "legacy"}:${event.turn ?? 0}:${event.step ?? 0}:${event.id}`
-
-const isJournalEvent = (event: HistoryEvent): event is JournalEvent => "version" in event
 
 const isTerminal = (state: LifecycleState): boolean =>
   state === "completed" || state === "aborted" || state === "recovered"
@@ -34,34 +23,49 @@ type SpanEvent = Extract<
   { readonly _tag: "run" | "turn" | "step" | "model/attempt" | "tool" }
 >
 
-const isSpanEvent = (event: JournalEvent): event is SpanEvent =>
-  event._tag === "run" ||
-  event._tag === "turn" ||
-  event._tag === "step" ||
-  event._tag === "model/attempt" ||
-  event._tag === "tool"
-
-const spanKey = (event: JournalEvent): Option.Option<string> => {
+const spanKey = (event: SpanEvent): string => {
   switch (event._tag) {
     case "run":
-      return Option.some(`run:${event.runId}`)
+      return `run:${event.runId}`
     case "turn":
-      return Option.some(`turn:${event.runId}:${event.turn}`)
+      return `turn:${event.runId}:${event.turn}`
     case "step":
-      return Option.some(`step:${event.runId}:${event.turn}:${event.step}`)
+      return `step:${event.runId}:${event.turn}:${event.step}`
     case "model/attempt":
-      return Option.some(`attempt:${event.runId}:${event.turn}:${event.step}:${event.attempt}`)
+      return `attempt:${event.runId}:${event.turn}:${event.step}:${event.attempt}`
     case "tool":
-      return Option.some(`tool:${event.runId}:${event.turn}:${event.step}:${event.id}`)
+      return `tool:${event.runId}:${event.turn}:${event.step}:${event.id}`
+  }
+}
+
+const spanEvent = (event: JournalEvent): Option.Option<SpanEvent> => {
+  switch (event._tag) {
+    case "run":
+    case "turn":
+    case "step":
+    case "model/attempt":
+    case "tool":
+      return Option.some(event)
     default:
       return Option.none()
   }
 }
 
-const appendMessages = (events: ReadonlyArray<JournalEvent>): ReadonlyArray<Prompt.Message> => {
+/** Walk the span lifecycle, keeping the still-open `started` events by key. */
+const openSpans = (events: ReadonlyArray<JournalEvent>): Map<string, SpanEvent> => {
+  const open = new Map<string, SpanEvent>()
+  for (const event of Arr.getSomes(events.map(spanEvent))) {
+    const key = spanKey(event)
+    if (event.state === "started") open.set(key, event)
+    else if (isTerminal(event.state)) open.delete(key)
+  }
+  return open
+}
+
+const toMessages = (events: ReadonlyArray<JournalEvent>): ReadonlyArray<Prompt.Message> => {
   const messages: Array<Prompt.Message> = []
-  let assistantParts: Array<AssistantPart> = []
-  let toolParts: Array<ToolPart> = []
+  let assistantParts: Array<Prompt.AssistantMessagePart> = []
+  let toolParts: Array<Prompt.ToolMessagePart> = []
   const pendingCalls = new Set<string>()
 
   const flushTool = () => {
@@ -113,8 +117,7 @@ const appendMessages = (events: ReadonlyArray<JournalEvent>): ReadonlyArray<Prom
         )
         break
       case "tool/result":
-        if (!pendingCalls.has(toolRecordKey(event))) break
-        pendingCalls.delete(toolRecordKey(event))
+        if (!pendingCalls.delete(toolRecordKey(event))) break
         flushAssistant()
         toolParts.push(
           Prompt.makePart("tool-result", {
@@ -133,146 +136,63 @@ const appendMessages = (events: ReadonlyArray<JournalEvent>): ReadonlyArray<Prom
   return messages
 }
 
-const legacyToJournal = (event: SessionEvent): Option.Option<JournalEvent> => {
-  switch (event._tag) {
-    case "system/message":
-      return Option.some({ _tag: "system/message", version: EVENT_VERSION, content: event.content })
-    case "user/message":
-      return Option.some({ _tag: "user/message", version: EVENT_VERSION, content: event.content })
-    case "assistant/message":
-      return Option.some({ _tag: "assistant/message", version: EVENT_VERSION, parts: event.parts })
-    case "tool/call":
-      return Option.some({
-        _tag: "tool/call",
-        version: EVENT_VERSION,
-        id: event.id,
-        name: event.name,
-        params: event.params as never,
-        ...(event.providerExecuted === undefined
-          ? undefined
-          : { providerExecuted: event.providerExecuted }),
-      })
-    case "tool/result":
-      return Option.some({
-        _tag: "tool/result",
-        version: EVENT_VERSION,
-        id: event.id,
-        name: event.name,
-        isFailure: event.isFailure,
-        result: event.result as never,
-        ...(event.providerExecuted === undefined
-          ? undefined
-          : { providerExecuted: event.providerExecuted }),
-      })
-    case "model/request":
-      return Option.some({
-        _tag: "model/request",
-        version: EVENT_VERSION,
-        runId: "legacy",
-        turn: 0,
-        step: 0,
-        requestId: "legacy",
-        request: event.request as never,
-        planFingerprint: "legacy",
-        promptFingerprint: "legacy",
-        toolFingerprint: "legacy",
-        toolNames: [],
-      })
-    default:
-      return Option.none()
-  }
-}
-
-const normalize = (events: ReadonlyArray<HistoryEvent>): Array<JournalEvent> => {
-  const normalized: Array<JournalEvent> = []
-  for (const event of events) {
-    if (isJournalEvent(event)) {
-      normalized.push(event)
-    } else {
-      const converted = legacyToJournal(event)
-      if (Option.isSome(converted)) {
-        normalized.push(converted.value)
-      }
-    }
-  }
-  return normalized
-}
-
 /**
- * Return the deterministic semantic projection of a committed event prefix.
- * This function is pure. It does not load, append, or otherwise access storage.
+ * The deterministic semantic projection of a committed event prefix.
+ * Pure: it does not load, append, or otherwise access storage.
  */
-export const fromEvents = (events: ReadonlyArray<HistoryEvent>): History => {
-  const normalized = normalize(events)
-  const open = new Set<string>()
-  for (const event of normalized) {
-    const keyOpt = spanKey(event)
-    if (Option.isNone(keyOpt)) continue
-    if (!isSpanEvent(event)) continue
-    const key = keyOpt.value
-    if (event.state === "started") open.add(key)
-    else if (isTerminal(event.state)) open.delete(key)
-  }
-  return {
-    events: normalized,
-    messages: appendMessages(normalized),
-    openSpans: [...open],
-  }
-}
+export const fromEvents = (events: ReadonlyArray<JournalEvent>): History => ({
+  events,
+  messages: toMessages(events),
+  openSpans: [...openSpans(events).keys()],
+})
 
-/** Convert a history or event sequence to the model-facing prompt. */
-const isHistory = (input: History | ReadonlyArray<HistoryEvent>): input is History =>
-  !Array.isArray(input)
+/** The model-facing prompt of a history. */
+export const toPrompt = (history: History | ReadonlyArray<JournalEvent>): Prompt.Prompt =>
+  Prompt.fromMessages("messages" in history ? history.messages : toMessages(history))
 
-export const toPrompt = (history: History | ReadonlyArray<HistoryEvent>): Prompt.Prompt =>
-  Prompt.fromMessages(fromEvents(isHistory(history) ? history.events : history).messages)
-
-const recoveredState = (event: JournalEvent): Option.Option<JournalEvent> => {
+const recoveredState = (event: SpanEvent): JournalEvent => {
   switch (event._tag) {
     case "run":
-      return Option.some({ ...event, state: "recovered", reason: "interrupted" })
     case "turn":
-      return Option.some({ ...event, state: "recovered", reason: "interrupted" })
     case "step":
-      return Option.some({ ...event, state: "recovered", reason: "interrupted" })
+      return { ...event, state: "recovered", reason: "interrupted" }
     case "model/attempt":
-      return Option.some({ ...event, state: "recovered", message: "recovered before completion" })
+      return { ...event, state: "recovered", message: "recovered before completion" }
     case "tool":
-      return Option.some({
+      return {
         ...event,
         state: "recovered",
         isFailure: true,
         result: { type: "execution-unknown" },
         failureReason: "execution-unknown",
-      })
-    default:
-      return Option.none()
+      }
   }
+}
+
+/** Innermost spans close first. */
+const closeOrder: Record<SpanEvent["_tag"], number> = {
+  tool: 0,
+  "model/attempt": 1,
+  step: 2,
+  turn: 3,
+  run: 4,
 }
 
 /** Events required to close every open span before a resumed run starts work. */
 export const recoveryEvents = (
-  events: ReadonlyArray<HistoryEvent>,
+  events: ReadonlyArray<JournalEvent>,
 ): ReadonlyArray<JournalEvent> => {
-  const normalized = normalize(events)
-  const open = new Map<string, JournalEvent>()
   const calls = new Map<string, Extract<JournalEvent, { readonly _tag: "tool/call" }>>()
   const results = new Set<string>()
-  for (const event of normalized) {
-    const keyOpt = spanKey(event)
-    if (Option.isSome(keyOpt) && isSpanEvent(event)) {
-      const key = keyOpt.value
-      if (event.state === "started") open.set(key, event)
-      else if (isTerminal(event.state)) open.delete(key)
-    }
+  for (const event of events) {
     if (event._tag === "tool/call") calls.set(toolRecordKey(event), event)
     if (event._tag === "tool/result") results.add(toolRecordKey(event))
   }
 
-  const recovered: Array<JournalEvent> = []
+  const unresolved: Array<JournalEvent> = []
   for (const [key, call] of calls) {
     if (results.has(key)) continue
-    recovered.push({
+    unresolved.push({
       _tag: "tool/result",
       version: EVENT_VERSION,
       ...(call.runId === undefined ? undefined : { runId: call.runId }),
@@ -286,33 +206,10 @@ export const recoveryEvents = (
     })
   }
 
-  const ordered = [...open.values()].sort((left, right) => {
-    const rank = (event: JournalEvent): number =>
-      event._tag === "tool"
-        ? 0
-        : event._tag === "model/attempt"
-          ? 1
-          : event._tag === "step"
-            ? 2
-            : event._tag === "turn"
-              ? 3
-              : 4
-    return rank(left) - rank(right)
-  })
-  for (const event of ordered) {
-    const closureOpt = recoveredState(event)
-    if (Option.isSome(closureOpt)) recovered.push(closureOpt.value)
-  }
-  return recovered
+  const closed = [...openSpans(events).values()]
+    .sort((left, right) => closeOrder[left._tag] - closeOrder[right._tag])
+    .map(recoveredState)
+  return [...unresolved, ...closed]
 }
 
-/** Project semantic journal records into the versioned live event union. */
-export const projectLiveEvents = (events: ReadonlyArray<HistoryEvent>): ReadonlyArray<LiveEvent> =>
-  normalize(events) as ReadonlyArray<LiveEvent>
-
-export const History = Object.assign(fromEvents, {
-  fromEvents,
-  toPrompt,
-  recoveryEvents,
-  projectLiveEvents,
-})
+export const History = Object.assign(fromEvents, { fromEvents, toPrompt, recoveryEvents })

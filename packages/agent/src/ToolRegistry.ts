@@ -1,15 +1,9 @@
-/* oxlint-disable anti-slop/no-chained-type-assertions, anti-slop/no-escape-hatch-assertions, anti-slop/require-safety-comment-for-type-assertion -- registry finalization crosses one intentional existential Effect AI boundary after conflict validation. */
+/* oxlint-disable anti-slop/no-chained-type-assertions, anti-slop/no-escape-hatch-assertions, anti-slop/require-safety-comment-for-type-assertion -- finalize is the single existential Effect AI boundary; it erases handler services once, after conflict validation. */
 
-import { type Context, Effect, Layer, Schema, type Scope, type Stream } from "effect"
+import { Array as Arr, type Context, Effect, Layer, Schema, type Scope, type Stream } from "effect"
 import type * as AiError from "effect/unstable/ai/AiError"
 import type * as Tool from "effect/unstable/ai/Tool"
 import * as Toolkit from "effect/unstable/ai/Toolkit"
-
-const eraseToolkit = <Tools extends Record<string, Tool.Any>>(
-  toolkit: Toolkit.WithHandler<Tools>,
-): Toolkit.WithHandler<Record<string, Tool.Any>> =>
-  /* SAFETY: Effect AI validates each named call against the matching tool schema. */
-  toolkit as unknown as Toolkit.WithHandler<Record<string, Tool.Any>>
 
 /** A tool name was empty and cannot be sent to a model. */
 export class InvalidToolName extends Schema.TaggedErrorClass<InvalidToolName>()("InvalidToolName", {
@@ -31,16 +25,17 @@ export class ToolConflict extends Schema.TaggedErrorClass<ToolConflict>()("ToolC
   }
 }
 
+type ErasedHandlerLayer = Layer.Layer<never>
+
 /** A typed tool declaration plus its Effect AI handler layer. */
-export interface ToolContribution<out R = never, out E = never> {
+export interface ToolContribution {
   readonly tool: Tool.Any
   readonly contributor: string
   readonly toolkit: Toolkit.Any
   readonly handlers: ErasedHandlerLayer
-  readonly _R?: (_: never) => R
-  readonly _E?: (_: never) => E
 }
 
+/** An installed toolkit whose handler services were satisfied at finalize time. */
 export interface FinalizedToolkit extends Omit<
   Toolkit.WithHandler<Record<string, Tool.Any>>,
   "handle"
@@ -57,17 +52,8 @@ export interface FinalizedToolRegistry {
   readonly handlers: ErasedHandlerLayer
 }
 
-type ErasedHandlerLayer = Layer.Layer<never>
-
-interface RegistryInput {
-  readonly contributions: ReadonlyArray<unknown>
-}
-
-type RegistryRequirements<T> = T extends ToolRegistry<infer R, infer _E> ? R : never
-type RegistryErrors<T> = T extends ToolRegistry<infer _R, infer E> ? E : never
-
 export interface ToolRegistry<out R = never, out E = never> {
-  readonly contributions: ReadonlyArray<ToolContribution<R, E>>
+  readonly contributions: ReadonlyArray<ToolContribution>
   readonly finalize: Effect.Effect<
     FinalizedToolRegistry,
     ToolConflict | InvalidToolName | E,
@@ -75,20 +61,20 @@ export interface ToolRegistry<out R = never, out E = never> {
   >
 }
 
-const finalizeContributions = Effect.fn("ToolRegistry.finalize")(function* <R, E>(
-  contributions: ReadonlyArray<ToolContribution<R, E>>,
+type Requirements<T> = T extends ToolRegistry<infer R, infer _E> ? R : never
+type Errors<T> = T extends ToolRegistry<infer _R, infer E> ? E : never
+
+const finalizeContributions = Effect.fn("ToolRegistry.finalize")(function* (
+  contributions: ReadonlyArray<ToolContribution>,
 ) {
-  const byName = new Map<string, Array<ToolContribution<R, E>>>()
+  const byName = new Map<string, Array<ToolContribution>>()
   for (const contribution of contributions) {
     const name = contribution.tool.name
     if (name.trim() === "") {
       return yield* new InvalidToolName({ name, contributor: contribution.contributor })
     }
-    const entries = byName.get(name)
-    if (entries === undefined) byName.set(name, [contribution])
-    else entries.push(contribution)
+    byName.set(name, [...(byName.get(name) ?? []), contribution])
   }
-
   for (const [name, entries] of byName) {
     if (entries.length > 1) {
       return yield* new ToolConflict({
@@ -99,90 +85,73 @@ const finalizeContributions = Effect.fn("ToolRegistry.finalize")(function* <R, E
   }
 
   const tools = contributions.map((contribution) => contribution.tool)
-  const toolkit =
-    tools.length === 0
-      ? Toolkit.empty
-      : Toolkit.make(
-          /* SAFETY: the length guard proves this is a non-empty tool tuple. */
-          ...(tools as [Tool.Any, ...Array<Tool.Any>]),
-        )
+  const toolkit = Arr.isArrayNonEmpty(tools) ? Toolkit.make(...tools) : Toolkit.empty
   const handlerLayers = contributions.map((contribution) => contribution.handlers)
-  const handlers: ErasedHandlerLayer =
-    handlerLayers.length === 0
-      ? Layer.empty
-      : Layer.mergeAll(
-          /* SAFETY: the length guard proves this is a non-empty layer tuple. */
-          ...(handlerLayers as [ErasedHandlerLayer, ...Array<ErasedHandlerLayer>]),
-        )
+  const handlers: ErasedHandlerLayer = Arr.isArrayNonEmpty(handlerLayers)
+    ? Layer.mergeAll(...handlerLayers)
+    : Layer.empty
   // SAFETY: all tool names were validated as unique above. The existential
   // handler relationship is erased once, at this Effect AI boundary.
   const handlerContext = yield* Layer.build(
     handlers as unknown as Layer.Layer<Tool.Handler<string>>,
   )
   const installed = yield* (toolkit as Toolkit.Toolkit<Record<string, Tool.Any>>).pipe(
-    Effect.map(eraseToolkit),
     Effect.provide(handlerContext),
   )
   return {
-    /* SAFETY: finalization installs the handler layers and captures their
-     * services. Dynamic calls retain the registry error channel. */
     toolkit: installed as unknown as FinalizedToolkit,
     tools,
     handlers,
-  }
+  } satisfies FinalizedToolRegistry
 })
 
+/** R and E are the constructor's claim about the erased handler layers. */
 const makeRegistry = <R, E>(
-  contributions: ReadonlyArray<ToolContribution<R, E>>,
+  contributions: ReadonlyArray<ToolContribution>,
 ): ToolRegistry<R, E> => ({
   contributions,
-  /* SAFETY: finalize has the same channels; the cast only restores the
-   * existential contribution type hidden by the runtime collection. */
-  finalize: finalizeContributions(contributions) as ToolRegistry<R, E>["finalize"],
+  finalize: finalizeContributions(contributions),
 })
 
 export const empty: ToolRegistry = makeRegistry([])
 
-export const fromContribution = <R, E>(contribution: ToolContribution<R, E>): ToolRegistry<R, E> =>
+export const fromContribution = <R, E>(contribution: ToolContribution): ToolRegistry<R, E> =>
   makeRegistry([contribution])
 
-export const combine = <const Registries extends ReadonlyArray<RegistryInput>>(
+export const combine = <const Registries extends ReadonlyArray<ToolRegistry<any, any>>>(
   ...registries: Registries
-): ToolRegistry<RegistryRequirements<Registries[number]>, RegistryErrors<Registries[number]>> =>
+): ToolRegistry<Requirements<Registries[number]>, Errors<Registries[number]>> =>
+  makeRegistry(registries.flatMap((registry) => registry.contributions))
+
+/** Satisfy part of every contribution's handler requirements with one layer. */
+const provideHandlers = <R, E, ROut, E2, RIn>(
+  registry: ToolRegistry<R, E>,
+  layer: Layer.Layer<ROut, E2, RIn>,
+): ToolRegistry<RIn | Exclude<R, ROut>, E | E2> =>
   makeRegistry(
-    registries.flatMap((registry) => registry.contributions) as ReadonlyArray<
-      ToolContribution<RegistryRequirements<Registries[number]>, RegistryErrors<Registries[number]>>
-    >,
-  )
+    registry.contributions.map((contribution) => ({
+      ...contribution,
+      handlers: Layer.provide(
+        contribution.handlers as unknown as Layer.Layer<never, never, R>,
+        layer,
+      ) as ErasedHandlerLayer,
+    })),
+  ) as ToolRegistry<RIn | Exclude<R, ROut>, E | E2>
 
 export const provideService = <R, E, I, S>(
   registry: ToolRegistry<R, E>,
   service: Context.Key<I, S>,
   value: S,
-): ToolRegistry<Exclude<R, I>, E> =>
-  makeRegistry(
-    registry.contributions.map((contribution) => ({
-      ...contribution,
-      handlers: Layer.provide(
-        contribution.handlers as unknown as Layer.Layer<never, never, R>,
-        Layer.succeed(service, value),
-      ) as ErasedHandlerLayer,
-    })),
-  ) as ToolRegistry<Exclude<R, I>, E>
+): ToolRegistry<Exclude<R, I>, E> => provideHandlers(registry, Layer.succeed(service, value))
 
 export const provideLayer = <R, E, L extends Layer.Any>(
   registry: ToolRegistry<R, E>,
   layer: L,
 ): ToolRegistry<Layer.Services<L> | Exclude<R, Layer.Success<L>>, E | Layer.Error<L>> =>
-  makeRegistry(
-    registry.contributions.map((contribution) => ({
-      ...contribution,
-      handlers: Layer.provide(
-        contribution.handlers as unknown as Layer.Layer<never, never, R>,
-        layer as unknown as Layer.Layer<Layer.Success<L>, Layer.Error<L>, Layer.Services<L>>,
-      ) as ErasedHandlerLayer,
-    })),
-  ) as ToolRegistry<Layer.Services<L> | Exclude<R, Layer.Success<L>>, E | Layer.Error<L>>
+  provideHandlers(
+    registry,
+    layer as unknown as Layer.Layer<Layer.Success<L>, Layer.Error<L>, Layer.Services<L>>,
+  )
 
 export const ToolRegistry = Object.assign(makeRegistry, {
   empty,

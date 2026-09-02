@@ -1,23 +1,19 @@
 import { Crypto, Effect, Schema } from "effect"
 
-const branded = <const Name extends string>(name: Name) => Schema.String.pipe(Schema.brand(name))
+/** A branded, namespaced string id with a validator and a portable generator. */
+const domainId = <const Name extends string>(label: Name, brand: `roop/${Name}`) => {
+  const schema = Schema.String.pipe(Schema.brand(brand))
+  return Object.assign(schema, {
+    is: Schema.is(schema),
+    generate: Effect.fn(`DomainIds.${label}.generate`)(function* () {
+      const crypto = yield* Crypto.Crypto
+      return schema.make(yield* Effect.orDie(crypto.randomUUIDv4))
+    }),
+  })
+}
 
-const SessionIdSchema = branded("roop/SessionId")
-export const SessionId = Object.assign(SessionIdSchema, {
-  is: Schema.is(SessionIdSchema),
-  generate: Effect.fn("DomainIds.SessionId.generate")(function* () {
-    const crypto = yield* Crypto.Crypto
-    return SessionIdSchema.make(yield* Effect.orDie(crypto.randomUUIDv4))
-  }),
-})
+export const SessionId = domainId("SessionId", "roop/SessionId")
 export type SessionId = typeof SessionId.Type
 
-const RunIdSchema = branded("roop/RunId")
-export const RunId = Object.assign(RunIdSchema, {
-  is: Schema.is(RunIdSchema),
-  generate: Effect.fn("DomainIds.RunId.generate")(function* () {
-    const crypto = yield* Crypto.Crypto
-    return RunIdSchema.make(yield* Effect.orDie(crypto.randomUUIDv4))
-  }),
-})
+export const RunId = domainId("RunId", "roop/RunId")
 export type RunId = typeof RunId.Type

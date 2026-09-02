@@ -15,5 +15,3 @@ export class ToolExecutionContext extends Context.Service<
   ToolExecutionContext,
   ToolExecutionContextService
 >()("roop/ToolExecutionContext") {}
-
-export type ToolExecutionContextPayload = ToolExecutionContextService

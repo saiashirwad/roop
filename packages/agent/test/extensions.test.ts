@@ -77,6 +77,9 @@ it.effect("loop guard and pruning compose in declaration order", () =>
         step: 1,
         prompt: Prompt.empty,
         attempt: 1,
+        planId: "plan",
+        planFingerprint: "plan",
+        toolNames: [],
       })
       .pipe(Stream.runCollect)
     assert.deepStrictEqual([...output], [1])
@@ -105,6 +108,9 @@ it.effect("public fallback and context pruning wrap a model request", () =>
         step: 1,
         prompt: Prompt.make("original"),
         attempt: 1,
+        planId: "plan",
+        planFingerprint: "plan",
+        toolNames: [],
       })
       .pipe(Stream.runCollect)
 

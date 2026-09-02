@@ -1,26 +1,13 @@
-/* oxlint-disable anti-slop/no-chained-type-assertions, anti-slop/no-escape-hatch-assertions, anti-slop/require-safety-comment-for-type-assertion -- capability and module composition preserve typed effect channels across boundaries. */
+import { type Module, all as moduleAll, instructions as moduleInstructions } from "./Module.ts"
 
-import type { Effect } from "effect"
-
-import type { AgentContext } from "./AgentContext.ts"
-import {
-  type AgentContribution,
-  type Module,
-  all as moduleAll,
-  instructions as moduleInstructions,
-} from "./Module.ts"
-
-export interface Capability<out R = never, out E = never> {
+/** A named bundle of instructions and tools. It is itself a Module. */
+export interface Capability<out R = never, out E = never> extends Module<R, E> {
   readonly name: string
   readonly module: Module<R, E>
-  readonly build: (context: AgentContext) => Effect.Effect<AgentContribution<R, E>, E, R>
 }
 
-export type CapabilityElement<R, E> =
-  | Capability<R, E>
-  | Module<R, E>
-  | { readonly module: Module<R, E> }
-  | { readonly build: (context: AgentContext) => Effect.Effect<AgentContribution<R, E>, E, R> }
+/** Anything that contributes a Module: a Module, a Capability, or an AgentTool. */
+export type CapabilityElement<R, E> = Module<R, E> | { readonly module: Module<R, E> }
 
 export interface CapabilityOptions<R = never, E = never> {
   readonly name: string
@@ -29,56 +16,28 @@ export interface CapabilityOptions<R = never, E = never> {
   readonly capabilities?: ReadonlyArray<CapabilityElement<R, E>> | undefined
 }
 
-const extractModule = <R, E>(element: CapabilityElement<R, E>): Module<R, E> => {
-  if (
-    "module" in element &&
-    typeof element.module === "object" &&
-    element.module !== null &&
-    "build" in element.module
-  ) {
-    return element.module as Module<R, E>
-  }
-  return element as Module<R, E>
-}
+const toModule = <R, E>(element: CapabilityElement<R, E>): Module<R, E> =>
+  "module" in element ? element.module : element
 
 export function capability<R = never, E = never>(options: CapabilityOptions<R, E>): Capability<R, E>
 export function capability<R = never, E = never>(
   name: string,
   module: Module<R, E>,
 ): Capability<R, E>
-export function capability<R = never, E = never>(
+export function capability<R, E>(
   nameOrOptions: string | CapabilityOptions<R, E>,
   maybeModule?: Module<R, E>,
 ): Capability<R, E> {
-  if (typeof nameOrOptions === "object" && nameOrOptions !== null) {
-    const opts = nameOrOptions
-    const modules: Array<Module<R, E>> = []
-    if (opts.instructions !== undefined && opts.instructions.trim() !== "") {
-      modules.push(moduleInstructions(opts.instructions) as Module<R, E>)
-    }
-    if (opts.tools !== undefined) {
-      for (const t of opts.tools) {
-        modules.push(extractModule(t))
-      }
-    }
-    if (opts.capabilities !== undefined) {
-      for (const c of opts.capabilities) {
-        modules.push(extractModule(c))
-      }
-    }
-    const combined = moduleAll(...modules) as Module<R, E>
-    return {
-      name: opts.name,
-      module: combined,
-      build: combined.build,
-    }
+  if (typeof nameOrOptions === "string") {
+    const module = maybeModule!
+    return { name: nameOrOptions, module, build: module.build }
   }
-
-  const name = nameOrOptions
-  const mod = maybeModule!
-  return {
-    name,
-    module: mod,
-    build: mod.build,
-  }
+  const { name, instructions = "", tools = [], capabilities = [] } = nameOrOptions
+  /* SAFETY: every element carries R and E; `all` re-states the union it collected. */
+  const module = moduleAll(
+    moduleInstructions(instructions),
+    ...tools.map(toModule),
+    ...capabilities.map(toModule),
+  ) as Module<R, E>
+  return { name, module, build: module.build }
 }

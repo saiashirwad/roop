@@ -12,7 +12,7 @@ const {
   JournalSnapshotSchema,
   JournalError,
 } = Journal
-const { FinalizationError, UnsafeModelRetry, ModelTimeout, RunError: RunErrorSchema } = AgentError
+const { FinalizationError, UnsafeModelRetry, ModelTimeout } = AgentError
 const { InvalidToolName, ToolConflict } = ToolRegistry
 const { AgentEvent } = AgentEvents
 const { RunPolicy: RunPolicySchema } = RunPolicy
@@ -30,7 +30,6 @@ export const AgentRpc = RpcGroup.make(
       SessionBusy,
       RunNotFound,
       AiError.AiError,
-      RunErrorSchema,
       JournalError,
       JournalRevisionConflict,
       JournalEmptyAppend,
@@ -50,7 +49,6 @@ export const AgentRpc = RpcGroup.make(
       SessionBusy,
       RunNotFound,
       AiError.AiError,
-      RunErrorSchema,
       JournalError,
       JournalRevisionConflict,
       JournalEmptyAppend,

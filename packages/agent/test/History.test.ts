@@ -1,7 +1,7 @@
 import { assert, it } from "@effect/vitest"
 
 import { EVENT_VERSION } from "../src/Event.ts"
-import { fromEvents, projectLiveEvents, recoveryEvents, toPrompt } from "../src/History.ts"
+import { fromEvents, recoveryEvents, toPrompt } from "../src/History.ts"
 
 const started = {
   _tag: "run" as const,
@@ -60,7 +60,6 @@ it("does not project an unresolved tool call before recovery", () => {
   if (recovery[0]?._tag === "tool/result") {
     assert.deepStrictEqual(recovery[0].result, { type: "execution-unknown" })
   }
-  assert.strictEqual(projectLiveEvents(events).length, events.length)
 })
 
 it("closes open run, turn, step, attempt, and tool spans in deterministic order", () => {

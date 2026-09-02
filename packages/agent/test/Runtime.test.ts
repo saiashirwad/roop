@@ -466,7 +466,7 @@ it.effect("retries before output with the same logical plan", () =>
       model: (next) => (input) =>
         Stream.unwrap(
           Effect.sync(() => {
-            attempts.push({ planId: input.planId, fingerprint: input.fingerprint })
+            attempts.push({ planId: input.planId, fingerprint: input.planFingerprint })
             let emitted = false
             return next(input).pipe(
               Stream.tap(() => Effect.sync(() => (emitted = true))),
@@ -477,7 +477,7 @@ it.effect("retries before output with the same logical plan", () =>
                   attempt: input.attempt + 1,
                   model: fallbackModel,
                 }
-                attempts.push({ planId: retry.planId, fingerprint: retry.fingerprint })
+                attempts.push({ planId: retry.planId, fingerprint: retry.planFingerprint })
                 return next(retry)
               }),
             )

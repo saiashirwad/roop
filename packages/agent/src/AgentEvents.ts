@@ -1,12 +1,6 @@
 import { Context, Schema, type Effect } from "effect"
 
-export {
-  EVENT_VERSION,
-  JournalEvent,
-  LiveEvent,
-  type JournalEvent as JournalEventValue,
-  type LiveEvent as LiveEventValue,
-} from "./Event.ts"
+export { AssistantContentPart, EVENT_VERSION, JournalEvent, LiveEvent } from "./Event.ts"
 
 const TextDelta = Schema.TaggedStruct("TextDelta", { delta: Schema.String })
 const ReasoningDelta = Schema.TaggedStruct("ReasoningDelta", { delta: Schema.String })
@@ -35,6 +29,7 @@ export interface SubagentEvent {
   readonly event: AgentEvent
 }
 
+/** The live events of one run, as consumers see them. */
 export type AgentEvent =
   | typeof TextDelta.Type
   | typeof ReasoningDelta.Type
@@ -56,6 +51,7 @@ export const AgentEvent = Schema.Union([
   }),
 ])
 
+/** Lets a tool handler publish events into the run that is executing it. */
 export class AgentEmit extends Context.Service<
   AgentEmit,
   {
@@ -63,40 +59,3 @@ export class AgentEmit extends Context.Service<
     readonly toolCallId?: string | undefined
   }
 >()("roop/AgentEmit") {}
-
-export const AssistantContentPart = Schema.Union([
-  Schema.Struct({ type: Schema.Literal("text"), text: Schema.String }),
-  Schema.Struct({ type: Schema.Literal("reasoning"), text: Schema.String }),
-])
-export type AssistantContentPart = typeof AssistantContentPart.Type
-
-export const SessionEvent = Schema.Union([
-  Schema.TaggedStruct("system/message", { content: Schema.String }),
-  Schema.TaggedStruct("user/message", { content: Schema.String }),
-  Schema.TaggedStruct("assistant/message", { parts: Schema.Array(AssistantContentPart) }),
-  Schema.TaggedStruct("tool/call", {
-    id: Schema.String,
-    name: Schema.String,
-    params: Schema.Unknown,
-    providerExecuted: Schema.optionalKey(Schema.Boolean),
-  }),
-  Schema.TaggedStruct("tool/result", {
-    id: Schema.String,
-    name: Schema.String,
-    isFailure: Schema.Boolean,
-    result: Schema.Unknown,
-    providerExecuted: Schema.optionalKey(Schema.Boolean),
-  }),
-  Schema.TaggedStruct("turn/start", {}),
-  Schema.TaggedStruct("turn/end", {
-    reason: Schema.Literals(["completed", "failed", "interrupted", "stopped"]),
-    message: Schema.optionalKey(Schema.String),
-  }),
-  Schema.TaggedStruct("step/start", { index: Schema.Finite }),
-  Schema.TaggedStruct("model/request", { request: Schema.Unknown }),
-  Schema.TaggedStruct("step/end", {
-    reason: Schema.Literals(["completed", "failed", "interrupted"]),
-    message: Schema.optionalKey(Schema.String),
-  }),
-])
-export type SessionEvent = typeof SessionEvent.Type
