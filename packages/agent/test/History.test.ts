@@ -39,6 +39,21 @@ it("projects complete messages and keeps tool call/result pairing", () => {
   assert.deepStrictEqual(toPrompt(events), toPrompt(history))
 })
 
+it("ignores session/meta when projecting the prompt", () => {
+  const events = [
+    { _tag: "session/meta" as const, version: EVENT_VERSION, title: "Titled", cwd: "/work" },
+    { _tag: "user/message" as const, version: EVENT_VERSION, content: "hello" },
+  ]
+  const history = fromEvents(events)
+  assert.deepStrictEqual(
+    history.messages.map((message) => message.role),
+    ["user"],
+  )
+  assert.deepStrictEqual(history.openSpans, [])
+  assert.deepStrictEqual(recoveryEvents(events), [])
+  assert.deepStrictEqual(toPrompt(events), toPrompt(history))
+})
+
 it("does not project an unresolved tool call before recovery", () => {
   const events = [
     { _tag: "user/message" as const, version: EVENT_VERSION, content: "run it" },

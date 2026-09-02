@@ -27,7 +27,10 @@ const { AgentRuntime: AgentRuntimeTag } = Runtime
 type JournalAppendError = JournalModule.JournalAppendError
 type JournalLoadError = JournalModule.JournalLoadError
 type JournalSnapshot = JournalModule.JournalSnapshot
+type JournalError = JournalModule.JournalError
+type SessionSummary = JournalModule.SessionSummary
 type AgentRuntimeRequest = Runtime.AgentRuntimeRequest
+type SessionMeta = Runtime.SessionMeta
 type AgentEvent = AgentEvents.AgentEvent
 type FinalizationError = AgentError.FinalizationError
 type UnsafeModelRetry = AgentError.UnsafeModelRetry
@@ -72,6 +75,7 @@ export interface RunRequest {
   readonly sessionId: string
   readonly prompt: string
   readonly policy?: AgentRuntimeRequest["policy"]
+  readonly meta?: SessionMeta | undefined
 }
 
 export interface RunSupervisorService {
@@ -83,6 +87,10 @@ export interface RunSupervisorService {
   readonly interrupt: (sessionId: string) => Effect.Effect<void, RunNotFound>
   /** Read the durable event history for a session. */
   readonly history: (sessionId: string) => Effect.Effect<JournalSnapshot, JournalLoadError>
+  /** Every stored session. */
+  readonly list: Effect.Effect<ReadonlyArray<SessionSummary>, JournalError>
+  /** Delete a stored session. Fails with SessionBusy while a run is active on it. */
+  readonly delete: (sessionId: string) => Effect.Effect<void, SessionBusy | JournalError>
 }
 
 type QueueError = RunSupervisorError | Cause.Done
@@ -210,6 +218,11 @@ export const make = <R = never>(
         if (entry === undefined) return
         const fiber = yield* Deferred.await(entry.fiber)
         yield* Fiber.interrupt(fiber)
+        // A producer interrupted before its first step never ran its own
+        // interrupt handler, so the session would stay active. Both calls are
+        // no-ops when the producer already closed the session.
+        yield* publish(sessionId, { _tag: "Finish", reason: "interrupted" })
+        yield* close(sessionId)
       }).pipe(Effect.ignore)
 
     const consumer = (
@@ -251,6 +264,7 @@ export const make = <R = never>(
             sessionId: request.sessionId,
             prompt: request.prompt,
             ...(request.policy === undefined ? undefined : { policy: request.policy }),
+            ...(request.meta === undefined ? undefined : { meta: request.meta }),
           }
           const producer = Effect.gen(function* () {
             const finished = yield* Ref.make(false)
@@ -323,6 +337,15 @@ export const make = <R = never>(
           yield* Fiber.interrupt(fiber)
         }),
       history: (sessionId) => journal.load(sessionId),
+      list: journal.list,
+      delete: (sessionId) =>
+        Effect.gen(function* () {
+          const active = yield* Ref.get(state).pipe(
+            Effect.map((current) => current.active.has(sessionId)),
+          )
+          if (active) return yield* new SessionBusy({ sessionId })
+          yield* journal.delete(sessionId)
+        }),
     })
   })
 

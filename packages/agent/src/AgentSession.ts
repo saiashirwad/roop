@@ -6,12 +6,13 @@ import { type AgentResult, fromEvents } from "./AgentResult.ts"
 import { RunId, SessionId } from "./DomainIds.ts"
 import type { Middleware } from "./Middleware.ts"
 import type { RunPolicy } from "./RunPolicy.ts"
-import { runAgent, type RuntimeStream } from "./Runtime.ts"
+import { runAgent, type RuntimeStream, type SessionMeta } from "./Runtime.ts"
 
 export interface SessionRunOptions<RM = never, EM = never> {
   readonly runId?: RunId | string | undefined
   readonly policy?: RunPolicy | undefined
   readonly middleware?: Middleware<RM, EM> | undefined
+  readonly meta?: SessionMeta | undefined
 }
 
 /** An agent bound to a session id. It does no I/O; each call reloads history from the journal. */

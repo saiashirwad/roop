@@ -1,13 +1,18 @@
 import { assert, it } from "@effect/vitest"
-import { Effect, Exit, Option, Schema } from "effect"
+import { Duration, Effect, Exit, Option, Schema } from "effect"
+import { TestClock } from "effect/testing"
 
+import { SessionId } from "../src/DomainIds.ts"
 import { EVENT_VERSION, type JournalEvent } from "../src/Event.ts"
 import {
+  emptySessionMetadata,
+  foldSessionMetadata,
   Journal,
   JournalEmptyAppend,
   JournalError,
   JournalFutureVersion,
   JournalRevisionConflict,
+  SessionSummarySchema,
   validateJournalEvent,
 } from "../src/Journal.ts"
 import { JournalMemory } from "../src/JournalMemory.ts"
@@ -45,8 +50,93 @@ const run = Effect.gen(function* () {
   assert.strictEqual((yield* journal.load("session")).revision, 3)
 })
 
+it("foldSessionMetadata keeps the latest value of each field", () => {
+  const folded = foldSessionMetadata(emptySessionMetadata, [
+    { _tag: "session/meta", version: EVENT_VERSION, title: "first", cwd: "/one" },
+    user("noise"),
+    { _tag: "session/meta", version: EVENT_VERSION, title: "second" },
+  ])
+  assert.deepStrictEqual(folded, { title: Option.some("second"), cwd: Option.some("/one") })
+})
+
+it.effect("SessionSummarySchema projects absent metadata to omitted keys", () =>
+  Effect.gen(function* () {
+    const encoded = yield* Schema.encodeEffect(SessionSummarySchema)({
+      sessionId: SessionId.make("s"),
+      revision: 1,
+      createdAt: 10,
+      updatedAt: 20,
+      title: Option.some("t"),
+      cwd: Option.none(),
+    })
+    assert.deepStrictEqual(encoded, {
+      sessionId: "s",
+      revision: 1,
+      createdAt: 10,
+      updatedAt: 20,
+      title: "t",
+    })
+    const decoded = yield* Schema.decodeEffect(SessionSummarySchema)(encoded)
+    assert.deepStrictEqual(decoded.title, Option.some("t"))
+    assert.deepStrictEqual(decoded.cwd, Option.none())
+  }),
+)
+
 it.layer(JournalMemory)("JournalMemory", (it) => {
   it.effect("uses revision-safe atomic appends", () => run)
+
+  it.effect("lists stored sessions with timestamps and metadata, and deletes them", () =>
+    Effect.gen(function* () {
+      const journal = yield* Journal
+      assert.deepStrictEqual(
+        (yield* journal.list).filter((session) => session.sessionId.startsWith("listed")),
+        [],
+      )
+      yield* TestClock.adjust(Duration.millis(100))
+      yield* journal.append("listed-a", 0, [
+        { _tag: "session/meta", version: EVENT_VERSION, title: "A", cwd: "/a" },
+        user("one"),
+      ])
+      yield* TestClock.adjust(Duration.millis(50))
+      yield* journal.append("listed-a", 2, [
+        { _tag: "session/meta", version: EVENT_VERSION, title: "A2" },
+      ])
+      yield* journal.append("listed-b", 0, [user("hello")])
+
+      const listed = (yield* journal.list)
+        .filter((session) => session.sessionId.startsWith("listed"))
+        .sort((left, right) => left.sessionId.localeCompare(right.sessionId))
+      assert.deepStrictEqual(listed, [
+        {
+          sessionId: SessionId.make("listed-a"),
+          revision: 3,
+          createdAt: 100,
+          updatedAt: 150,
+          title: Option.some("A2"),
+          cwd: Option.some("/a"),
+        },
+        {
+          sessionId: SessionId.make("listed-b"),
+          revision: 1,
+          createdAt: 150,
+          updatedAt: 150,
+          title: Option.none(),
+          cwd: Option.none(),
+        },
+      ])
+
+      yield* journal.delete("listed-a")
+      yield* journal.delete("listed-missing")
+      assert.deepStrictEqual(
+        (yield* journal.list)
+          .filter((session) => session.sessionId.startsWith("listed"))
+          .map((session) => session.sessionId),
+        ["listed-b"],
+      )
+      assert.strictEqual((yield* journal.load("listed-a")).revision, 0)
+      assert.strictEqual(yield* journal.append("listed-a", 0, [user("again")]), 1)
+    }),
+  )
 
   it.effect("admits one of two concurrent writers at the same revision", () =>
     Effect.gen(function* () {

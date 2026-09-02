@@ -1,9 +1,10 @@
 {
-  "name": "@roop/agent-rpc",
+  "name": "@roop/journal-fs",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "exports": {
+    ".": "./src/index.ts",
     "./*": "./src/*"
   },
   "scripts": {
@@ -17,7 +18,6 @@
   "devDependencies": {
     "@effect/platform-node": "4.0.0-beta.97",
     "@effect/vitest": "4.0.0-beta.97",
-    "@roop/journal-fs": "workspace:*",
     "@types/node": "^26.1.1",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"

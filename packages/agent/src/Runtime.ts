@@ -34,6 +34,12 @@ import {
 import { mergePolicy, resolveRunPolicy, type RunPolicy } from "./RunPolicy.ts"
 import type { InvalidToolName, ToolConflict } from "./ToolRegistry.ts"
 
+/** Session metadata committed as a `session/meta` event before the run's user message. */
+export interface SessionMeta {
+  readonly title?: string | undefined
+  readonly cwd?: string | undefined
+}
+
 /** Input for one direct, scoped kernel run. */
 export interface AgentRuntimeRequest<out R = never, out E = never> {
   readonly sessionId: SessionId | string
@@ -41,7 +47,20 @@ export interface AgentRuntimeRequest<out R = never, out E = never> {
   readonly prompt: string
   readonly policy?: RunPolicy | undefined
   readonly middleware?: Middleware<R, E> | undefined
+  readonly meta?: SessionMeta | undefined
 }
+
+const sessionMetaEvents = (meta: SessionMeta | undefined): ReadonlyArray<JournalEvent> =>
+  meta === undefined || (meta.title === undefined && meta.cwd === undefined)
+    ? []
+    : [
+        {
+          _tag: "session/meta",
+          version: EVENT_VERSION,
+          ...(meta.title === undefined ? undefined : { title: meta.title }),
+          ...(meta.cwd === undefined ? undefined : { cwd: meta.cwd }),
+        },
+      ]
 
 export type RuntimeError<E> =
   | E
@@ -104,6 +123,7 @@ const runtimeRun = <R, E, RM = never, EM = never>(
         ),
       )
       yield* commit([
+        ...sessionMetaEvents(request.meta),
         { _tag: "user/message", version: EVENT_VERSION, content: request.prompt },
         { _tag: "run", version: EVENT_VERSION, sessionId, runId, state: "started" },
       ])

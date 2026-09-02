@@ -14,6 +14,8 @@ export const AgentRpcServer = AgentRpc.toLayer(
       SubscribeRun: ({ sessionId }) => supervisor.subscribe(sessionId),
       InterruptRun: ({ sessionId }) => supervisor.interrupt(sessionId),
       GetHistory: ({ sessionId }) => supervisor.history(sessionId),
+      ListSessions: () => supervisor.list,
+      DeleteSession: ({ sessionId }) => supervisor.delete(sessionId),
     })
   }),
 )

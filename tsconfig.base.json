@@ -51,7 +51,9 @@
       "@roop/agent/testing": ["./packages/agent/src/testing/index.ts"],
       "@roop/agent/*": ["./packages/agent/src/*"],
       "@roop/agent-rpc": ["./packages/agent-rpc/src/index.ts"],
-      "@roop/agent-rpc/*": ["./packages/agent-rpc/src/*"]
+      "@roop/agent-rpc/*": ["./packages/agent-rpc/src/*"],
+      "@roop/journal-fs": ["./packages/journal-fs/src/index.ts"],
+      "@roop/journal-fs/*": ["./packages/journal-fs/src/*"]
     }
   }
 }

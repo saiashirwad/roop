@@ -104,6 +104,17 @@ export const UserMessageEvent = Schema.TaggedStruct("user/message", {
 })
 export type UserMessageEvent = typeof UserMessageEvent.Type
 
+/**
+ * Session metadata for session lists. The latest value of each field wins,
+ * so a later event that sets only `title` keeps an earlier `cwd`.
+ */
+export const SessionMetaEvent = Schema.TaggedStruct("session/meta", {
+  ...base,
+  title: Schema.optionalKey(Schema.String),
+  cwd: Schema.optionalKey(Schema.String),
+})
+export type SessionMetaEvent = typeof SessionMetaEvent.Type
+
 /** A model-issued tool call, including provider-executed calls. */
 export const ToolCallEvent = Schema.TaggedStruct("tool/call", {
   ...base,
@@ -154,6 +165,7 @@ export const JournalEvent = Schema.Union([
   StepEvent,
   ModelAttemptEvent,
   ModelRequestEvent,
+  SessionMetaEvent,
   SystemMessageEvent,
   UserMessageEvent,
   AssistantMessageEvent,
@@ -182,6 +194,7 @@ export const LiveEvent = Schema.Union([
   StepEvent,
   ModelAttemptEvent,
   ModelRequestEvent,
+  SessionMetaEvent,
   SystemMessageEvent,
   UserMessageEvent,
   AssistantMessageEvent,

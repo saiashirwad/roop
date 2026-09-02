@@ -182,6 +182,54 @@ it.effect("writes a versioned run and attempt lifecycle in deterministic order",
   }),
 )
 
+it.effect("commits session/meta before the user message when a run carries meta", () =>
+  Effect.gen(function* () {
+    const model = yield* LanguageModel.make({
+      generateText: () => Effect.succeed([]),
+      streamText: () => Stream.make({ type: "text-delta" as const, id: "done", delta: "done" }),
+    })
+    const program = Effect.gen(function* () {
+      const journal = yield* Journal
+      yield* runAgent(Agent.make("meta", Module.empty), {
+        sessionId: "meta-session",
+        prompt: "hello",
+        meta: { title: "Titled", cwd: "/work" },
+      }).pipe(Stream.runDrain)
+      yield* runAgent(Agent.make("meta", Module.empty), {
+        sessionId: "meta-session",
+        prompt: "again",
+        meta: {},
+      }).pipe(Stream.runDrain)
+      return yield* journal.load("meta-session")
+    })
+    const session = yield* program.pipe(
+      Effect.provide(JournalMemory),
+      Effect.provideService(LanguageModel.LanguageModel, model),
+    )
+    assert.deepStrictEqual(session.events.slice(0, 2), [
+      { _tag: "session/meta", version: EVENT_VERSION, title: "Titled", cwd: "/work" },
+      { _tag: "user/message", version: EVENT_VERSION, content: "hello" },
+    ])
+    assert.strictEqual(session.events.filter((event) => event._tag === "session/meta").length, 1)
+    const listed = yield* Effect.gen(function* () {
+      const journal = yield* Journal
+      yield* runAgent(Agent.make("meta", Module.empty), {
+        sessionId: "meta-list",
+        prompt: "hello",
+        meta: { title: "Listed" },
+      }).pipe(Stream.runDrain)
+      return yield* journal.list
+    }).pipe(
+      Effect.provide(JournalMemory),
+      Effect.provideService(LanguageModel.LanguageModel, model),
+    )
+    assert.deepStrictEqual(
+      listed.map((session) => [session.sessionId, session.title, session.cwd]),
+      [["meta-list", Option.some("Listed"), Option.none()]],
+    )
+  }),
+)
+
 it.effect("recovers an unresolved tool call before new work without executing it", () =>
   Effect.gen(function* () {
     const executed = yield* Ref.make(0)
@@ -291,6 +339,8 @@ it.effect("preserves primary and journal failures during terminal finalization",
                 }),
               )
             : Effect.succeed(revision + events.length),
+        list: Effect.succeed([]),
+        delete: () => Effect.void,
       }),
     )
     const exit = yield* Effect.exit(
@@ -337,6 +387,8 @@ it.effect("keeps a model-request journal failure in the typed error channel", ()
                 }),
               )
             : Effect.succeed(revision + events.length),
+        list: Effect.succeed([]),
+        delete: () => Effect.void,
       }),
     )
     const exit = yield* Effect.exit(

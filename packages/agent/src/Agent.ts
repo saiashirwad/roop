@@ -342,6 +342,7 @@ const toSessionOptions = <RM, EM>(
   runId: request.runId,
   policy: request.policy,
   middleware: request.middleware,
+  meta: request.meta,
 })
 
 export const events = <R, E, RM = never, EM = never>(

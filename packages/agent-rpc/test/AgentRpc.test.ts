@@ -1,3 +1,4 @@
+import { NodeFileSystem, NodePath } from "@effect/platform-node"
 import { assert, it } from "@effect/vitest"
 import {
   Agent as AgentPackage,
@@ -5,8 +6,10 @@ import {
   Module,
   Runtime,
   type Agent as AgentModule,
+  type Journal as JournalModule,
 } from "@roop/agent"
-import { Effect, Exit, Fiber, Layer, Option, Ref, Stream } from "effect"
+import { JournalFs } from "@roop/journal-fs"
+import { Effect, Exit, Fiber, FileSystem, Layer, Option, Ref, Stream } from "effect"
 import { LanguageModel } from "effect/unstable/ai"
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient"
 import * as HttpRouter from "effect/unstable/http/HttpRouter"
@@ -48,9 +51,12 @@ const live = (started: Ref.Ref<boolean>, hold = false) =>
     ),
   )
 
-const hostLive = (model: Layer.Layer<LanguageModel.LanguageModel>) =>
+const hostLive = (
+  model: Layer.Layer<LanguageModel.LanguageModel>,
+  journal: Layer.Layer<JournalModule.Journal> = JournalMemory.JournalMemory,
+) =>
   RunSupervisorLive(HostedAgent).pipe(
-    Layer.provide(Layer.mergeAll(Runtime.AgentRuntimeLive, JournalMemory.JournalMemory, model)),
+    Layer.provide(Layer.mergeAll(Runtime.AgentRuntimeLive, journal, model)),
   )
 
 const rpcHost = (model: Layer.Layer<LanguageModel.LanguageModel>) =>
@@ -152,6 +158,14 @@ it.effect("round-trips every RPC operation and encodes typed errors", () =>
     const history = yield* client.GetHistory({ sessionId: "rpc-memory" })
     assert.ok(history.events.some((event) => event._tag === "run"))
 
+    const sessions = yield* client.ListSessions()
+    assert.deepStrictEqual(
+      sessions.map((session) => [String(session.sessionId), session.revision, session.title]),
+      [["rpc-memory", history.revision, Option.none()]],
+    )
+    yield* client.DeleteSession({ sessionId: "rpc-memory" })
+    assert.deepStrictEqual(yield* client.ListSessions(), [])
+
     const missingSubscription = yield* Effect.exit(
       Stream.runDrain(client.SubscribeRun({ sessionId: "missing" })),
     )
@@ -221,4 +235,49 @@ it.effect("HTTP stream disconnect interrupts the owned model producer", () =>
     assert.ok(Exit.isFailure(interrupt))
     assert.strictEqual(Option.getOrThrow(Exit.findErrorOption(interrupt))._tag, "RunNotFound")
   }).pipe(Effect.scoped),
+)
+
+it.effect("keeps sessions across a server restart with the file-system journal", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "roop-rpc-" })
+    const journal = JournalFs.layer({ directory }).pipe(
+      Layer.provide(Layer.mergeAll(NodeFileSystem.layer, NodePath.layer)),
+    )
+    const server = () => AgentRpcServer.pipe(Layer.provide(hostLive(finiteModel, journal)))
+
+    const firstRevision = yield* Effect.gen(function* () {
+      const client = yield* RpcTest.makeClient(AgentRpc)
+      yield* Stream.runDrain(
+        client.StartRun({
+          sessionId: "durable",
+          prompt: "hello",
+          meta: { title: "Durable session", cwd: "/repo" },
+        }),
+      )
+      return (yield* client.GetHistory({ sessionId: "durable" })).revision
+    }).pipe(Effect.scoped, Effect.provide(server()))
+
+    yield* Effect.gen(function* () {
+      const client = yield* RpcTest.makeClient(AgentRpc)
+      const sessions = yield* client.ListSessions()
+      assert.deepStrictEqual(
+        sessions.map((session) => [
+          String(session.sessionId),
+          session.revision,
+          session.title,
+          session.cwd,
+        ]),
+        [["durable", firstRevision, Option.some("Durable session"), Option.some("/repo")]],
+      )
+      const history = yield* client.GetHistory({ sessionId: "durable" })
+      assert.strictEqual(history.revision, firstRevision)
+      assert.deepStrictEqual(
+        history.events.slice(0, 2).map((event) => event._tag),
+        ["session/meta", "user/message"],
+      )
+      yield* client.DeleteSession({ sessionId: "durable" })
+      assert.deepStrictEqual(yield* client.ListSessions(), [])
+    }).pipe(Effect.scoped, Effect.provide(server()))
+  }).pipe(Effect.scoped, Effect.provide(NodeFileSystem.layer)),
 )

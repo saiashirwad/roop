@@ -10,17 +10,17 @@ compose as explicit Effect values, typed services, streams, and layers.
 
 ## Architectural Comparison: Flue vs. Roop
 
-| Feature                      | Flue Framework                                                                 | Roop (Effect-Native)                                                                                          |
-| :--------------------------- | :----------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------ |
-| **Agent Definition**         | React-style function with side-effect hooks (`useModel`, `usePersistentState`) | Declarative, pure Effect values: `Agent.make({ name, instructions, tools, capabilities })`                    |
-| **Tool Calling**             | `useTool({ run: ({ harness }) => ... })` (reads global state)                  | Typed `Tool.make` bound via `Agent.tool`, declaring explicit `Context.Service` dependencies                   |
-| **Subagents & Delegation**   | Separate deployed agents or complex server routing                             | First-class delegation via `Agent.delegate(child, { ... })` with deterministic child sessions                 |
-| **Execution Ergonomics**     | Ad-hoc lifecycle callbacks                                                     | Returns structured `AgentResult` via `Agent.run` or streaming via `Agent.streamText` and `Agent.events`       |
-| **Conversation State**       | `usePersistentState('key', default)`                                           | Append-only semantic event journal (`Journal.memory`) addressed via `Agent.session(agent, id)`                |
-| **Service Injection**        | Hardcoded client instances or global singletons                                | Effect 3-Role Discipline: `Definition` (`Context.Service`), `Consumer` (`dependencies`), `Provider` (`Layer`) |
-| **Infrastructure Wiring**    | Global harness or manual client configuration                                  | Composed once at the boundary via `Roop.layer({ model, journal, middleware })`                                |
-| **Concurrency & Interrupts** | Custom abort handles                                                           | Structured concurrency with Effect Fibers and interruption propagation                                        |
-| **Provider Portability**     | Tied to provider-specific wrappers                                             | Portable `effect/unstable/ai` `LanguageModel` layer swap                                                      |
+| Feature                      | Flue Framework                                                                 | Roop (Effect-Native)                                                                                              |
+| :--------------------------- | :----------------------------------------------------------------------------- | :---------------------------------------------------------------------------------------------------------------- |
+| **Agent Definition**         | React-style function with side-effect hooks (`useModel`, `usePersistentState`) | Declarative, pure Effect values: `Agent.make({ name, instructions, tools, capabilities })`                        |
+| **Tool Calling**             | `useTool({ run: ({ harness }) => ... })` (reads global state)                  | Typed `Tool.make` bound via `Agent.tool`, declaring explicit `Context.Service` dependencies                       |
+| **Subagents & Delegation**   | Separate deployed agents or complex server routing                             | First-class delegation via `Agent.delegate(child, { ... })` with deterministic child sessions                     |
+| **Execution Ergonomics**     | Ad-hoc lifecycle callbacks                                                     | Returns structured `AgentResult` via `Agent.run` or streaming via `Agent.streamText` and `Agent.events`           |
+| **Conversation State**       | `usePersistentState('key', default)`                                           | Append-only semantic event journal (`Journal.memory`, `JournalFs.layer`) addressed via `Agent.session(agent, id)` |
+| **Service Injection**        | Hardcoded client instances or global singletons                                | Effect 3-Role Discipline: `Definition` (`Context.Service`), `Consumer` (`dependencies`), `Provider` (`Layer`)     |
+| **Infrastructure Wiring**    | Global harness or manual client configuration                                  | Composed once at the boundary via `Roop.layer({ model, journal, middleware })`                                    |
+| **Concurrency & Interrupts** | Custom abort handles                                                           | Structured concurrency with Effect Fibers and interruption propagation                                            |
+| **Provider Portability**     | Tied to provider-specific wrappers                                             | Portable `effect/unstable/ai` `LanguageModel` layer swap                                                          |
 
 ---
 
@@ -45,10 +45,14 @@ DEEPSEEK_API_KEY="your-api-key" node examples/tools-and-services.ts
 
 ### [Persistent Conversations & Durable State](./persistent-conversations.ts)
 
-Demonstrates multi-turn conversation persistence across prompts using `Agent.session` and durable
-`Journal` events.
+Demonstrates conversation persistence across processes. The session is stored by `@roop/journal-fs`
+as one NDJSON log per session under `./.roop/sessions` (gitignored), so history survives a restart.
+The first run introduces the user and tags the session with a title via `meta`; the second run loads
+the stored events and asks the model to recall them. `Journal.list` prints every stored session with
+its revision, title, and last update.
 
 ```bash
+DEEPSEEK_API_KEY="your-api-key" node examples/persistent-conversations.ts
 DEEPSEEK_API_KEY="your-api-key" node examples/persistent-conversations.ts
 ```
 

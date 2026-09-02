@@ -11,11 +11,19 @@ const {
   JournalRevisionConflict,
   JournalSnapshotSchema,
   JournalError,
+  SessionSummarySchema,
 } = Journal
 const { FinalizationError, UnsafeModelRetry, ModelTimeout } = AgentError
 const { InvalidToolName, ToolConflict } = ToolRegistry
 const { AgentEvent } = AgentEvents
 const { RunPolicy: RunPolicySchema } = RunPolicy
+
+/** Session metadata a client attaches to a run. */
+export const SessionMeta = Schema.Struct({
+  title: Schema.optionalKey(Schema.String),
+  cwd: Schema.optionalKey(Schema.String),
+})
+export type SessionMeta = typeof SessionMeta.Type
 
 /** The small transport contract for the host supervisor. */
 export const AgentRpc = RpcGroup.make(
@@ -24,6 +32,7 @@ export const AgentRpc = RpcGroup.make(
       prompt: Schema.String,
       sessionId: Schema.String,
       policy: Schema.optionalKey(RunPolicySchema),
+      meta: Schema.optionalKey(SessionMeta),
     },
     success: AgentEvent,
     error: Schema.Union([
@@ -70,5 +79,14 @@ export const AgentRpc = RpcGroup.make(
     payload: { sessionId: Schema.String },
     success: JournalSnapshotSchema,
     error: Schema.Union([JournalError, JournalFutureVersion]),
+  }),
+  Rpc.make("ListSessions", {
+    success: Schema.Array(SessionSummarySchema),
+    error: JournalError,
+  }),
+  Rpc.make("DeleteSession", {
+    payload: { sessionId: Schema.String },
+    success: Schema.Void,
+    error: Schema.Union([SessionBusy, JournalError]),
   }),
 )
