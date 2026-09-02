@@ -67,6 +67,6 @@ const program = Effect.gen(function* () {
   yield* Console.log(reply.text)
 }).pipe(Effect.provide(Live))
 
-if (process.argv[1]?.endsWith("07-resilient-agent.ts")) {
+if (process.argv[1]?.endsWith("resilient-agent.ts")) {
   Effect.runPromise(program).catch(console.error)
 }

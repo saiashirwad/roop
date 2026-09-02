@@ -29,6 +29,6 @@ const program = Effect.gen(function* () {
   yield* Console.log(reply2.text)
 }).pipe(Effect.provide(Live))
 
-if (process.argv[1]?.endsWith("03-persistent-conversations.ts")) {
+if (process.argv[1]?.endsWith("persistent-conversations.ts")) {
   Effect.runPromise(program).catch(console.error)
 }

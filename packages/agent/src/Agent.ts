@@ -7,7 +7,12 @@ import type { AgentContext } from "./AgentContext.ts"
 import { AgentEmit, type AgentEvent } from "./AgentEvents.ts"
 import type { AgentPlan } from "./AgentPlan.ts"
 import { session as makeSession, type SessionRunOptions } from "./AgentSession.ts"
-import { type CapabilityElement, capability as makeCapability } from "./Capability.ts"
+import {
+  type ElementErrors,
+  type ElementRequirements,
+  type Elements,
+  capability as makeCapability,
+} from "./Capability.ts"
 import { all as middlewareAll, type Middleware } from "./Middleware.ts"
 import { type Module, tool as moduleTool, when as moduleWhen } from "./Module.ts"
 import { mergePolicy, type RunPolicy } from "./RunPolicy.ts"
@@ -45,25 +50,40 @@ export interface AgentTool<out R = never, out E = never> extends Module<R, E> {
   readonly tool: Tool.Any
 }
 
-export interface AgentOptions<R = never, E = never> {
+export interface AgentOptions<
+  Tools extends Elements = [],
+  Caps extends Elements = [],
+  MwR = never,
+  MwE = never,
+> {
   readonly name: string
   readonly instructions?: string | undefined
-  readonly tools?: ReadonlyArray<CapabilityElement<R, E>> | undefined
-  readonly capabilities?: ReadonlyArray<CapabilityElement<R, E>> | undefined
-  readonly middleware?: Middleware<R, E> | undefined
+  readonly tools?: Tools | undefined
+  readonly capabilities?: Caps | undefined
+  readonly middleware?: Middleware<MwR, MwE> | undefined
   readonly policy?: RunPolicy | undefined
   readonly metadata?: Readonly<Record<string, unknown>> | undefined
 }
 
-export function make<R = never, E = never>(options: AgentOptions<R, E>): AgentDefinition<R, E>
+export function make<
+  const Tools extends Elements = [],
+  const Caps extends Elements = [],
+  MwR = never,
+  MwE = never,
+>(
+  options: AgentOptions<Tools, Caps, MwR, MwE>,
+): AgentDefinition<
+  ElementRequirements<Tools[number] | Caps[number]> | MwR,
+  ElementErrors<Tools[number] | Caps[number]> | MwE
+>
 export function make<R = never, E = never>(
   name: string,
   source: AgentSource<R, E>,
 ): AgentDefinition<R, E>
-export function make<R, E>(
-  nameOrOptions: string | AgentOptions<R, E>,
-  source?: AgentSource<R, E>,
-): AgentDefinition<R, E> {
+export function make(
+  nameOrOptions: string | AgentOptions<Elements, Elements, any, any>,
+  source?: AgentSource<any, any>,
+): AgentDefinition<any, any> {
   if (typeof nameOrOptions === "string") {
     const render = source!
     return definition({

@@ -89,6 +89,6 @@ const program = Effect.gen(function* () {
   yield* Console.log(reply.text)
 }).pipe(Effect.provide(AppLive))
 
-if (process.argv[1]?.endsWith("02-tools-and-services.ts")) {
+if (process.argv[1]?.endsWith("tools-and-services.ts")) {
   Effect.runPromise(program).catch(console.error)
 }

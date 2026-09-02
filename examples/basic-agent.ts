@@ -23,6 +23,6 @@ const program = Effect.gen(function* () {
   yield* Console.log(reply.text)
 }).pipe(Effect.provide(Live))
 
-if (process.argv[1]?.endsWith("01-basic-agent.ts")) {
+if (process.argv[1]?.endsWith("basic-agent.ts")) {
   Effect.runPromise(program).catch(console.error)
 }

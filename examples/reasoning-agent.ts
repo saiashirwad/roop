@@ -31,6 +31,6 @@ const program = Effect.gen(function* () {
   )
 }).pipe(Effect.provide(Live))
 
-if (process.argv[1]?.endsWith("04-reasoning-agent.ts")) {
+if (process.argv[1]?.endsWith("reasoning-agent.ts")) {
   Effect.runPromise(program).catch(console.error)
 }

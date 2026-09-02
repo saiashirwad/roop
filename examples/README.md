@@ -24,77 +24,77 @@ compose as explicit Effect values, typed services, streams, and layers.
 
 ---
 
-## Available Examples
+## Examples
 
-### 1. [01 - Basic Assistant Agent](./01-basic-agent.ts)
+### [Basic Assistant Agent](./basic-agent.ts)
 
 A minimal, pure assistant that returns an `AgentResult` with answer text.
 
 ```bash
-DEEPSEEK_API_KEY="your-api-key" npx tsx examples/01-basic-agent.ts
+DEEPSEEK_API_KEY="your-api-key" node examples/basic-agent.ts
 ```
 
-### 2. [02 - Tools and Services with Dependency Injection](./02-tools-and-services.ts)
+### [Tools and Services with Dependency Injection](./tools-and-services.ts)
 
 Demonstrates typed tools with schema validation and Effect service injection (`InventoryService`,
 `ShippingService`) using `Agent.tool`.
 
 ```bash
-DEEPSEEK_API_KEY="your-api-key" npx tsx examples/02-tools-and-services.ts
+DEEPSEEK_API_KEY="your-api-key" node examples/tools-and-services.ts
 ```
 
-### 3. [03 - Persistent Conversations & Durable State](./03-persistent-conversations.ts)
+### [Persistent Conversations & Durable State](./persistent-conversations.ts)
 
 Demonstrates multi-turn conversation persistence across prompts using `Agent.session` and durable
 `Journal` events.
 
 ```bash
-DEEPSEEK_API_KEY="your-api-key" npx tsx examples/03-persistent-conversations.ts
+DEEPSEEK_API_KEY="your-api-key" node examples/persistent-conversations.ts
 ```
 
-### 4. [04 - DeepSeek Reasoner (R1 Thinking Stream)](./04-reasoning-agent.ts)
+### [DeepSeek Reasoner (R1 Thinking Stream)](./reasoning-agent.ts)
 
 Streams both real-time chain-of-thought tokens (`ReasoningDelta`) and final answer tokens
 (`TextDelta`) using DeepSeek-R1 (`deepseek-reasoner`).
 
 ```bash
-DEEPSEEK_API_KEY="your-api-key" npx tsx examples/04-reasoning-agent.ts
+DEEPSEEK_API_KEY="your-api-key" node examples/reasoning-agent.ts
 ```
 
-### 5. [05 - Human-in-the-Loop & Tool Approvals](./05-human-in-the-loop.ts)
+### [Human-in-the-Loop & Tool Approvals](./human-in-the-loop.ts)
 
 Intercepts protected actions (e.g. fund transfers) using `ApprovalService` middleware and
 `Middleware.denyTool`, rejecting unapproved executions before handlers run.
 
 ```bash
-DEEPSEEK_API_KEY="your-api-key" npx tsx examples/05-human-in-the-loop.ts
+DEEPSEEK_API_KEY="your-api-key" node examples/human-in-the-loop.ts
 ```
 
-### 6. [06 - Subagent Orchestration & Delegation](./06-subagent-delegation.ts)
+### [Subagent Orchestration & Delegation](./subagent-delegation.ts)
 
 A lead coordinator agent delegates specialized research tasks to a child agent using
 `Agent.delegate` with deterministic child session tracking and structured interruption.
 
 ```bash
-DEEPSEEK_API_KEY="your-api-key" npx tsx examples/06-subagent-delegation.ts
+DEEPSEEK_API_KEY="your-api-key" node examples/subagent-delegation.ts
 ```
 
-### 7. [07 - Resilience & Doom Loop Protection](./07-resilient-agent.ts)
+### [Resilience & Doom Loop Protection](./resilient-agent.ts)
 
 Protects against infinite repeating tool calls with a `doomLoop` middleware and
 `Middleware.denyTool`.
 
 ```bash
-DEEPSEEK_API_KEY="your-api-key" npx tsx examples/07-resilient-agent.ts
+DEEPSEEK_API_KEY="your-api-key" node examples/resilient-agent.ts
 ```
 
-### 8. [08 - Dynamic Capabilities & Contextual Modules](./08-dynamic-modules.ts)
+### [Dynamic Capabilities & Contextual Modules](./dynamic-modules.ts)
 
 Conditionally attaches tools and instructions at runtime using `Agent.capability` and `Agent.when`
 based on user permissions.
 
 ```bash
-DEEPSEEK_API_KEY="your-api-key" npx tsx examples/08-dynamic-modules.ts
+DEEPSEEK_API_KEY="your-api-key" node examples/dynamic-modules.ts
 ```
 
 ---

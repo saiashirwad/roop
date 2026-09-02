@@ -23,10 +23,7 @@ const leadArchitect = Agent.make({
   ],
 })
 
-const Live = Roop.layer({
-  model: DeepSeek.Live,
-  journal: Journal.memory,
-})
+const Live = Roop.layer({ model: DeepSeek.Live, journal: Journal.memory })
 
 const program = Effect.gen(function* () {
   const session = Agent.session(leadArchitect, "lead-session-77")
@@ -38,6 +35,6 @@ const program = Effect.gen(function* () {
   yield* Console.log(reply.text)
 }).pipe(Effect.provide(Live))
 
-if (process.argv[1]?.endsWith("06-subagent-delegation.ts")) {
+if (process.argv[1]?.endsWith("subagent-delegation.ts")) {
   Effect.runPromise(program).catch(console.error)
 }

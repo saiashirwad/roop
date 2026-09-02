@@ -86,6 +86,6 @@ const program = Effect.gen(function* () {
   yield* Console.log(adminReply.text)
 })
 
-if (process.argv[1]?.endsWith("08-dynamic-modules.ts")) {
+if (process.argv[1]?.endsWith("dynamic-modules.ts")) {
   Effect.runPromise(program).catch(console.error)
 }

@@ -105,6 +105,6 @@ const program = Effect.gen(function* () {
   yield* Console.log(reply.text)
 }).pipe(Effect.provide(AppLive))
 
-if (process.argv[1]?.endsWith("05-human-in-the-loop.ts")) {
+if (process.argv[1]?.endsWith("human-in-the-loop.ts")) {
   Effect.runPromise(program).catch(console.error)
 }

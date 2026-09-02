@@ -20,6 +20,9 @@ importers:
       '@oxlint/plugins':
         specifier: 1.77.0
         version: 1.77.0
+      '@roop/agent':
+        specifier: workspace:*
+        version: link:packages/agent
       '@types/node':
         specifier: ^26.1.1
         version: 26.1.1
