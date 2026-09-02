@@ -1,4 +1,4 @@
-import { Agent, Journal, Roop } from "@roop/agent"
+import { Agent, Journal, Roop, RunEvent } from "@roop/agent"
 import { Console, Effect, Schema, Stream } from "effect"
 
 import { DeepSeek } from "./deepseek.ts"
@@ -35,19 +35,27 @@ const program = Agent.events(lead, {
   prompt:
     "Compare the concurrency models of Erlang, Go, and Effect-TS. Research each one separately first.",
 }).pipe(
+  // The live stream is the run's journal events plus live-only deltas; the
+  // same switch renders a replayed history.
   Stream.runForEach((event) => {
     switch (event._tag) {
-      case "ToolCall":
+      case "tool/call":
         return Console.log(`\n[tool] ${event.name} ${JSON.stringify(event.params)}`)
-      case "ToolResult":
-        return Console.log(`[result] ${event.name}: ${String(event.result).slice(0, 80)}...`)
-      case "Subagent":
+      case "tool/result":
+        return Console.log(
+          `[result] ${event.name}: ${JSON.stringify(event.result).slice(0, 80)}...`,
+        )
+      case "subagent":
         // The researchers stream while the lead waits; their events arrive tagged.
-        return event.event._tag === "TextDelta"
+        return event.event._tag === "text/delta"
           ? Effect.sync(() => process.stdout.write("."))
           : Effect.void
-      case "TextDelta":
+      case "text/delta":
         return Effect.sync(() => process.stdout.write(event.delta))
+      case "run":
+        return RunEvent.isTerminal(event)
+          ? Console.log(`\n[${event.reason}] ${event.usage?.totalTokens ?? 0} tokens`)
+          : Effect.void
       default:
         return Effect.void
     }

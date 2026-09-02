@@ -1,7 +1,7 @@
 import { Array as Arr, Option } from "effect"
 import { Prompt } from "effect/unstable/ai"
 
-import { EVENT_VERSION, type JournalEvent, type LifecycleState } from "./Event.ts"
+import { EVENT_VERSION, type JournalEvent, type LifecycleState, type Unstamped } from "./Event.ts"
 
 /** The pure result of projecting a committed Journal prefix. */
 export interface History {
@@ -150,17 +150,19 @@ export const fromEvents = (events: ReadonlyArray<JournalEvent>): History => ({
 export const toPrompt = (history: History | ReadonlyArray<JournalEvent>): Prompt.Prompt =>
   Prompt.fromMessages("messages" in history ? history.messages : toMessages(history))
 
-const recoveredState = (event: SpanEvent): JournalEvent => {
-  switch (event._tag) {
+/** The recovery record for an open span. It is stamped when the resumed run commits it. */
+const recoveredState = (event: SpanEvent): Unstamped<JournalEvent> => {
+  const { at: _at, ...open } = event
+  switch (open._tag) {
     case "run":
     case "turn":
     case "step":
-      return { ...event, state: "recovered", reason: "interrupted" }
+      return { ...open, state: "recovered", reason: "interrupted" }
     case "model/attempt":
-      return { ...event, state: "recovered", message: "recovered before completion" }
+      return { ...open, state: "recovered", message: "recovered before completion" }
     case "tool":
       return {
-        ...event,
+        ...open,
         state: "recovered",
         isFailure: true,
         result: { type: "execution-unknown" },
@@ -178,10 +180,13 @@ const closeOrder: Record<SpanEvent["_tag"], number> = {
   run: 4,
 }
 
-/** Events required to close every open span before a resumed run starts work. */
+/**
+ * Events required to close every open span before a resumed run starts work.
+ * They are unstamped: the runtime assigns `at` when it commits them.
+ */
 export const recoveryEvents = (
   events: ReadonlyArray<JournalEvent>,
-): ReadonlyArray<JournalEvent> => {
+): ReadonlyArray<Unstamped<JournalEvent>> => {
   const calls = new Map<string, Extract<JournalEvent, { readonly _tag: "tool/call" }>>()
   const results = new Set<string>()
   for (const event of events) {
@@ -189,7 +194,7 @@ export const recoveryEvents = (
     if (event._tag === "tool/result") results.add(toolRecordKey(event))
   }
 
-  const unresolved: Array<JournalEvent> = []
+  const unresolved: Array<Unstamped<JournalEvent>> = []
   for (const [key, call] of calls) {
     if (results.has(key)) continue
     unresolved.push({

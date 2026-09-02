@@ -59,7 +59,7 @@ it.effect("approval denial is model-visible and does not call the handler", () =
       ),
     )
     assert.strictEqual(yield* Ref.get(calls), 1)
-    assert.ok(events.some((event) => event._tag === "ToolResult" && event.isFailure))
+    assert.ok(events.some((event) => event._tag === "tool/result" && event.isFailure))
   }),
 )
 

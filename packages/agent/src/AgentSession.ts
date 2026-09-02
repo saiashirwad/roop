@@ -1,12 +1,21 @@
-import { Effect, Stream } from "effect"
+import { Effect, type Scope, Stream } from "effect"
 
 import type { AgentDefinition } from "./Agent.ts"
-import type { AgentEvent } from "./AgentEvents.ts"
-import { type AgentResult, fromEvents } from "./AgentResult.ts"
-import { RunId, SessionId } from "./DomainIds.ts"
+import type { AgentResult } from "./AgentResult.ts"
+import { type RunId, SessionId } from "./DomainIds.ts"
 import type { Middleware } from "./Middleware.ts"
+import { isTextDelta } from "./RunEvent.ts"
 import type { RunPolicy } from "./RunPolicy.ts"
-import { runAgent, type RuntimeStream, type SessionMeta } from "./Runtime.ts"
+import {
+  runAgent,
+  type RunHandle,
+  type RuntimeError,
+  type RuntimeServices,
+  type RuntimeStream,
+  type SessionMeta,
+  startAgent,
+  type StartError,
+} from "./Runtime.ts"
 
 export interface SessionRunOptions<RM = never, EM = never> {
   readonly runId?: RunId | string | undefined
@@ -19,14 +28,17 @@ export interface SessionRunOptions<RM = never, EM = never> {
 export interface AgentSession<out R = never, out E = never> {
   readonly id: SessionId
 
+  /** Start a run in the current scope and return its handle. */
+  readonly start: <RM = never, EM = never>(
+    prompt: string,
+    options?: SessionRunOptions<RM, EM>,
+  ) => Effect.Effect<RunHandle<E | EM>, StartError, RuntimeServices<R | RM> | Scope.Scope>
+
+  /** Run to completion and return the folded result. */
   readonly run: <RM = never, EM = never>(
     prompt: string,
     options?: SessionRunOptions<RM, EM>,
-  ) => Effect.Effect<
-    AgentResult,
-    Stream.Error<RuntimeStream<R | RM, E | EM>>,
-    Stream.Services<RuntimeStream<R | RM, E | EM>>
-  >
+  ) => Effect.Effect<AgentResult, RuntimeError<E | EM>, RuntimeServices<R | RM>>
 
   readonly events: <RM = never, EM = never>(
     prompt: string,
@@ -36,11 +48,7 @@ export interface AgentSession<out R = never, out E = never> {
   readonly streamText: <RM = never, EM = never>(
     prompt: string,
     options?: SessionRunOptions<RM, EM>,
-  ) => Stream.Stream<
-    string,
-    Stream.Error<RuntimeStream<R | RM, E | EM>>,
-    Stream.Services<RuntimeStream<R | RM, E | EM>>
-  >
+  ) => Stream.Stream<string, RuntimeError<E | EM>, RuntimeServices<R | RM>>
 }
 
 export const session = <R = never, E = never>(
@@ -49,21 +57,21 @@ export const session = <R = never, E = never>(
 ): AgentSession<R, E> => {
   const id = SessionId.make(sessionId)
 
+  const start = <RM = never, EM = never>(prompt: string, options?: SessionRunOptions<RM, EM>) =>
+    startAgent(agent, { ...options, sessionId: id, prompt })
+
   const events = <RM = never, EM = never>(prompt: string, options?: SessionRunOptions<RM, EM>) =>
     runAgent(agent, { ...options, sessionId: id, prompt })
 
   return {
     id,
+    start,
     events,
     run: (prompt, options) =>
-      Stream.runCollect(events(prompt, options)).pipe(
-        Effect.map((all: ReadonlyArray<AgentEvent>) =>
-          fromEvents(id, RunId.make(options?.runId ?? `${id}:0`), all),
-        ),
-      ),
+      Effect.scoped(Effect.flatMap(start(prompt, options), (handle) => handle.result)),
     streamText: (prompt, options) =>
       events(prompt, options).pipe(
-        Stream.filter((event) => event._tag === "TextDelta"),
+        Stream.filter(isTextDelta),
         Stream.map((event) => event.delta),
       ),
   }

@@ -1,5 +1,5 @@
 import { Agent, Journal, Roop } from "@roop/agent"
-import { Effect, Stream } from "effect"
+import { Console, Effect, Stream } from "effect"
 
 import { DeepSeek } from "./deepseek.ts"
 
@@ -20,12 +20,25 @@ const program = Effect.gen(function* () {
     prompt: "How many letters 'r' are in the word 'strawberry'? Think step by step.",
   })
 
+  // Reasoning tokens stream as `reasoning/delta` and the answer as `text/delta`.
   yield* events.pipe(
     Stream.tap((event) => {
-      if (event._tag === "TextDelta") {
-        process.stdout.write(event.delta)
+      switch (event._tag) {
+        case "reasoning/delta":
+          process.stdout.write(`\x1b[2m${event.delta}\x1b[0m`)
+          return Effect.void
+        case "text/delta":
+          process.stdout.write(event.delta)
+          return Effect.void
+        case "model/attempt":
+          return event.state === "completed" && event.usage !== undefined
+            ? Console.log(
+                `\n[${event.model ?? "model"}] ${event.usage.reasoningTokens ?? 0} reasoning + ${event.usage.outputTokens} output tokens`,
+              )
+            : Effect.void
+        default:
+          return Effect.void
       }
-      return Effect.void
     }),
     Stream.runDrain,
   )

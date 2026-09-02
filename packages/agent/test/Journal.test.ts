@@ -20,6 +20,7 @@ import { JournalMemory } from "../src/JournalMemory.ts"
 const user = (content: string): JournalEvent => ({
   _tag: "user/message",
   version: EVENT_VERSION,
+  at: 0,
   content,
 })
 
@@ -52,9 +53,9 @@ const run = Effect.gen(function* () {
 
 it("foldSessionMetadata keeps the latest value of each field", () => {
   const folded = foldSessionMetadata(emptySessionMetadata, [
-    { _tag: "session/meta", version: EVENT_VERSION, title: "first", cwd: "/one" },
+    { _tag: "session/meta", version: EVENT_VERSION, at: 0, title: "first", cwd: "/one" },
     user("noise"),
-    { _tag: "session/meta", version: EVENT_VERSION, title: "second" },
+    { _tag: "session/meta", version: EVENT_VERSION, at: 0, title: "second" },
   ])
   assert.deepStrictEqual(folded, { title: Option.some("second"), cwd: Option.some("/one") })
 })
@@ -94,12 +95,12 @@ it.layer(JournalMemory)("JournalMemory", (it) => {
       )
       yield* TestClock.adjust(Duration.millis(100))
       yield* journal.append("listed-a", 0, [
-        { _tag: "session/meta", version: EVENT_VERSION, title: "A", cwd: "/a" },
+        { _tag: "session/meta", version: EVENT_VERSION, at: 0, title: "A", cwd: "/a" },
         user("one"),
       ])
       yield* TestClock.adjust(Duration.millis(50))
       yield* journal.append("listed-a", 2, [
-        { _tag: "session/meta", version: EVENT_VERSION, title: "A2" },
+        { _tag: "session/meta", version: EVENT_VERSION, at: 0, title: "A2" },
       ])
       yield* journal.append("listed-b", 0, [user("hello")])
 
@@ -174,7 +175,8 @@ it.layer(JournalMemory)("JournalMemory", (it) => {
       const futureExit = yield* Effect.exit(
         validateJournalEvent("session", {
           _tag: "user/message",
-          version: 2,
+          version: EVENT_VERSION + 1,
+          at: 0,
           content: "future",
         } as never),
       )
@@ -185,7 +187,11 @@ it.layer(JournalMemory)("JournalMemory", (it) => {
 
       // SAFETY: Tests unknown event structure rejection branch.
       const invalidExit = yield* Effect.exit(
-        validateJournalEvent("session", { _tag: "unknown", version: 1 } as never),
+        validateJournalEvent("session", {
+          _tag: "unknown",
+          version: EVENT_VERSION,
+          at: 0,
+        } as never),
       )
       assert.ok(Exit.isFailure(invalidExit))
       assert.ok(Schema.is(JournalError)(Option.getOrThrow(Exit.findErrorOption(invalidExit))))

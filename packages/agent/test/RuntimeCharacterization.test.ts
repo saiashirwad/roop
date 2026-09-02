@@ -42,7 +42,7 @@ it.effect("streams reasoning as a live event", () =>
       Effect.provideService(LanguageModel.LanguageModel, model),
     )
 
-    assert.ok(events.some((event) => event._tag === "ReasoningDelta" && event.delta === "think"))
+    assert.ok(events.some((event) => event._tag === "reasoning/delta" && event.delta === "think"))
   }),
 )
 
@@ -97,7 +97,7 @@ it.effect("turns a tool timeout into one model-visible failed result", () =>
     yield* Deferred.await(started)
     yield* TestClock.adjust(Duration.millis(20))
     const events = yield* Fiber.join(fiber)
-    const failures = events.filter((event) => event._tag === "ToolResult" && event.isFailure)
+    const failures = events.filter((event) => event._tag === "tool/result" && event.isFailure)
     assert.strictEqual(failures.length, 1)
     assert.match(JSON.stringify(failures[0]), /tool-timeout/)
   }),
@@ -125,9 +125,9 @@ it.effect("bounds encoded tool output and continues the run", () =>
       Effect.provide(JournalMemory),
       Effect.provideService(LanguageModel.LanguageModel, model),
     )
-    const result = events.find((event) => event._tag === "ToolResult")
-    assert.ok(result?._tag === "ToolResult" && result.isFailure)
-    if (result?._tag === "ToolResult") {
+    const result = events.find((event) => event._tag === "tool/result")
+    assert.ok(result?._tag === "tool/result" && result.isFailure)
+    if (result?._tag === "tool/result") {
       assert.match(JSON.stringify(result.result), /tool-output-too-large/)
     }
   }),
@@ -194,7 +194,7 @@ it.effect("holds a scheduler permit for the full tool lifetime", () =>
     yield* Deferred.succeed(release, undefined)
     const events = yield* Fiber.join(fiber)
     assert.strictEqual(yield* Ref.get(maximum), 1)
-    assert.strictEqual(events.filter((event) => event._tag === "ToolResult").length, 2)
+    assert.strictEqual(events.filter((event) => event._tag === "tool/result").length, 2)
   }),
 )
 
@@ -230,7 +230,7 @@ it.effect("stops an endless tool loop at step and total-step limits", () =>
         Effect.provideService(LanguageModel.LanguageModel, model),
       )
       assert.strictEqual(calls, expectedCalls)
-      assert.ok(events.some((event) => event._tag === "Finish" && event.reason === "stopped"))
+      assert.ok(events.some((event) => event._tag === "run" && event.reason === "stopped"))
     }
   }),
 )

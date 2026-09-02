@@ -15,7 +15,7 @@ compose as explicit Effect values, typed services, streams, and layers.
 | **Agent Definition**         | React-style function with side-effect hooks (`useModel`, `usePersistentState`) | Declarative, pure Effect values: `Agent.make({ name, instructions, tools, capabilities })`                        |
 | **Tool Calling**             | `useTool({ run: ({ harness }) => ... })` (reads global state)                  | Typed `Tool.make` bound via `Agent.tool`, declaring explicit `Context.Service` dependencies                       |
 | **Subagents & Delegation**   | Separate deployed agents or complex server routing                             | First-class delegation via `Agent.delegate(child, { ... })` with deterministic child sessions                     |
-| **Execution Ergonomics**     | Ad-hoc lifecycle callbacks                                                     | Returns structured `AgentResult` via `Agent.run` or streaming via `Agent.streamText` and `Agent.events`           |
+| **Execution Ergonomics**     | Ad-hoc lifecycle callbacks                                                     | `Agent.run` returns an `AgentResult`; `Agent.start` returns a `RunHandle` (events, result, send, interrupt)       |
 | **Conversation State**       | `usePersistentState('key', default)`                                           | Append-only semantic event journal (`Journal.memory`, `JournalFs.layer`) addressed via `Agent.session(agent, id)` |
 | **Service Injection**        | Hardcoded client instances or global singletons                                | Effect 3-Role Discipline: `Definition` (`Context.Service`), `Consumer` (`dependencies`), `Provider` (`Layer`)     |
 | **Infrastructure Wiring**    | Global harness or manual client configuration                                  | Composed once at the boundary via `Roop.layer({ model, journal, middleware })`                                    |
@@ -58,11 +58,26 @@ DEEPSEEK_API_KEY="your-api-key" node examples/persistent-conversations.ts
 
 ### [DeepSeek Reasoner (R1 Thinking Stream)](./reasoning-agent.ts)
 
-Streams both real-time chain-of-thought tokens (`ReasoningDelta`) and final answer tokens
-(`TextDelta`) using DeepSeek-R1 (`deepseek-reasoner`).
+Streams both real-time chain-of-thought tokens (`reasoning/delta`) and final answer tokens
+(`text/delta`) using DeepSeek-R1 (`deepseek-reasoner`), then prints the model name and token usage
+the kernel records on the completed `model/attempt` event.
 
 ```bash
 DEEPSEEK_API_KEY="your-api-key" node examples/reasoning-agent.ts
+```
+
+### [Steering a Running Agent](./steering.ts)
+
+`Agent.start` returns a `RunHandle` instead of a stream: `events` is the live stream, `result`
+settles with the `AgentResult` when the run ends, `interrupt` stops it, and `send` delivers a
+message to the run while it executes. The example starts a run, streams its text, and on the first
+`tool/call` sends "Also mention the Effect Schema module". The kernel commits the message as a
+`user/message` after that step's tool results, the model sees it in its next request, and the run
+carries on; a message sent during the final answer makes the run take another step instead of
+ending. The run lives in the surrounding `Effect.scoped`: closing the scope interrupts it.
+
+```bash
+DEEPSEEK_API_KEY="your-api-key" node examples/steering.ts
 ```
 
 ### [Human-in-the-Loop & Tool Approvals](./human-in-the-loop.ts)
@@ -86,7 +101,10 @@ DEEPSEEK_API_KEY="your-api-key" node examples/subagent-delegation.ts
 ### [Parallel Subagents](./parallel-subagents.ts)
 
 The lead starts one researcher per topic in the same step with `Agent.spawn`, then collects them all
-with one `await_research` call. Subagent events stream to the parent while it waits.
+with one `await_research` call. Subagent events stream to the parent while it waits, wrapped in
+`subagent`. The example renders the `RunEvent` stream (`tool/call`, `tool/result`, `text/delta`, and
+the terminal `run` event with its token usage) with one `switch`; the same code renders a replayed
+history.
 
 ```bash
 DEEPSEEK_API_KEY="your-api-key" node examples/parallel-subagents.ts
@@ -144,6 +162,6 @@ const program = Effect.gen(function* () {
 Supported pre-configured layers:
 
 - `DeepSeek.Live`: Default chat model (`deepseek-chat` / DeepSeek-V3).
-- `DeepSeek.reasonerLive`: Reasoning model (`deepseek-reasoner` / DeepSeek-R1) with `ReasoningDelta`
-  streaming.
+- `DeepSeek.reasonerLive`: Reasoning model (`deepseek-reasoner` / DeepSeek-R1) with
+  `reasoning/delta` streaming.
 - `DeepSeek.layer({ apiKey, model, apiUrl })`: Custom configuration.

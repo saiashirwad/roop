@@ -6,6 +6,7 @@ import { fromEvents, recoveryEvents, toPrompt } from "../src/History.ts"
 const started = {
   _tag: "run" as const,
   version: EVENT_VERSION,
+  at: 0,
   sessionId: "session",
   runId: "run",
   state: "started" as const,
@@ -13,11 +14,12 @@ const started = {
 
 it("projects complete messages and keeps tool call/result pairing", () => {
   const events = [
-    { _tag: "user/message" as const, version: EVENT_VERSION, content: "find 42" },
+    { _tag: "user/message" as const, version: EVENT_VERSION, at: 0, content: "find 42" },
     started,
     {
       _tag: "tool/call" as const,
       version: EVENT_VERSION,
+      at: 0,
       id: "call",
       name: "lookup",
       params: { id: "42" },
@@ -25,6 +27,7 @@ it("projects complete messages and keeps tool call/result pairing", () => {
     {
       _tag: "tool/result" as const,
       version: EVENT_VERSION,
+      at: 0,
       id: "call",
       name: "lookup",
       isFailure: false,
@@ -41,8 +44,8 @@ it("projects complete messages and keeps tool call/result pairing", () => {
 
 it("ignores session/meta when projecting the prompt", () => {
   const events = [
-    { _tag: "session/meta" as const, version: EVENT_VERSION, title: "Titled", cwd: "/work" },
-    { _tag: "user/message" as const, version: EVENT_VERSION, content: "hello" },
+    { _tag: "session/meta" as const, version: EVENT_VERSION, at: 0, title: "Titled", cwd: "/work" },
+    { _tag: "user/message" as const, version: EVENT_VERSION, at: 0, content: "hello" },
   ]
   const history = fromEvents(events)
   assert.deepStrictEqual(
@@ -56,10 +59,11 @@ it("ignores session/meta when projecting the prompt", () => {
 
 it("does not project an unresolved tool call before recovery", () => {
   const events = [
-    { _tag: "user/message" as const, version: EVENT_VERSION, content: "run it" },
+    { _tag: "user/message" as const, version: EVENT_VERSION, at: 0, content: "run it" },
     {
       _tag: "tool/call" as const,
       version: EVENT_VERSION,
+      at: 0,
       id: "call",
       name: "dangerous",
       params: {},
@@ -83,6 +87,7 @@ it("closes open run, turn, step, attempt, and tool spans in deterministic order"
     {
       _tag: "turn" as const,
       version: EVENT_VERSION,
+      at: 0,
       runId: "run",
       turn: 1,
       state: "started" as const,
@@ -90,6 +95,7 @@ it("closes open run, turn, step, attempt, and tool spans in deterministic order"
     {
       _tag: "step" as const,
       version: EVENT_VERSION,
+      at: 0,
       runId: "run",
       turn: 1,
       step: 1,
@@ -98,6 +104,7 @@ it("closes open run, turn, step, attempt, and tool spans in deterministic order"
     {
       _tag: "model/attempt" as const,
       version: EVENT_VERSION,
+      at: 0,
       runId: "run",
       turn: 1,
       step: 1,
@@ -108,6 +115,7 @@ it("closes open run, turn, step, attempt, and tool spans in deterministic order"
     {
       _tag: "tool" as const,
       version: EVENT_VERSION,
+      at: 0,
       runId: "run",
       turn: 1,
       step: 1,
@@ -127,6 +135,7 @@ it("recovers a reused provider call id by run, turn, and step", () => {
     {
       _tag: "tool/call" as const,
       version: EVENT_VERSION,
+      at: 0,
       runId: "run",
       turn: 1,
       step: 1,
@@ -137,6 +146,7 @@ it("recovers a reused provider call id by run, turn, and step", () => {
     {
       _tag: "tool/result" as const,
       version: EVENT_VERSION,
+      at: 0,
       runId: "run",
       turn: 1,
       step: 1,
@@ -148,6 +158,7 @@ it("recovers a reused provider call id by run, turn, and step", () => {
     {
       _tag: "tool/call" as const,
       version: EVENT_VERSION,
+      at: 0,
       runId: "run",
       turn: 1,
       step: 2,

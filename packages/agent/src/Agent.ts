@@ -4,7 +4,6 @@ import { Effect, Function, Option, Pipeable, Schema, Stream } from "effect"
 import { Tool, type Toolkit } from "effect/unstable/ai"
 
 import type { AgentContext } from "./AgentContext.ts"
-import { AgentEmit, type AgentEvent } from "./AgentEvents.ts"
 import type { AgentPlan } from "./AgentPlan.ts"
 import { session as makeSession, type SessionRunOptions } from "./AgentSession.ts"
 import {
@@ -14,8 +13,10 @@ import {
   type Elements,
   capability as makeCapability,
 } from "./Capability.ts"
+import type { Inbox } from "./Inbox.ts"
 import { all as middlewareAll, type Middleware } from "./Middleware.ts"
 import { all as moduleAll, type Module, tool as moduleTool, when as moduleWhen } from "./Module.ts"
+import { isTextDelta, RunEmit, type RunEvent } from "./RunEvent.ts"
 import { mergePolicy, type RunPolicy } from "./RunPolicy.ts"
 import { AgentRuntime, type AgentRuntimeRequest } from "./Runtime.ts"
 import { Tasks } from "./Tasks.ts"
@@ -117,12 +118,12 @@ export function tool<const T extends Tool.Any, E = never, R = never>(
     module: mod,
     metadata: { name: definition.name, description: definition.description },
     tool: definition,
-    /* SAFETY: the runtime provides ToolExecutionContext, AgentEmit, and Tasks to every handler. */
+    /* SAFETY: the runtime provides ToolExecutionContext, RunEmit, Tasks, and Inbox to every handler. */
   } as AgentTool<Exclude<R, RuntimeProvided> | Tool.HandlerServices<T>, E>
 }
 
 /** Services the runtime provides to every tool handler. */
-type RuntimeProvided = ToolExecutionContext | AgentEmit | Tasks
+type RuntimeProvided = ToolExecutionContext | RunEmit | Tasks | Inbox
 
 export interface DelegateOptions<P> {
   readonly name: string
@@ -147,40 +148,26 @@ const childTool = <P>(child: AgentDefinition<any, any>, options: DelegateOptions
 /**
  * Run a child agent from inside a tool call. The child's session id is derived
  * from the parent session and tool call, its events are forwarded to the parent
- * wrapped in `Subagent`, and its text is the result.
+ * wrapped in `subagent`, and its text is the result.
  */
 const runChild = <ChildR, ChildE>(child: AgentDefinition<ChildR, ChildE>, prompt: string) =>
   Effect.gen(function* () {
     const runtime = yield* AgentRuntime
     const parent = yield* Effect.serviceOption(ToolExecutionContext)
-    const emitter = yield* Effect.serviceOption(AgentEmit)
+    const emitter = yield* Effect.serviceOption(RunEmit)
 
     const sessionId = Option.match(parent, {
       onNone: () => `child/${child.name}`,
       onSome: (context) => `${context.sessionId}/agents/${child.name}/${context.callId}`,
     })
-    const wrap = (event: AgentEvent): AgentEvent =>
-      Option.match(parent, {
-        onNone: () => ({ _tag: "Subagent", name: child.name, event }),
-        onSome: (context) => ({
-          _tag: "Subagent",
-          name: child.name,
-          toolCallId: context.callId,
-          event,
-        }),
-      })
-    const forward = (event: AgentEvent) =>
-      Option.match(emitter, {
-        onNone: () => Effect.void,
-        onSome: ({ emit }) => emit(wrap(event)),
-      })
+    const forward = Option.match(emitter, {
+      onNone: () => () => Effect.void,
+      onSome: (emit) => (event: RunEvent) => emit.subagent(child.name, event),
+    })
 
     return yield* runtime.run(child, { sessionId, prompt }).pipe(
       Stream.tap(forward),
-      Stream.filter(
-        (event): event is Extract<AgentEvent, { readonly _tag: "TextDelta" }> =>
-          event._tag === "TextDelta",
-      ),
+      Stream.filter(isTextDelta),
       Stream.runFold(
         () => "",
         (text, event) => text + event.delta,
@@ -345,6 +332,12 @@ const toSessionOptions = <RM, EM>(
   meta: request.meta,
 })
 
+/** Start a run in the current scope; the handle streams events, settles a result, and takes messages. */
+export const start = <R, E, RM = never, EM = never>(
+  agent: AgentDefinition<R, E>,
+  request: AgentRuntimeRequest<RM, EM>,
+) => makeSession(agent, request.sessionId).start(request.prompt, toSessionOptions(request))
+
 export const events = <R, E, RM = never, EM = never>(
   agent: AgentDefinition<R, E>,
   request: AgentRuntimeRequest<RM, EM>,
@@ -373,6 +366,7 @@ export const Agent = {
   withMiddleware,
   withPolicy,
   annotate,
+  start,
   events,
   streamText,
   run,

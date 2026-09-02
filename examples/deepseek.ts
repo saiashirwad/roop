@@ -44,6 +44,8 @@ interface OpenAiUsage {
 }
 
 interface OpenAiResponse {
+  readonly id?: string | undefined
+  readonly model?: string | undefined
   readonly choices?:
     | ReadonlyArray<{
         readonly message?:
@@ -60,6 +62,8 @@ interface OpenAiResponse {
 }
 
 interface OpenAiChunk {
+  readonly id?: string | undefined
+  readonly model?: string | undefined
   readonly choices?:
     | ReadonlyArray<{
         readonly delta?:
@@ -121,6 +125,18 @@ const usage = (raw: OpenAiUsage | null | undefined): typeof Response.Usage.Encod
     text: raw?.completion_tokens,
     reasoning: raw?.completion_tokens_details?.reasoning_tokens,
   },
+})
+
+/** Names the model that answered, so the kernel can record it on `model/attempt`. */
+const metadataPart = (
+  id: string | undefined,
+  modelId: string,
+): Extract<Response.StreamPartEncoded, { type: "response-metadata" }> => ({
+  type: "response-metadata",
+  id,
+  modelId,
+  timestamp: undefined,
+  request: undefined,
 })
 
 const toolCallPart = (
@@ -277,7 +293,7 @@ export const make = (
             Effect.mapError(aiError("generateText")),
           )) as OpenAiResponse
           const choice = body.choices?.[0]
-          const parts: Array<Response.PartEncoded> = []
+          const parts: Array<Response.PartEncoded> = [metadataPart(body.id, body.model ?? model)]
           if (choice?.message?.reasoning_content) {
             parts.push({ type: "reasoning", text: choice.message.reasoning_content })
           }
@@ -302,6 +318,7 @@ export const make = (
             const response = yield* completions("streamText", providerOptions, true)
             // DeepSeek streams tool-call arguments in fragments keyed by index.
             const toolCalls = new Map<number, { id: string; name: string; arguments: string }>()
+            let announced = false
             return response.stream.pipe(
               Stream.decodeText(),
               Stream.pipeThroughChannel(Sse.decode()),
@@ -313,6 +330,10 @@ export const make = (
                 const choice = chunk.choices?.[0]
                 if (choice === undefined) return Stream.empty
                 const parts: Array<Response.StreamPartEncoded> = []
+                if (!announced) {
+                  announced = true
+                  parts.push(metadataPart(chunk.id, chunk.model ?? model))
+                }
                 if (choice.delta?.reasoning_content) {
                   parts.push({
                     type: "reasoning-delta",

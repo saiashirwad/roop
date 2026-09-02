@@ -227,7 +227,7 @@ it.effect("ToolExecutionContext is provided to tool handlers", () =>
 )
 
 it.effect(
-  "Agent.delegate orchestrates child agent with deterministic session and Subagent events",
+  "Agent.delegate orchestrates child agent with deterministic session and subagent events",
   () =>
     Effect.gen(function* () {
       const journal = yield* Journal.Journal
@@ -283,9 +283,9 @@ it.effect(
 
       // Check that subagent event was emitted
       const subagentEvents = allEvents.filter(
-        (e): e is { _tag: "Subagent"; name: string; toolCallId?: string; event: unknown } =>
+        (e): e is { _tag: "subagent"; name: string; toolCallId?: string; event: unknown } =>
           /* SAFETY: test assertion narrows event shape by checking _tag discriminator */
-          typeof e === "object" && e !== null && (e as any)._tag === "Subagent",
+          typeof e === "object" && e !== null && (e as any)._tag === "subagent",
       )
       assert.ok(subagentEvents.length > 0)
       assert.strictEqual(subagentEvents[0]!.name, "researcher")

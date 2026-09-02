@@ -1,9 +1,9 @@
-import { AgentEvents, Error as AgentError, Journal, RunPolicy, ToolRegistry } from "@roop/agent"
+import { Error as AgentError, Journal, RunEvent, RunPolicy, ToolRegistry } from "@roop/agent"
 import { Schema } from "effect"
 import { AiError } from "effect/unstable/ai"
 import { Rpc, RpcGroup } from "effect/unstable/rpc"
 
-import { RunNotFound, SessionBusy } from "./RunSupervisor.ts"
+import { RunNotFound, SendOutcome, SessionBusy } from "./RunSupervisor.ts"
 
 const {
   JournalEmptyAppend,
@@ -15,7 +15,7 @@ const {
 } = Journal
 const { FinalizationError, UnsafeModelRetry, ModelTimeout } = AgentError
 const { InvalidToolName, ToolConflict } = ToolRegistry
-const { AgentEvent } = AgentEvents
+const { RunEvent: RunEventSchema } = RunEvent
 const { RunPolicy: RunPolicySchema } = RunPolicy
 
 /** Session metadata a client attaches to a run. */
@@ -34,7 +34,7 @@ export const AgentRpc = RpcGroup.make(
       policy: Schema.optionalKey(RunPolicySchema),
       meta: Schema.optionalKey(SessionMeta),
     },
-    success: AgentEvent,
+    success: RunEventSchema,
     error: Schema.Union([
       SessionBusy,
       RunNotFound,
@@ -53,7 +53,7 @@ export const AgentRpc = RpcGroup.make(
   }),
   Rpc.make("SubscribeRun", {
     payload: { sessionId: Schema.String },
-    success: AgentEvent,
+    success: RunEventSchema,
     error: Schema.Union([
       SessionBusy,
       RunNotFound,
@@ -69,6 +69,17 @@ export const AgentRpc = RpcGroup.make(
       ModelTimeout,
     ]),
     stream: true,
+  }),
+  Rpc.make("SendMessage", {
+    payload: { sessionId: Schema.String, content: Schema.String },
+    success: SendOutcome,
+    error: Schema.Union([
+      SessionBusy,
+      JournalError,
+      JournalRevisionConflict,
+      JournalEmptyAppend,
+      JournalFutureVersion,
+    ]),
   }),
   Rpc.make("InterruptRun", {
     payload: { sessionId: Schema.String },

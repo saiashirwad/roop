@@ -1,12 +1,12 @@
 /* oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-unknown-returns, anti-slop/no-runtime-typeof, anti-slop/no-unsafe-dictionary-type, anti-slop/no-known-value-widening, anti-slop/require-safety-comment-for-type-assertion -- SAFETY: this adapter is the single JSON canonicalization and Effect AI erasure boundary; values entering it are untyped by design. */
 
 import type { Stream } from "effect"
-import type { AiError, LanguageModel, Prompt } from "effect/unstable/ai"
+import type { AiError, LanguageModel, Prompt, Response } from "effect/unstable/ai"
 import type { StreamPart } from "effect/unstable/ai/Response"
 import type * as Tool from "effect/unstable/ai/Tool"
 import type * as Toolkit from "effect/unstable/ai/Toolkit"
 
-import type { Json } from "../Event.ts"
+import type { Json, Usage } from "../Event.ts"
 import type { InstructionFragment } from "../Module.ts"
 
 /** Return a JSON-safe value with object keys in deterministic order. */
@@ -76,6 +76,21 @@ export const requestFingerprint = (input: {
     prompt: input.promptFingerprint,
     toolNames: [...input.toolNames].sort(),
   })
+
+/** Project Effect AI usage onto the journal's provider-agnostic `Usage`. */
+export const usageFromResponse = (usage: Response.Usage): Usage => {
+  const inputTokens = usage.inputTokens.total ?? 0
+  const outputTokens = usage.outputTokens.total ?? 0
+  const cachedInputTokens = usage.inputTokens.cacheRead
+  const reasoningTokens = usage.outputTokens.reasoning
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens: inputTokens + outputTokens,
+    ...(cachedInputTokens === undefined ? undefined : { cachedInputTokens }),
+    ...(reasoningTokens === undefined ? undefined : { reasoningTokens }),
+  }
+}
 
 export type ModelStream = Stream.Stream<StreamPart<Record<string, Tool.Any>>, AiError.AiError>
 

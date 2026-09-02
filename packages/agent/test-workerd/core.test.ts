@@ -5,6 +5,7 @@ import { LanguageModel, type Response, Tool } from "effect/unstable/ai"
 import { Agent } from "../src/Agent.ts"
 import { JournalMemory } from "../src/JournalMemory.ts"
 import { Module } from "../src/Module.ts"
+import { isLive, isTerminal } from "../src/RunEvent.ts"
 import { runAgent } from "../src/Runtime.ts"
 
 const Ping = Tool.make("ping", {
@@ -45,8 +46,16 @@ it.effect("core runs inside workerd", () =>
       Effect.provideService(LanguageModel.LanguageModel, model),
     )
     assert.deepStrictEqual(
-      [...events].map((event) => event._tag),
-      ["ToolCall", "ToolResult", "TextDelta", "Finish"],
+      [...events]
+        .filter(
+          (event) =>
+            isLive(event) ||
+            isTerminal(event) ||
+            event._tag === "tool/call" ||
+            event._tag === "tool/result",
+        )
+        .map((event) => event._tag),
+      ["tool/call", "tool/result", "text/delta", "run"],
     )
   }),
 )

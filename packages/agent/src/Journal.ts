@@ -1,7 +1,7 @@
 import { Clock, Context, Effect, Layer, Option, Ref, Schema } from "effect"
 
 import { SessionId } from "./DomainIds.ts"
-import { decodeJournalEvent, JournalEvent } from "./Event.ts"
+import { decodeJournalEvent, EVENT_VERSION, JournalEvent } from "./Event.ts"
 
 export type Revision = number
 
@@ -139,7 +139,7 @@ export const validateJournalEvent = Effect.fn("Journal.validateJournalEvent")(fu
   event: JournalEvent,
 ) {
   const sid = SessionId.make(sessionId)
-  if (event.version > 1) {
+  if (event.version > EVENT_VERSION) {
     return yield* new JournalFutureVersion({ sessionId: sid, version: event.version })
   }
   return yield* decodeJournalEvent(event).pipe(

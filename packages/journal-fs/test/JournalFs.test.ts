@@ -18,12 +18,13 @@ const platform = Layer.mergeAll(NodeFileSystem.layer, NodePath.layer)
 const user = (content: string): JournalEvent => ({
   _tag: "user/message",
   version: EVENT_VERSION,
+  at: 0,
   content,
 })
 const meta = (title: string, cwd?: string): JournalEvent =>
   cwd === undefined
-    ? { _tag: "session/meta", version: EVENT_VERSION, title }
-    : { _tag: "session/meta", version: EVENT_VERSION, title, cwd }
+    ? { _tag: "session/meta", version: EVENT_VERSION, at: 0, title }
+    : { _tag: "session/meta", version: EVENT_VERSION, at: 0, title, cwd }
 
 /** A fresh temp directory, removed when the test scope closes. */
 const tempDirectory = Effect.gen(function* () {
@@ -209,7 +210,7 @@ it.effect("rebuilds a missing index entry from the log and rejects corrupt lines
 
     yield* fs.writeFileString(
       path.join(directory, "corrupt.jsonl"),
-      '{"_tag":"user/message","version":1,"content":"fine"}\n{"_tag":"nope","version":1}\n',
+      `{"_tag":"user/message","version":${EVENT_VERSION},"at":0,"content":"fine"}\n{"_tag":"nope","version":${EVENT_VERSION},"at":0}\n`,
     )
     const exit = yield* withJournal(
       directory,

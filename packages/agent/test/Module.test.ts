@@ -156,9 +156,9 @@ it.effect("Module.provide closes tool requirements through runAgent with no ambi
       Effect.provideService(LanguageModel.LanguageModel, model),
     )
 
-    const resultEvent = events.find((e) => e._tag === "ToolResult")
-    assert.ok(resultEvent?._tag === "ToolResult")
-    if (resultEvent?._tag === "ToolResult") {
+    const resultEvent = events.find((e) => e._tag === "tool/result")
+    assert.ok(resultEvent?._tag === "tool/result")
+    if (resultEvent?._tag === "tool/result") {
       assert.strictEqual(resultEvent.result, "order:101")
       assert.strictEqual(resultEvent.isFailure, false)
     }

@@ -118,9 +118,9 @@ it.effect("renders one dynamic plan before each logical model request", () =>
     )
 
     assert.strictEqual(yield* Ref.get(renders), 3)
-    assert.ok(events.some((event) => event._tag === "Finish" && event.reason === "completed"))
-    assert.ok(events.some((event) => event._tag === "ToolCall" && event.name === "inspect"))
-    assert.ok(events.some((event) => event._tag === "ToolResult" && event.name === "inspect"))
+    assert.ok(events.some((event) => event._tag === "run" && event.state === "completed"))
+    assert.ok(events.some((event) => event._tag === "tool/call" && event.name === "inspect"))
+    assert.ok(events.some((event) => event._tag === "tool/result" && event.name === "inspect"))
     const requests = stored.events.filter((event) => event._tag === "model/request")
     assert.deepStrictEqual(
       // SAFETY: every request here is produced by the explicit runtime audit
@@ -139,8 +139,8 @@ it.effect("renders one dynamic plan before each logical model request", () =>
     assert.strictEqual(prompts.length, 3)
     assert.ok(JSON.stringify(prompts[1]).includes("inspect-call"))
     assert.ok(JSON.stringify(prompts[1]).includes("inspected"))
-    assert.ok(events.some((event) => event._tag === "ToolCall" && event.name === "commit"))
-    assert.ok(events.some((event) => event._tag === "ToolResult" && event.name === "commit"))
+    assert.ok(events.some((event) => event._tag === "tool/call" && event.name === "commit"))
+    assert.ok(events.some((event) => event._tag === "tool/result" && event.name === "commit"))
   }),
 )
 
@@ -207,8 +207,8 @@ it.effect("commits session/meta before the user message when a run carries meta"
       Effect.provideService(LanguageModel.LanguageModel, model),
     )
     assert.deepStrictEqual(session.events.slice(0, 2), [
-      { _tag: "session/meta", version: EVENT_VERSION, title: "Titled", cwd: "/work" },
-      { _tag: "user/message", version: EVENT_VERSION, content: "hello" },
+      { _tag: "session/meta", version: EVENT_VERSION, at: 0, title: "Titled", cwd: "/work" },
+      { _tag: "user/message", version: EVENT_VERSION, at: 0, content: "hello" },
     ])
     assert.strictEqual(session.events.filter((event) => event._tag === "session/meta").length, 1)
     const listed = yield* Effect.gen(function* () {
@@ -248,18 +248,27 @@ it.effect("recovers an unresolved tool call before new work without executing it
     const program = Effect.gen(function* () {
       const journal = yield* Journal
       const open: JournalEvent[] = [
-        { _tag: "user/message", version: EVENT_VERSION, content: "old" },
+        { _tag: "user/message", version: EVENT_VERSION, at: 0, content: "old" },
         {
           _tag: "run",
           version: EVENT_VERSION,
+          at: 0,
           sessionId: "recovery-session",
           runId: "old-run",
           state: "started",
         },
-        { _tag: "turn", version: EVENT_VERSION, runId: "old-run", turn: 1, state: "started" },
+        {
+          _tag: "turn",
+          version: EVENT_VERSION,
+          at: 0,
+          runId: "old-run",
+          turn: 1,
+          state: "started",
+        },
         {
           _tag: "step",
           version: EVENT_VERSION,
+          at: 0,
           runId: "old-run",
           turn: 1,
           step: 1,
@@ -268,6 +277,7 @@ it.effect("recovers an unresolved tool call before new work without executing it
         {
           _tag: "model/attempt",
           version: EVENT_VERSION,
+          at: 0,
           runId: "old-run",
           turn: 1,
           step: 1,
@@ -278,6 +288,7 @@ it.effect("recovers an unresolved tool call before new work without executing it
         {
           _tag: "tool/call",
           version: EVENT_VERSION,
+          at: 0,
           runId: "old-run",
           turn: 1,
           step: 1,
@@ -411,22 +422,27 @@ it.effect("keeps a model-request journal failure in the typed error channel", ()
 it.effect("records an aborted run when the consumer interrupts the stream", () =>
   Effect.gen(function* () {
     const modelFinalizers = yield* Ref.make(0)
+    // The model keeps streaming after its first token until it is interrupted.
     const model = yield* LanguageModel.make({
       generateText: () => Effect.succeed([]),
       streamText: () =>
         Stream.fromIterable([
           { type: "text-start" as const, id: "text" },
           { type: "text-delta" as const, id: "text", delta: "first" },
-          { type: "text-delta" as const, id: "text", delta: "second" },
-          { type: "text-end" as const, id: "text" },
-        ]).pipe(Stream.ensuring(Ref.update(modelFinalizers, (count) => count + 1))),
+        ]).pipe(
+          Stream.concat(Stream.never),
+          Stream.ensuring(Ref.update(modelFinalizers, (count) => count + 1)),
+        ),
     })
     const program = Effect.gen(function* () {
       const journal = yield* Journal
       yield* runAgent(Agent.make("interrupt", Module.empty), {
         sessionId: "interrupt-session",
         prompt: "interrupt",
-      }).pipe(Stream.take(1), Stream.runDrain)
+      }).pipe(
+        Stream.takeUntil((event) => event._tag === "text/delta"),
+        Stream.runDrain,
+      )
       return yield* journal.load("interrupt-session")
     })
     const session = yield* program.pipe(
@@ -436,6 +452,7 @@ it.effect("records an aborted run when the consumer interrupts the stream", () =
     const runs = session.events.filter((event) => event._tag === "run")
     assert.strictEqual(runs.length, 2)
     assert.strictEqual(runs[1]?.state, "aborted")
+    assert.strictEqual(runs[1]?.reason, "interrupted")
     assert.strictEqual(yield* Ref.get(modelFinalizers), 1)
   }),
 )
@@ -566,7 +583,7 @@ it.effect("retries before output with the same logical plan", () =>
     )
     assert.strictEqual(attempts.length, 2)
     assert.deepStrictEqual(attempts[0], attempts[1])
-    assert.ok(events.some((event) => event._tag === "TextDelta" && event.delta === "ok"))
+    assert.ok(events.some((event) => event._tag === "text/delta" && event.delta === "ok"))
   }),
 )
 
@@ -777,10 +794,10 @@ it.effect("returns declared domain failures to the model and continues", () =>
     assert.ok(
       events.some(
         (event) =>
-          event._tag === "ToolResult" && event.name === "domain_failure" && event.isFailure,
+          event._tag === "tool/result" && event.name === "domain_failure" && event.isFailure,
       ),
     )
-    assert.ok(events.some((event) => event._tag === "TextDelta" && event.delta === "continued"))
+    assert.ok(events.some((event) => event._tag === "text/delta" && event.delta === "continued"))
   }),
 )
 
@@ -881,7 +898,7 @@ it.effect("keeps one durable pair for local and provider-executed calls", () =>
     )
     assert.ok(calls.some((call) => call.name === "local_tool"))
     assert.ok(calls.some((call) => call.name === "provider_tool" && call.id === "provider-call"))
-    assert.ok(events.some((event) => event._tag === "Finish" && event.reason === "completed"))
+    assert.ok(events.some((event) => event._tag === "run" && event.state === "completed"))
   }),
 )
 
@@ -959,7 +976,7 @@ it.effect("records aborted run with reason stopped when step limit is reached", 
       Effect.provideService(LanguageModel.LanguageModel, model),
     )
 
-    assert.ok(events.some((event) => event._tag === "Finish" && event.reason === "stopped"))
+    assert.ok(events.some((event) => event._tag === "run" && event.reason === "stopped"))
     const terminalRunEvent = stored.events.filter(
       (e): e is Extract<JournalEvent, { readonly _tag: "run" }> =>
         e._tag === "run" && (e.state === "aborted" || e.state === "completed"),

@@ -1,23 +1,30 @@
 /* oxlint-disable anti-slop/no-chained-type-assertions, anti-slop/no-escape-hatch-assertions -- the intercepted toolkit is the one place the interpreter re-enters the Effect AI handler existential. */
 
-import { Cause, Duration, Effect, Exit, Option, Queue, Ref, Stream } from "effect"
+import { Cause, Duration, Effect, Exit, Option, Ref, type Scope, Stream } from "effect"
 import { Prompt, type AiError, type LanguageModel, type Response } from "effect/unstable/ai"
 import type * as Tool from "effect/unstable/ai/Tool"
 
 import type { AgentDefinition } from "../Agent.ts"
-import { AgentEmit, type AgentEvent } from "../AgentEvents.ts"
 import { toPrompt as planToPrompt } from "../AgentPlan.ts"
 import type { RunId, SessionId } from "../DomainIds.ts"
 import { ModelTimeout, UnsafeModelRetry } from "../Error.ts"
 import {
+  addUsage,
+  emptyUsage,
   EVENT_VERSION,
   type FinishReason,
   type Json,
   type JournalEvent,
   type LifecycleState,
+  type ModelAttemptEvent,
+  type ModelFinishReason,
+  type Unstamped,
+  type Usage,
 } from "../Event.ts"
+import { Inbox, type InboxMessage, type RunInbox } from "../Inbox.ts"
 import type { JournalAppendError } from "../Journal.ts"
 import type { Middleware, ModelCallInput, ToolCallInput } from "../Middleware.ts"
+import { RunEmit, type RunEmitService, type UnstampedLiveEvent } from "../RunEvent.ts"
 import type { ResolvedRunPolicy } from "../RunPolicy.ts"
 import { make as makeTasks, Tasks, type TasksService } from "../Tasks.ts"
 import { ToolExecutionContext, type ToolExecutionContextService } from "../ToolExecutionContext.ts"
@@ -29,14 +36,18 @@ import {
   toJson,
   toolDescriptors,
   toolFingerprint,
+  usageFromResponse,
 } from "./effectAiAdapter.ts"
 import { makeToolCallCorrelator } from "./toolCallCorrelator.ts"
 import { makeToolScheduler, type ToolScheduler } from "./toolScheduler.ts"
 
-/** Commit semantic events to the journal. An empty batch is a no-op. */
+/** Commit semantic events to the journal and publish them live. An empty batch is a no-op. */
 export type AppendEvents = (
-  events: ReadonlyArray<JournalEvent>,
+  events: ReadonlyArray<Unstamped<JournalEvent>>,
 ) => Effect.Effect<void, JournalAppendError>
+
+/** Publish one live-only event. */
+export type EmitEvent = (event: UnstampedLiveEvent) => Effect.Effect<void>
 
 export interface RunOptions<R, E> {
   readonly sessionId: SessionId
@@ -48,6 +59,9 @@ export interface RunOptions<R, E> {
   readonly policy: ResolvedRunPolicy
   readonly middleware: Middleware
   readonly append: AppendEvents
+  readonly emit: EmitEvent
+  /** Messages delivered to the run while it executes; drained at step boundaries. */
+  readonly inbox: RunInbox
 }
 
 export type RunStreamError<E> =
@@ -59,6 +73,9 @@ export type RunStreamError<E> =
   | UnsafeModelRetry
   | ModelTimeout
 
+/** How the run's turn ended: `stopped` when a step limit cut off pending tool calls. */
+export type RunOutcome = "completed" | "stopped"
+
 type Part = Response.StreamPart<Record<string, Tool.Any>>
 
 type StepOutcome =
@@ -67,15 +84,37 @@ type StepOutcome =
 
 type TurnOutcome = { readonly _tag: "Completed" | "Stopped"; readonly stepCount: number }
 
+/** What the provider reported at the end of one physical attempt. */
+interface AttemptFinish {
+  readonly usage: Usage
+  readonly finishReason: ModelFinishReason
+}
+
 /** Attempt bookkeeping for one step. `open` is the attempt the journal has not closed yet. */
 interface AttemptState {
   readonly active: boolean
   readonly outputObserved: boolean
   readonly toolDispatchStarted: boolean
   readonly open: Option.Option<number>
+  /** The open attempt's finish part, once observed. */
+  readonly finish: Option.Option<AttemptFinish>
+  /** The model that answered the open attempt, when the provider names it. */
+  readonly model: Option.Option<string>
+  /** Usage summed over every attempt of this step that reported it. */
+  readonly usage: Usage
 }
 
-interface StepAt {
+const initialAttemptState: AttemptState = {
+  active: false,
+  outputObserved: false,
+  toolDispatchStarted: false,
+  open: Option.none(),
+  finish: Option.none(),
+  model: Option.none(),
+  usage: emptyUsage,
+}
+
+interface StepLocation {
   readonly runId: RunId
   readonly turn: number
   readonly step: number
@@ -102,43 +141,69 @@ const exitOutcome = <A, E>(exit: Exit.Exit<A, E>, onSuccess: (a: A) => FinishRea
       ? { reason: "interrupted" }
       : { reason: "failed", message: Cause.pretty(exit.cause).trim() }
 
-const stepEvent = (at: StepAt, outcome: SpanOutcome | "started"): JournalEvent =>
-  outcome === "started"
-    ? { _tag: "step", ...V, ...at, state: "started" }
-    : {
-        _tag: "step",
-        ...V,
-        ...at,
-        state: terminalState(outcome.reason),
-        reason: outcome.reason,
-        ...withMessage(outcome.message),
-      }
+const stepStarted = (where: StepLocation): Unstamped<JournalEvent> => ({
+  _tag: "step",
+  ...V,
+  ...where,
+  state: "started",
+})
+
+const stepEnded = (
+  where: StepLocation,
+  outcome: SpanOutcome,
+  usage: Usage,
+): Unstamped<JournalEvent> => ({
+  _tag: "step",
+  ...V,
+  ...where,
+  state: terminalState(outcome.reason),
+  reason: outcome.reason,
+  ...withMessage(outcome.message),
+  usage,
+})
+
+const requestId = (where: StepLocation) => `${where.runId}:${where.turn}:${where.step}`
 
 const attemptEvent = (
-  at: StepAt,
+  where: StepLocation,
   attempt: number,
   state: LifecycleState,
   message?: string,
-): JournalEvent => ({
+): Unstamped<ModelAttemptEvent> => ({
   _tag: "model/attempt",
   ...V,
-  ...at,
+  ...where,
   attempt,
-  requestId: `${at.runId}:${at.turn}:${at.step}`,
+  requestId: requestId(where),
   state,
   ...withMessage(message),
 })
 
+/** Close the open attempt with whatever the provider reported for it. */
+const attemptEnded = (
+  where: StepLocation,
+  attempt: number,
+  outcome: SpanOutcome,
+  state: AttemptState,
+): Unstamped<ModelAttemptEvent> => ({
+  ...attemptEvent(where, attempt, terminalState(outcome.reason), outcome.message),
+  ...Option.match(state.finish, {
+    onNone: () => undefined,
+    onSome: (finish) => ({ usage: finish.usage, finishReason: finish.finishReason }),
+  }),
+  ...Option.match(state.model, { onNone: () => undefined, onSome: (model) => ({ model }) }),
+})
+
 const toolCallEvents = (
-  at: StepAt,
+  where: StepLocation,
   call: { readonly id: string; readonly name: string; readonly params: unknown },
   providerExecuted: boolean,
-): ReadonlyArray<JournalEvent> => [
-  { _tag: "tool", ...V, ...at, id: call.id, name: call.name, state: "started" },
+): ReadonlyArray<Unstamped<JournalEvent>> => [
+  { _tag: "tool", ...V, ...where, id: call.id, name: call.name, state: "started" },
   {
     _tag: "tool/call",
     ...V,
-    ...at,
+    ...where,
     id: call.id,
     name: call.name,
     params: toJson(call.params),
@@ -147,15 +212,15 @@ const toolCallEvents = (
 ]
 
 const toolResultEvents = (
-  at: StepAt,
+  where: StepLocation,
   result: { readonly id: string; readonly name: string; readonly isFailure: boolean },
   encoded: Json,
   providerExecuted: boolean,
-): ReadonlyArray<JournalEvent> => [
+): ReadonlyArray<Unstamped<JournalEvent>> => [
   {
     _tag: "tool/result",
     ...V,
-    ...at,
+    ...where,
     id: result.id,
     name: result.name,
     isFailure: result.isFailure,
@@ -165,7 +230,7 @@ const toolResultEvents = (
   {
     _tag: "tool",
     ...V,
-    ...at,
+    ...where,
     id: result.id,
     name: result.name,
     state: result.isFailure ? "aborted" : "completed",
@@ -175,7 +240,7 @@ const toolResultEvents = (
 ]
 
 /** The complete assistant messages of one model response. Token deltas are live-only. */
-const assistantMessageEvents = (response: Prompt.Prompt): ReadonlyArray<JournalEvent> =>
+const assistantMessageEvents = (response: Prompt.Prompt): ReadonlyArray<Unstamped<JournalEvent>> =>
   response.content.flatMap((message) => {
     if (message.role !== "assistant") return []
     const parts = message.content
@@ -202,389 +267,419 @@ const toolTimedOut = {
 }
 
 /**
- * Executes a run: one turn of model steps over one agent, with journal spans,
- * tool interception, and a single terminal `Finish` event.
+ * Executes a run: one turn of model steps over one agent, with journal spans
+ * and tool interception. Journal events reach the consumer through `append`
+ * and live-only events through `emit`; the caller owns the `run` span.
  */
 export const run = <R, E>(
   options: RunOptions<R, E>,
-): Stream.Stream<AgentEvent, RunStreamError<E>, R> =>
-  Stream.callback<AgentEvent, RunStreamError<E>, R>((queue) => {
-    const { agent, append, middleware, policy, runId, sessionId } = options
-    const emit = (event: AgentEvent): Effect.Effect<void> =>
-      Effect.asVoid(Queue.offer(queue, event))
+): Effect.Effect<RunOutcome, RunStreamError<E>, R | Scope.Scope> => {
+  const { agent, append, emit, inbox, middleware, policy, runId, sessionId } = options
 
-    /** One model request plus the tool calls it produces. */
-    const executeStep = Effect.fn("run.executeStep")(function* (
-      at: StepAt,
-      scheduler: ToolScheduler,
-      tasks: TasksService,
-    ) {
-      const attempts = yield* Ref.make<AttemptState>({
-        active: false,
-        outputObserved: false,
-        toolDispatchStarted: false,
-        open: Option.none(),
-      })
-      yield* append([stepEvent(at, "started")])
-      return yield* stepBody(at, attempts, scheduler, tasks).pipe(
-        Effect.scoped,
-        Effect.onExit((exit) =>
-          Effect.gen(function* () {
-            const outcome = exitOutcome(exit, () => "completed")
-            const state = yield* Ref.get(attempts)
-            yield* append([
-              ...Option.toArray(
-                Option.map(state.open, (attempt) =>
-                  attemptEvent(at, attempt, terminalState(outcome.reason), outcome.message),
-                ),
-              ),
-              stepEvent(at, outcome),
-            ])
-          }),
-        ),
-      )
-    })
-
-    const stepBody = Effect.fn("run.stepBody")(function* (
-      at: StepAt,
-      attempts: Ref.Ref<AttemptState>,
-      scheduler: ToolScheduler,
-      tasks: TasksService,
-    ) {
-      const { turn, step } = at
-      const operation = { sessionId: sessionId.toString(), turn, step }
-      const preStepHistory = yield* Ref.get(options.history)
-
-      // The single render point for one logical model request.
-      const plan = yield* agent.render({ sessionId, runId, turn, step, history: preStepHistory })
-      const finalized = yield* plan.tools.finalize
-      const descriptors = toolDescriptors(finalized.tools)
-      const audit = {
-        planId: `${agent.name}:${turn}:${step}`,
-        planFingerprint: planFingerprint(plan.instructions, descriptors),
-        toolFingerprint: toolFingerprint(descriptors),
-        toolNames: finalized.tools.map((tool) => tool.name),
-      }
-      const correlator = makeToolCallCorrelator({ sessionId: sessionId.toString(), turn, step })
-
-      const recordToolCall = (
-        call: { readonly id: string; readonly name: string; readonly params: unknown },
-        providerExecuted: boolean,
-      ) =>
-        append(toolCallEvents(at, call, providerExecuted)).pipe(
-          Effect.andThen(emit({ _tag: "ToolCall", ...call, providerExecuted })),
-        )
-
-      const recordToolResult = (
-        result: {
-          readonly id: string
-          readonly name: string
-          readonly isFailure: boolean
-          readonly result: unknown
-        },
-        providerExecuted: boolean,
-      ) =>
-        append(toolResultEvents(at, result, toJson(result.result), providerExecuted)).pipe(
-          Effect.andThen(emit({ _tag: "ToolResult", ...result, providerExecuted })),
-        )
-
-      /** Runtime-owned tool calls: `handle` is the single choke point for every seam. */
-      const handle = (name: string, params: Tool.Parameters<Tool.Any>) =>
+  /** One model request plus the tool calls it produces. */
+  const executeStep = Effect.fn("run.executeStep")(function* (
+    where: StepLocation,
+    scheduler: ToolScheduler,
+    tasks: TasksService,
+  ) {
+    const attempts = yield* Ref.make<AttemptState>(initialAttemptState)
+    yield* append([stepStarted(where)])
+    return yield* stepBody(where, attempts, scheduler, tasks).pipe(
+      Effect.scoped,
+      Effect.onExit((exit) =>
         Effect.gen(function* () {
-          // Allocate the token before the scheduler wait so it reflects invocation order.
-          const id = correlator.allocateToken(name)
-          yield* Ref.update(attempts, (state) => ({ ...state, toolDispatchStarted: true }))
-          yield* recordToolCall({ id, name, params }, false)
+          const outcome = exitOutcome(exit, () => "completed")
+          const state = yield* Ref.get(attempts)
+          yield* append([
+            ...Option.toArray(
+              Option.map(state.open, (attempt) => attemptEnded(where, attempt, outcome, state)),
+            ),
+            stepEnded(where, outcome, state.usage),
+          ])
+        }),
+      ),
+    )
+  })
 
-          const executionContext: ToolExecutionContextService = {
-            sessionId,
-            runId,
-            turn,
-            step,
-            callId: id,
-          }
-          const emitService = {
-            emit: (event: AgentEvent) =>
-              emit(event._tag === "Subagent" ? { ...event, toolCallId: id } : event),
-            toolCallId: id,
-          }
-          const scheduled = (input: ToolCallInput) =>
-            scheduler.scheduleEffect(
-              finalized.toolkit.handle(input.name, input.params).pipe(
-                Effect.map((stream) =>
-                  stream.pipe(
-                    Stream.provideService(ToolExecutionContext, executionContext),
-                    Stream.provideService(AgentEmit, emitService),
-                    Stream.provideService(Tasks, tasks),
-                  ),
+  const stepBody = Effect.fn("run.stepBody")(function* (
+    where: StepLocation,
+    attempts: Ref.Ref<AttemptState>,
+    scheduler: ToolScheduler,
+    tasks: TasksService,
+  ) {
+    const { turn, step } = where
+    const operation = { sessionId: sessionId.toString(), turn, step }
+    const preStepHistory = yield* Ref.get(options.history)
+
+    // The single render point for one logical model request.
+    const plan = yield* agent.render({ sessionId, runId, turn, step, history: preStepHistory })
+    const finalized = yield* plan.tools.finalize
+    const descriptors = toolDescriptors(finalized.tools)
+    const audit = {
+      planId: `${agent.name}:${turn}:${step}`,
+      planFingerprint: planFingerprint(plan.instructions, descriptors),
+      toolFingerprint: toolFingerprint(descriptors),
+      toolNames: finalized.tools.map((tool) => tool.name),
+    }
+    const correlator = makeToolCallCorrelator({ sessionId: sessionId.toString(), turn, step })
+
+    const recordToolCall = (
+      call: { readonly id: string; readonly name: string; readonly params: unknown },
+      providerExecuted: boolean,
+    ) => append(toolCallEvents(where, call, providerExecuted))
+
+    const recordToolResult = (
+      result: {
+        readonly id: string
+        readonly name: string
+        readonly isFailure: boolean
+        readonly result: unknown
+      },
+      providerExecuted: boolean,
+    ) => append(toolResultEvents(where, result, toJson(result.result), providerExecuted))
+
+    const toolOutput = (id: string, name: string, output: Json) =>
+      emit({ _tag: "tool/output", ...V, runId, step, id, name, output })
+
+    /** Runtime-owned tool calls: `handle` is the single choke point for every seam. */
+    const handle = (name: string, params: Tool.Parameters<Tool.Any>) =>
+      Effect.gen(function* () {
+        // Allocate the token before the scheduler wait so it reflects invocation order.
+        const id = correlator.allocateToken(name)
+        yield* Ref.update(attempts, (state) => ({ ...state, toolDispatchStarted: true }))
+        yield* recordToolCall({ id, name, params }, false)
+
+        const executionContext: ToolExecutionContextService = {
+          sessionId,
+          runId,
+          turn,
+          step,
+          callId: id,
+        }
+        const emitService: RunEmitService = {
+          output: (output) => toolOutput(id, name, output),
+          subagent: (childName, event) =>
+            emit({ _tag: "subagent", ...V, name: childName, toolCallId: id, event }),
+        }
+        const scheduled = (input: ToolCallInput) =>
+          scheduler.scheduleEffect(
+            finalized.toolkit.handle(input.name, input.params).pipe(
+              Effect.map((stream) =>
+                stream.pipe(
+                  Stream.provideService(ToolExecutionContext, executionContext),
+                  Stream.provideService(RunEmit, emitService),
+                  Stream.provideService(Tasks, tasks),
+                  Stream.provideService(Inbox, inbox),
                 ),
-                Effect.provideService(ToolExecutionContext, executionContext),
-                Effect.provideService(AgentEmit, emitService),
-                Effect.provideService(Tasks, tasks),
               ),
-            )
-          const wrapped = middleware.tool(scheduled)({ ...operation, name, params })
-          const timed = Option.match(policy.toolTimeout, {
-            onNone: () => wrapped,
-            onSome: (duration) =>
-              wrapped.pipe(
-                Stream.mergeEffect(
-                  Effect.sleep(duration).pipe(
-                    Effect.andThen(Effect.fail({ _tag: "ToolTimeout" as const })),
-                  ),
-                ),
-                Stream.catchTag("ToolTimeout", () =>
-                  Stream.make({
-                    result: toolTimedOut,
-                    encodedResult: toolTimedOut,
-                    isFailure: true,
-                    preliminary: false,
-                  }),
-                ),
-              ),
-          })
-          const bounded = Option.match(policy.maxToolOutputBytes, {
-            onNone: () => timed,
-            onSome: (maxBytes) =>
-              Stream.map(timed, (result) => {
-                if (result.preliminary || encodedBytes(result.encodedResult) <= maxBytes) {
-                  return result
-                }
-                const failure = outputTooLarge(maxBytes)
-                return { ...result, result: failure, encodedResult: failure, isFailure: true }
-              }),
-          })
-          return bounded.pipe(
-            Stream.tap((result) =>
-              result.preliminary
-                ? Effect.void
-                : recordToolResult(
-                    { id, name, isFailure: result.isFailure, result: result.encodedResult },
-                    false,
-                  ),
+              Effect.provideService(ToolExecutionContext, executionContext),
+              Effect.provideService(RunEmit, emitService),
+              Effect.provideService(Tasks, tasks),
+              Effect.provideService(Inbox, inbox),
             ),
           )
+        const wrapped = middleware.tool(scheduled)({ ...operation, name, params })
+        const timed = Option.match(policy.toolTimeout, {
+          onNone: () => wrapped,
+          onSome: (duration) =>
+            wrapped.pipe(
+              Stream.mergeEffect(
+                Effect.sleep(duration).pipe(
+                  Effect.andThen(Effect.fail({ _tag: "ToolTimeout" as const })),
+                ),
+              ),
+              Stream.catchTag("ToolTimeout", () =>
+                Stream.make({
+                  result: toolTimedOut,
+                  encodedResult: toolTimedOut,
+                  isFailure: true,
+                  preliminary: false,
+                }),
+              ),
+            ),
         })
+        const bounded = Option.match(policy.maxToolOutputBytes, {
+          onNone: () => timed,
+          onSome: (maxBytes) =>
+            Stream.map(timed, (result) => {
+              if (result.preliminary || encodedBytes(result.encodedResult) <= maxBytes) {
+                return result
+              }
+              const failure = outputTooLarge(maxBytes)
+              return { ...result, result: failure, encodedResult: failure, isFailure: true }
+            }),
+        })
+        return bounded.pipe(
+          Stream.tap((result) =>
+            result.preliminary
+              ? toolOutput(id, name, toJson(result.encodedResult))
+              : recordToolResult(
+                  { id, name, isFailure: result.isFailure, result: result.encodedResult },
+                  false,
+                ),
+          ),
+        )
+      })
 
-      /* SAFETY: hook and journal failures inside a handler stream surface
-       * through the model stream; Effect AI treats the handle result as opaque. */
-      const intercepted = handle as unknown as FinalizedToolkit["handle"]
-      const toolkit: FinalizedToolkit = { ...finalized.toolkit, handle: intercepted }
+    /* SAFETY: hook and journal failures inside a handler stream surface
+     * through the model stream; Effect AI treats the handle result as opaque. */
+    const intercepted = handle as unknown as FinalizedToolkit["handle"]
+    const toolkit: FinalizedToolkit = { ...finalized.toolkit, handle: intercepted }
 
-      const recordAttempt = (input: ModelCallInput) =>
-        Effect.gen(function* () {
-          const previous = yield* Ref.getAndUpdate(attempts, (state) => ({
-            ...state,
-            open: Option.some(input.attempt),
-          }))
-          const events: Array<JournalEvent> = Option.toArray(
-            Option.map(previous.open, (attempt) =>
-              attemptEvent(at, attempt, "aborted", "physical attempt ended before output"),
-            ),
-          )
-          events.push(attemptEvent(at, input.attempt, "started"))
-          // A retry replays the same logical request; only the first attempt records it.
-          if (input.attempt === 1) {
-            const prompt = toJson(input.prompt)
-            const promptFp = JSON.stringify(prompt)
-            events.push({
-              _tag: "model/request",
-              ...V,
-              ...at,
-              requestId: `${runId}:${turn}:${step}`,
-              request: {
-                attempt: input.attempt,
-                fingerprint: requestFingerprint({ ...audit, promptFingerprint: promptFp }),
-                planFingerprint: audit.planFingerprint,
-                planId: audit.planId,
-                prompt,
-                promptFingerprint: promptFp,
-                toolFingerprint: audit.toolFingerprint,
-                toolNames: audit.toolNames,
-              },
+    const recordAttempt = (input: ModelCallInput) =>
+      Effect.gen(function* () {
+        const previous = yield* Ref.getAndUpdate(attempts, (state) => ({
+          ...state,
+          open: Option.some(input.attempt),
+          finish: Option.none(),
+          model: Option.none(),
+        }))
+        const events: Array<Unstamped<JournalEvent>> = Option.toArray(
+          Option.map(previous.open, (attempt) =>
+            attemptEvent(where, attempt, "aborted", "physical attempt ended before output"),
+          ),
+        )
+        events.push(attemptEvent(where, input.attempt, "started"))
+        // A retry replays the same logical request; only the first attempt records it.
+        if (input.attempt === 1) {
+          const prompt = toJson(input.prompt)
+          const promptFp = JSON.stringify(prompt)
+          events.push({
+            _tag: "model/request",
+            ...V,
+            ...where,
+            requestId: requestId(where),
+            request: {
+              attempt: input.attempt,
+              fingerprint: requestFingerprint({ ...audit, promptFingerprint: promptFp }),
               planFingerprint: audit.planFingerprint,
+              planId: audit.planId,
+              prompt,
               promptFingerprint: promptFp,
               toolFingerprint: audit.toolFingerprint,
               toolNames: audit.toolNames,
-            })
-          }
-          yield* append(events)
-        })
-
-      const observe = (part: Part): Effect.Effect<void, JournalAppendError> =>
-        Effect.gen(function* () {
-          yield* Ref.update(attempts, (state) =>
-            state.outputObserved ? state : { ...state, outputObserved: true },
-          )
-          switch (part.type) {
-            case "text-delta":
-              return yield* emit({ _tag: "TextDelta", delta: part.delta })
-            case "reasoning-delta":
-              return yield* emit({ _tag: "ReasoningDelta", delta: part.delta })
-            case "tool-call": {
-              if (!part.providerExecuted) return
-              const id = Option.getOrElse(
-                correlator.observeProviderCall({
-                  id: part.id,
-                  name: part.name,
-                  providerExecuted: true,
-                  isKnownTool: finalized.toolkit.tools[part.name] !== undefined,
-                }),
-                () => part.id,
-              )
-              return yield* recordToolCall({ id, name: part.name, params: part.params }, true)
-            }
-            case "tool-result": {
-              if (!part.providerExecuted || part.preliminary) return
-              const id = Option.getOrElse(correlator.tokenForProviderId(part.id), () => part.id)
-              return yield* recordToolResult(
-                { id, name: part.name, isFailure: part.isFailure, result: part.encodedResult },
-                true,
-              )
-            }
-            default:
-              return
-          }
-        })
-
-      const modelCall = (
-        input: ModelCallInput,
-      ): Stream.Stream<Part, AiError.AiError | JournalAppendError | UnsafeModelRetry> =>
-        Stream.unwrap(
-          Effect.gen(function* () {
-            const canStart = yield* Ref.modify(attempts, (state) =>
-              state.active || state.outputObserved || state.toolDispatchStarted
-                ? [false, state]
-                : [true, { ...state, active: true }],
-            )
-            if (!canStart) {
-              return yield* new UnsafeModelRetry({ sessionId, turn, step, attempt: input.attempt })
-            }
-            yield* recordAttempt(input)
-            return streamModel(input.model ?? options.model, input.prompt, toolkit).pipe(
-              Stream.provideService(AgentEmit, { emit }),
-              Stream.tap(observe),
-              Stream.ensuring(Ref.update(attempts, (state) => ({ ...state, active: false }))),
-            )
-          }),
-        )
-
-      const collect = Stream.runCollect(
-        middleware.model(modelCall)({
-          ...operation,
-          prompt: planToPrompt(plan, preStepHistory),
-          attempt: 1,
-          planId: audit.planId,
-          planFingerprint: audit.planFingerprint,
-          toolNames: audit.toolNames,
-        }),
-      )
-      const parts = yield* Option.match(policy.modelTimeout, {
-        onNone: () => collect,
-        onSome: (duration) =>
-          collect.pipe(
-            Effect.timeoutOrElse({
-              duration,
-              orElse: () =>
-                new ModelTimeout({
-                  sessionId,
-                  turn,
-                  step,
-                  durationMillis: Duration.toMillis(duration),
-                }),
-            }),
-          ),
-      })
-
-      // The logical response becomes the immutable input of the next request.
-      const response = Prompt.fromResponseParts(parts)
-      yield* Ref.set(options.history, Prompt.concat(preStepHistory, response))
-      yield* append(assistantMessageEvents(response))
-
-      const toolCallCount = parts.filter((part) => part.type === "tool-call").length
-      return toolCallCount > 0
-        ? { _tag: "ToolCalls" as const, toolCallCount }
-        : { _tag: "Stop" as const }
-    })
-
-    const executeTurn = Effect.fn("run.executeTurn")(function* (
-      turn: number,
-      scheduler: ToolScheduler,
-      tasks: TasksService,
-    ) {
-      const at = { runId, turn }
-      yield* append([{ _tag: "turn", ...V, ...at, state: "started" }])
-      return yield* turnBody(turn, scheduler, tasks).pipe(
-        Effect.onExit((exit) => {
-          const outcome = exitOutcome(exit, (value: TurnOutcome) =>
-            value._tag === "Stopped" ? "stopped" : "completed",
-          )
-          return append([
-            {
-              _tag: "turn",
-              ...V,
-              ...at,
-              state: terminalState(outcome.reason),
-              reason: outcome.reason,
-              ...withMessage(outcome.message),
             },
-          ])
+            planFingerprint: audit.planFingerprint,
+            promptFingerprint: promptFp,
+            toolFingerprint: audit.toolFingerprint,
+            toolNames: audit.toolNames,
+          })
+        }
+        yield* append(events)
+      })
+
+    const observe = (part: Part): Effect.Effect<void, JournalAppendError> =>
+      Effect.gen(function* () {
+        yield* Ref.update(attempts, (state) =>
+          state.outputObserved ? state : { ...state, outputObserved: true },
+        )
+        switch (part.type) {
+          case "text-delta":
+            return yield* emit({ _tag: "text/delta", ...V, runId, step, delta: part.delta })
+          case "reasoning-delta":
+            return yield* emit({ _tag: "reasoning/delta", ...V, runId, step, delta: part.delta })
+          case "response-metadata": {
+            const modelId = part.modelId
+            if (modelId === undefined) return
+            return yield* Ref.update(attempts, (state) => ({
+              ...state,
+              model: Option.some(modelId),
+            }))
+          }
+          case "finish": {
+            const finish: AttemptFinish = {
+              usage: usageFromResponse(part.usage),
+              finishReason: part.reason,
+            }
+            return yield* Ref.update(attempts, (state) => ({
+              ...state,
+              finish: Option.some(finish),
+              usage: addUsage(state.usage, finish.usage),
+            }))
+          }
+          case "tool-call": {
+            if (!part.providerExecuted) return
+            const id = Option.getOrElse(
+              correlator.observeProviderCall({
+                id: part.id,
+                name: part.name,
+                providerExecuted: true,
+                isKnownTool: finalized.toolkit.tools[part.name] !== undefined,
+              }),
+              () => part.id,
+            )
+            return yield* recordToolCall({ id, name: part.name, params: part.params }, true)
+          }
+          case "tool-result": {
+            if (!part.providerExecuted) return
+            const id = Option.getOrElse(correlator.tokenForProviderId(part.id), () => part.id)
+            if (part.preliminary)
+              return yield* toolOutput(id, part.name, toJson(part.encodedResult))
+            return yield* recordToolResult(
+              { id, name: part.name, isFailure: part.isFailure, result: part.encodedResult },
+              true,
+            )
+          }
+          default:
+            return
+        }
+      })
+
+    const modelCall = (
+      input: ModelCallInput,
+    ): Stream.Stream<Part, AiError.AiError | JournalAppendError | UnsafeModelRetry> =>
+      Stream.unwrap(
+        Effect.gen(function* () {
+          const canStart = yield* Ref.modify(attempts, (state) =>
+            state.active || state.outputObserved || state.toolDispatchStarted
+              ? [false, state]
+              : [true, { ...state, active: true }],
+          )
+          if (!canStart) {
+            return yield* new UnsafeModelRetry({ sessionId, turn, step, attempt: input.attempt })
+          }
+          yield* recordAttempt(input)
+          return streamModel(input.model ?? options.model, input.prompt, toolkit).pipe(
+            Stream.tap(observe),
+            Stream.ensuring(Ref.update(attempts, (state) => ({ ...state, active: false }))),
+          )
         }),
       )
-    })
 
-    const turnBody = Effect.fn("run.turnBody")(function* (
-      turn: number,
-      scheduler: ToolScheduler,
-      tasks: TasksService,
-    ) {
-      let step = 0
-      while (true) {
-        step += 1
-        const at: StepAt = { runId, turn, step }
-        const outcome: StepOutcome = yield* middleware.step(() =>
-          executeStep(at, scheduler, tasks),
-        )({
-          sessionId: sessionId.toString(),
-          turn,
-          step,
-          stepIndex: step,
-        })
-        const reachedLimit = step >= policy.maxTotalSteps || step >= policy.maxStepsPerTurn
-        if (reachedLimit && outcome._tag === "ToolCalls") {
-          return { _tag: "Stopped", stepCount: step } satisfies TurnOutcome
-        }
-        if (outcome._tag === "Stop" || reachedLimit) {
-          return { _tag: "Completed", stepCount: step } satisfies TurnOutcome
-        }
-      }
-    })
-
-    const body = Effect.gen(function* () {
-      const scheduler = yield* makeToolScheduler(policy.toolConcurrency)
-      // Background tasks live in the run's scope: unfinished ones are
-      // interrupted when the run ends.
-      const tasks = yield* makeTasks(yield* Effect.scope)
-      // A run is one user prompt, so it is one turn; `maxTurns` only gates it.
-      if (policy.maxTurns < 1) return yield* emit({ _tag: "Finish", reason: "stopped" })
-      const outcome = yield* middleware.turn(() => executeTurn(1, scheduler, tasks))({
-        sessionId: sessionId.toString(),
-        turn: 1,
-        step: 0,
-        stepCount: 0,
-      })
-      yield* emit({ _tag: "Finish", reason: outcome._tag === "Stopped" ? "stopped" : "completed" })
-    })
-
-    return body.pipe(
-      Effect.catchCause((cause) =>
-        emit({ _tag: "Finish", reason: "failed", message: Cause.pretty(cause).trim() }).pipe(
-          Effect.andThen(Queue.failCause(queue, cause)),
+    const collect = Stream.runCollect(
+      middleware.model(modelCall)({
+        ...operation,
+        prompt: planToPrompt(plan, preStepHistory),
+        attempt: 1,
+        planId: audit.planId,
+        planFingerprint: audit.planFingerprint,
+        toolNames: audit.toolNames,
+      }),
+    )
+    const parts = yield* Option.match(policy.modelTimeout, {
+      onNone: () => collect,
+      onSome: (duration) =>
+        collect.pipe(
+          Effect.timeoutOrElse({
+            duration,
+            orElse: () =>
+              new ModelTimeout({
+                sessionId,
+                turn,
+                step,
+                durationMillis: Duration.toMillis(duration),
+              }),
+          }),
         ),
-      ),
-      // A consumer dropping the stream interrupts this fiber directly; publish
-      // Finish so subscribers waiting on it are released.
-      Effect.onInterrupt(() => emit({ _tag: "Finish", reason: "interrupted" })),
-      Effect.ensuring(Queue.end(queue)),
+    })
+
+    // The logical response becomes the immutable input of the next request.
+    const response = Prompt.fromResponseParts(parts)
+    yield* Ref.set(options.history, Prompt.concat(preStepHistory, response))
+    yield* append(assistantMessageEvents(response))
+
+    const toolCallCount = parts.filter((part) => part.type === "tool-call").length
+    return toolCallCount > 0
+      ? { _tag: "ToolCalls" as const, toolCallCount }
+      : { _tag: "Stop" as const }
+  })
+
+  const executeTurn = Effect.fn("run.executeTurn")(function* (
+    turn: number,
+    scheduler: ToolScheduler,
+    tasks: TasksService,
+  ) {
+    const where = { runId, turn }
+    yield* append([{ _tag: "turn", ...V, ...where, state: "started" }])
+    return yield* turnBody(turn, scheduler, tasks).pipe(
+      Effect.onExit((exit) => {
+        const outcome = exitOutcome(exit, (value: TurnOutcome) =>
+          value._tag === "Stopped" ? "stopped" : "completed",
+        )
+        return append([
+          {
+            _tag: "turn",
+            ...V,
+            ...where,
+            state: terminalState(outcome.reason),
+            reason: outcome.reason,
+            ...withMessage(outcome.message),
+          },
+        ])
+      }),
     )
   })
+
+  /**
+   * Commit messages that arrived during the last step. They follow that
+   * step's tool results in the journal and in the model-visible history, so
+   * the next request sees them exactly where the user sent them.
+   */
+  const deliver = (messages: ReadonlyArray<InboxMessage>) =>
+    Effect.gen(function* () {
+      if (messages.length === 0) return
+      yield* Ref.update(options.history, (history) =>
+        messages.reduce((prompt, message) => Prompt.concat(prompt, message.content), history),
+      )
+      yield* append(
+        messages.map((message) => ({ _tag: "user/message", ...V, content: message.content })),
+      )
+    })
+
+  const turnBody = Effect.fn("run.turnBody")(function* (
+    turn: number,
+    scheduler: ToolScheduler,
+    tasks: TasksService,
+  ) {
+    let step = 0
+    while (true) {
+      step += 1
+      const where: StepLocation = { runId, turn, step }
+      const outcome: StepOutcome = yield* middleware.step(() =>
+        executeStep(where, scheduler, tasks),
+      )({
+        sessionId: sessionId.toString(),
+        turn,
+        step,
+        stepIndex: step,
+      })
+      const reachedLimit = step >= policy.maxTotalSteps || step >= policy.maxStepsPerTurn
+      // The inbox is drained only where another step can follow. At the step
+      // limit the inbox closes now, so a later `send` fails with `RunEnded`
+      // instead of being accepted and dropped; what it still held is committed
+      // so the next run's prompt starts with it. A final answer closes the
+      // inbox in the same atomic step that finds it empty: a message that
+      // arrived while the model was answering keeps the run going instead.
+      const messages = yield* reachedLimit
+        ? inbox.close
+        : outcome._tag === "ToolCalls"
+          ? inbox.takeAll
+          : inbox.takeAllOrClose
+      yield* deliver(messages)
+      if (reachedLimit) {
+        return outcome._tag === "ToolCalls"
+          ? ({ _tag: "Stopped", stepCount: step } satisfies TurnOutcome)
+          : ({ _tag: "Completed", stepCount: step } satisfies TurnOutcome)
+      }
+      if (outcome._tag === "Stop" && messages.length === 0) {
+        return { _tag: "Completed", stepCount: step } satisfies TurnOutcome
+      }
+    }
+  })
+
+  return Effect.gen(function* () {
+    const scheduler = yield* makeToolScheduler(policy.toolConcurrency)
+    // Background tasks live in the run's scope: unfinished ones are
+    // interrupted when the run ends.
+    const tasks = yield* makeTasks(yield* Effect.scope)
+    // A run is one user prompt, so it is one turn; `maxTurns` only gates it.
+    if (policy.maxTurns < 1) return "stopped" as const
+    const outcome = yield* middleware.turn(() => executeTurn(1, scheduler, tasks))({
+      sessionId: sessionId.toString(),
+      turn: 1,
+      step: 0,
+      stepCount: 0,
+    })
+    return outcome._tag === "Stopped" ? ("stopped" as const) : ("completed" as const)
+  })
+}

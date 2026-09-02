@@ -95,7 +95,7 @@ it.effect("starts children in the background and collects them later", () =>
     // The single await collected both workers, in start order.
     const collected = result.toolResults.find((r) => r.name === "await_start_work")
     assert.ok(collected !== undefined && !collected.isFailure)
-    const text = String(collected?.result)
+    const text = JSON.stringify(collected?.result)
     assert.ok(text.indexOf("done: Work on alpha") < text.indexOf("done: Work on beta"))
     assert.ok(result.text.includes("done: Work on alpha"))
   }),
